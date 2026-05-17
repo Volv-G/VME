@@ -14,14 +14,25 @@ export interface RosterDto {
 export interface TeamSummary {
   name: string;
   has_roster: boolean;
+  tournament_count: number;
+}
+
+export interface TournamentSummary {
+  team: string;
+  name: string;
   match_count: number;
 }
 
 export interface MatchSummary {
   team: string;
-  name: string;
-  opponent: string;
+  tournament: string;
+  /** Date folder under the tournament. Also the canonical date string. */
   date: string;
+  /** Match folder leaf (URL identifier), e.g. "03_North_Vipers". */
+  name: string;
+  /** 1-based match order on this date. Null for legacy unnumbered folders. */
+  match_index: number | null;
+  opponent: string;
   clip_count: number;
   has_match_json: boolean;
   has_video: boolean;
@@ -65,9 +76,13 @@ export interface EventDto {
 
 export interface MatchDto {
   team: string;
-  name: string;
-  opponent: string;
+  tournament: string;
   date: string;
+  /** Match folder leaf (URL identifier). */
+  name: string;
+  /** 1-based match order on this date. */
+  match_index: number | null;
+  opponent: string;
   fps: number;
   clips: ClipDto[];
   events: EventDto[];
@@ -78,6 +93,8 @@ export interface MatchDto {
 export interface RenderJobDto {
   id: string;
   team: string;
+  tournament: string;
+  date: string;
   match: string;
   label: string;
   status: "pending" | "running" | "done" | "failed" | "cancelled";
@@ -92,13 +109,21 @@ export interface RenderJobDto {
   cancel_requested: boolean;
 }
 
+export interface RenderFileDto {
+  filename: string;
+  size_bytes: number;
+  /** Unix seconds; file mtime, used as creation proxy. */
+  created_at: number;
+}
+
 export interface AutoCutsResultDto {
   match: MatchDto;
   added: number;
   skipped_existing: number;
   skipped_missing_time: number;
   skipped_too_short: number;
-  skipped_too_far: number;
+  added_set_ends: number;
+  skipped_too_close: number;
 }
 
 export type Team = "home" | "away";

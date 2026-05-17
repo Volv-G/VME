@@ -1,4 +1,9 @@
-"""Match-level endpoints: list, create, fetch, update, delete, rescan."""
+"""Match-level endpoints: list, create, fetch, update, delete, rescan.
+
+Match identity is `(team, tournament, date, name)` where `name` is the
+opponent-derived folder leaf. The `dates/{date}` URL segment is what makes
+the (date, opponent) pair routable.
+"""
 
 from __future__ import annotations
 
@@ -15,36 +20,65 @@ from .schemas import (
     UpdateMatchIn,
 )
 
-router = APIRouter(prefix="/teams/{team}/matches", tags=["matches"])
+# Listing / creation: scoped to a tournament (matches are flattened across
+# date subfolders so the UI gets one chronological list).
+list_router = APIRouter(
+    prefix="/teams/{team}/tournaments/{tournament}/matches", tags=["matches"]
+)
+
+# Per-match operations: identified by (date, name).
+router = APIRouter(
+    prefix="/teams/{team}/tournaments/{tournament}/dates/{date}/matches",
+    tags=["matches"],
+)
 
 
-@router.get("", response_model=list[MatchSummaryOut])
-def list_team_matches(team: str) -> list[MatchSummaryOut]:
-    return [MatchSummaryOut(**vars(s)) for s in scanner.list_matches(team)]
+@list_router.get("", response_model=list[MatchSummaryOut])
+def list_tournament_matches(team: str, tournament: str) -> list[MatchSummaryOut]:
+    if not paths.tournament_dir(team, tournament).exists():
+        raise HTTPException(404, "Tournament not found")
+    return [MatchSummaryOut(**vars(s)) for s in scanner.list_matches(team, tournament)]
 
 
-@router.post("", response_model=MatchOut)
-def create_match(team: str, body: CreateMatchIn) -> MatchOut:
-    if not body.name.strip():
-        raise HTTPException(400, "Match name is required")
-    m = scanner.create_match(team, body.name, opponent=body.opponent or "", date=body.date or "")
-    return serialize_match(team, body.name, m)
+@list_router.post("", response_model=MatchOut)
+def create_match(team: str, tournament: str, body: CreateMatchIn) -> MatchOut:
+    if not body.opponent.strip():
+        raise HTTPException(400, "Opponent is required")
+    if not body.date.strip():
+        raise HTTPException(400, "Date is required")
+    if not paths.tournament_dir(team, tournament).exists():
+        raise HTTPException(404, "Tournament not found")
+    try:
+        match_name, m = scanner.create_match(
+            team,
+            tournament,
+            body.date.strip(),
+            body.opponent.strip(),
+            match_index=body.match_index,
+        )
+    except scanner.MatchIndexConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return serialize_match(team, tournament, body.date.strip(), match_name, m)
 
 
 @router.get("/{match}", response_model=MatchOut)
-def get_match(team: str, match: str) -> MatchOut:
+def get_match(team: str, tournament: str, date: str, match: str) -> MatchOut:
     try:
-        m = load_match_or_404(team, match)
+        m = load_match_or_404(team, tournament, date, match)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
-    save_match(team, match, m)  # persist any newly-discovered clips
-    return serialize_match(team, match, m)
+    save_match(team, tournament, date, match, m)  # persist any newly-discovered clips
+    return serialize_match(team, tournament, date, match, m)
 
 
 @router.patch("/{match}", response_model=MatchOut)
-def patch_match(team: str, match: str, body: UpdateMatchIn) -> MatchOut:
+def patch_match(
+    team: str, tournament: str, date: str, match: str, body: UpdateMatchIn
+) -> MatchOut:
     try:
-        m = load_match_or_404(team, match)
+        m = load_match_or_404(team, tournament, date, match)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -60,20 +94,22 @@ def patch_match(team: str, match: str, body: UpdateMatchIn) -> MatchOut:
             team_color=body.opponent_roster.team_color,
             players=[Player.from_dict(p.model_dump()) for p in body.opponent_roster.players],
         )
-    save_match(team, match, m)
-    return serialize_match(team, match, m)
+    save_match(team, tournament, date, match, m)
+    return serialize_match(team, tournament, date, match, m)
 
 
 @router.delete("/{match}")
-def delete_match(team: str, match: str) -> dict[str, bool]:
-    scanner.delete_match(team, match)
+def delete_match(
+    team: str, tournament: str, date: str, match: str
+) -> dict[str, bool]:
+    scanner.delete_match(team, tournament, date, match)
     return {"deleted": True}
 
 
 @router.post("/{match}/rescan", response_model=MatchOut)
-def rescan_match(team: str, match: str) -> MatchOut:
-    if not paths.match_dir(team, match).exists():
+def rescan_match(team: str, tournament: str, date: str, match: str) -> MatchOut:
+    if not paths.match_dir(team, tournament, date, match).exists():
         raise HTTPException(404, "Match folder not found")
-    m = scanner.load_or_create_match(team, match)
-    save_match(team, match, m)
-    return serialize_match(team, match, m)
+    m = scanner.load_or_create_match(team, tournament, date, match)
+    save_match(team, tournament, date, match, m)
+    return serialize_match(team, tournament, date, match, m)

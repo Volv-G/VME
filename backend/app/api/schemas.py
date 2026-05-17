@@ -23,14 +23,25 @@ class RosterOut(BaseModel):
 class TeamSummaryOut(BaseModel):
     name: str
     has_roster: bool
+    tournament_count: int
+
+
+class TournamentSummaryOut(BaseModel):
+    team: str
+    name: str
     match_count: int
 
 
 class MatchSummaryOut(BaseModel):
     team: str
-    name: str
-    opponent: str
+    tournament: str
+    # Date folder under the tournament (canonical date string).
     date: str
+    # Match folder leaf - the API/URL identifier for the match.
+    name: str
+    # 1-based match order on this date (None for legacy unnumbered folders).
+    match_index: Optional[int] = None
+    opponent: str
     clip_count: int
     has_match_json: bool
     has_video: bool
@@ -80,9 +91,12 @@ class EventOut(BaseModel):
 
 class MatchOut(BaseModel):
     team: str
-    name: str
-    opponent: str
+    tournament: str
     date: str
+    name: str
+    # 1-based match order on this date (None for legacy unnumbered folders).
+    match_index: Optional[int] = None
+    opponent: str
     fps: float
     clips: list[ClipOut]
     events: list[EventOut]
@@ -90,10 +104,18 @@ class MatchOut(BaseModel):
     opponent_roster: RosterOut
 
 
-class CreateMatchIn(BaseModel):
+class CreateTournamentIn(BaseModel):
     name: str
-    opponent: Optional[str] = ""
-    date: Optional[str] = ""
+
+
+class CreateMatchIn(BaseModel):
+    """New-match request. The folder is `<Tournament>/<date>/<NN>_<opponent>/`
+    where `NN` is the 1-based match order on that date. If `match_index` is
+    omitted, the server picks the next available number for that date."""
+
+    opponent: str
+    date: str
+    match_index: Optional[int] = None
 
 
 class UpdateMatchIn(BaseModel):
@@ -128,11 +150,26 @@ class AutoCutsOut(BaseModel):
     """
 
     match: MatchOut
+    # Number of crossfade cut pairs (CutStart + CutEnd) inserted.
     added: int
+    # Number of SetEnd lifecycle events inserted at inter-set gaps.
+    added_set_ends: int
     skipped_existing: int
     skipped_missing_time: int
     skipped_too_short: int
-    skipped_too_far: int
+    # Continuous-recording pairs (gap below min) - hard cut is already
+    # invisible, so no crossfade is needed.
+    skipped_too_close: int
+
+
+class RenderFileOut(BaseModel):
+    """One rendered output file on disk under `<match>/renders/`."""
+
+    filename: str
+    size_bytes: int
+    # File mtime as a unix timestamp (seconds). Used as a creation proxy;
+    # render files are never modified after the job finishes.
+    created_at: float
 
 
 class RenderRequestIn(BaseModel):

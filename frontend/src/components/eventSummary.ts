@@ -6,6 +6,8 @@ export interface SummaryContext {
   opponentRoster: RosterDto;
   homeName: string;
   opponentName: string;
+  /** Match fps - used to convert frame counts to seconds for display. */
+  fps: number;
 }
 
 /**
@@ -28,6 +30,12 @@ export function summarizeEvent(
     t === "home" ? ctx.homeName : t === "away" ? ctx.opponentName : "?";
   const rosterFor = (t: string | undefined) =>
     t === "home" ? ctx.homeRoster : ctx.opponentRoster;
+  // Player actions and subs are always attributed to the home team in this
+  // UI; spelling out the team name on every row is redundant. We still
+  // print it for any non-home team payload so future opponent events stay
+  // unambiguous.
+  const teamSuffix = (t: string | undefined) =>
+    t === "home" ? "" : ` (${teamLabel(t)})`;
 
   switch (event.type) {
     case "substitution": {
@@ -38,7 +46,7 @@ export function summarizeEvent(
       const outNum = positions[pos] ?? null;
       const inLabel = playerLabel(rosterFor(team), inNum);
       const outLabel = playerLabel(rosterFor(team), outNum);
-      const teamStr = ` (${teamLabel(team)})`;
+      const teamStr = teamSuffix(team);
       if (outNum == null) {
         return `Sub: ${inLabel} enters at P${pos}${teamStr}`;
       }
@@ -62,7 +70,16 @@ export function summarizeEvent(
       if (!serving) return "Ball served";
       const positions = serving === "home" ? prevState.home_positions : prevState.away_positions;
       const jersey = positions[1] ?? null;
-      const who = playerLabel(serving === "home" ? ctx.homeRoster : ctx.opponentRoster, jersey);
+      // Opponent lineup/jersey numbers aren't tracked, so we'd otherwise
+      // render "... Opponent ?" - drop the placeholder when there's no
+      // known server.
+      if (jersey == null) {
+        return `Ball served: ${teamLabel(serving)}`;
+      }
+      const who = playerLabel(
+        serving === "home" ? ctx.homeRoster : ctx.opponentRoster,
+        jersey
+      );
       return `Ball served: ${teamLabel(serving)} ${who}`;
     }
 
@@ -77,7 +94,7 @@ export function summarizeEvent(
       const team = String(p.team || "home");
       const num = (p.player_number as number | null) ?? null;
       const verb = TYPE_VERB[event.type] ?? event.type;
-      return `${verb}: ${playerLabel(rosterFor(team), num)} (${teamLabel(team)})`;
+      return `${verb}: ${playerLabel(rosterFor(team), num)}${teamSuffix(team)}`;
     }
 
     case "focus_out":
@@ -100,7 +117,12 @@ export function summarizeEvent(
     case "cut_end": {
       const fade = (p.fade_frames as number) ?? 0;
       const shift = (p.frame_shift as number) ?? 0;
-      return `Cut end (fade ${fade}, shift ${shift})`;
+      // Frame counts are fps-relative; show seconds so the reader doesn't
+      // have to do the math (and so the number doesn't silently change
+      // meaning between 30 and 60 fps matches).
+      const fadeS = (fade / ctx.fps).toFixed(2);
+      const shiftS = (shift / ctx.fps).toFixed(2);
+      return `Cut end (fade ${fadeS}s, shift ${shiftS}s)`;
     }
     case "clip_transition": {
       const from = String(p.from_clip_id ?? "");

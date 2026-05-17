@@ -19,6 +19,8 @@ export interface VideoPlayerHandle {
 
 interface Props {
   team: string;
+  tournament: string;
+  date: string;
   match: string;
   clips: ClipDto[];
   fps: number;
@@ -45,7 +47,7 @@ function clipOffset(clips: ClipDto[], idx: number): number {
 }
 
 export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
-  { team, match, clips, fps, onFrame },
+  { team, tournament, date, match, clips, fps, onFrame },
   ref
 ) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -351,7 +353,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           >
             <video
               ref={videoRef}
-              src={api.clipStreamUrl(team, match, activeClip.id)}
+              src={api.clipStreamUrl(team, tournament, date, match, activeClip.id)}
               controls={false}
               onPlay={() => setIsPlaying(true)}
               onPause={() => setIsPlaying(false)}

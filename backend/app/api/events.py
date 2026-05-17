@@ -13,12 +13,21 @@ from .helpers import (
 )
 from .schemas import EventCreateIn, EventUpdateIn, MatchOut
 
-router = APIRouter(prefix="/teams/{team}/matches/{match}/events", tags=["events"])
+router = APIRouter(
+    prefix="/teams/{team}/tournaments/{tournament}/dates/{date}/matches/{match}/events",
+    tags=["events"],
+)
 
 
 @router.post("", response_model=MatchOut)
-def create_event(team: str, match: str, body: EventCreateIn) -> MatchOut:
-    m = load_match_or_404(team, match)
+def create_event(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    body: EventCreateIn,
+) -> MatchOut:
+    m = load_match_or_404(team, tournament, date, match)
     raw = {"type": body.type, **body.payload}
     if body.clip_id is not None:
         raw["clip_id"] = body.clip_id
@@ -29,13 +38,20 @@ def create_event(team: str, match: str, body: EventCreateIn) -> MatchOut:
     except (ValueError, TypeError) as exc:
         raise HTTPException(400, f"Invalid event: {exc}") from exc
     m.add_event(event)
-    save_match(team, match, m)
-    return serialize_match(team, match, m)
+    save_match(team, tournament, date, match, m)
+    return serialize_match(team, tournament, date, match, m)
 
 
 @router.patch("/{event_id}", response_model=MatchOut)
-def update_event(team: str, match: str, event_id: int, body: EventUpdateIn) -> MatchOut:
-    m = load_match_or_404(team, match)
+def update_event(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    event_id: int,
+    body: EventUpdateIn,
+) -> MatchOut:
+    m = load_match_or_404(team, tournament, date, match)
     e = m.get_event(event_id)
     if e is None:
         raise HTTPException(404, "Event not found")
@@ -52,15 +68,17 @@ def update_event(team: str, match: str, event_id: int, body: EventUpdateIn) -> M
             updates[k] = v
 
     m.update_event(event_id, updates)
-    save_match(team, match, m)
-    return serialize_match(team, match, m)
+    save_match(team, tournament, date, match, m)
+    return serialize_match(team, tournament, date, match, m)
 
 
 @router.delete("/{event_id}", response_model=MatchOut)
-def delete_event(team: str, match: str, event_id: int) -> MatchOut:
-    m = load_match_or_404(team, match)
+def delete_event(
+    team: str, tournament: str, date: str, match: str, event_id: int
+) -> MatchOut:
+    m = load_match_or_404(team, tournament, date, match)
     if m.get_event(event_id) is None:
         raise HTTPException(404, "Event not found")
     m.delete_event(event_id)
-    save_match(team, match, m)
-    return serialize_match(team, match, m)
+    save_match(team, tournament, date, match, m)
+    return serialize_match(team, tournament, date, match, m)

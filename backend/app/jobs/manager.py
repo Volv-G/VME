@@ -30,6 +30,8 @@ _LIVE_STATUSES = {JobStatus.PENDING, JobStatus.RUNNING}
 class RenderJob:
     id: str
     team: str
+    tournament: str
+    date: str
     match: str
     label: str = ""
     status: JobStatus = JobStatus.PENDING
@@ -51,6 +53,8 @@ class RenderJob:
         return {
             "id": self.id,
             "team": self.team,
+            "tournament": self.tournament,
+            "date": self.date,
             "match": self.match,
             "label": self.label,
             "status": self.status.value,
@@ -72,8 +76,22 @@ class JobManager:
         self._listeners: dict[str, list[asyncio.Queue]] = {}
         self._lock = threading.Lock()
 
-    def create(self, team: str, match: str, label: str = "") -> RenderJob:
-        job = RenderJob(id=uuid.uuid4().hex[:12], team=team, match=match, label=label)
+    def create(
+        self,
+        team: str,
+        tournament: str,
+        date: str,
+        match: str,
+        label: str = "",
+    ) -> RenderJob:
+        job = RenderJob(
+            id=uuid.uuid4().hex[:12],
+            team=team,
+            tournament=tournament,
+            date=date,
+            match=match,
+            label=label,
+        )
         with self._lock:
             self._jobs[job.id] = job
             self._listeners[job.id] = []

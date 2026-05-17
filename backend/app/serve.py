@@ -8,8 +8,9 @@ Environment overrides:
     VME_HTTP_PORT     (default 80)
     VME_HTTPS_PORT    (default 443)
     VME_BIND_HOST     (default 0.0.0.0)
-    VME_CERT_FILE     (default <project>/certs/cert.pem)
-    VME_KEY_FILE      (default <project>/certs/key.pem)
+    VME_DATA_DIR      (parent for media/logs/certs; see config.py)
+    VME_CERT_FILE     (default <data>/certs/cert.pem)
+    VME_KEY_FILE      (default <data>/certs/key.pem)
 
 Both ports require elevated privileges on Windows. Install as a service via
 `scripts/install-service.ps1` (NSSM).

@@ -258,6 +258,30 @@ label {
   border-radius: 8px;
 }
 
+/* Sticky search box above the event list. Stays visible while the user
+   scrolls through long event histories. */
+.event-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 10px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.event-search input {
+  flex: 1;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.event-search-count {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .event-row {
   display: flex;
   align-items: center;
@@ -268,17 +292,47 @@ label {
   cursor: pointer;
   font-size: 12px;
 }
+/* Search-match row: magenta tint + left bar. Sits below .orphan in cascade
+   order so a row that's both orphan and a search match still flags orphan,
+   but the magenta inline <mark> still shows where the text matched. */
+.event-row.match {
+  background: rgba(255, 0, 200, 0.10);
+  border-left: 3px solid #ff00c8;
+}
+.event-row.match:hover { background: rgba(255, 0, 200, 0.16); }
+.event-row.match.selected { background: rgba(255, 0, 200, 0.20); }
+.event-row-hl {
+  background: transparent;
+  color: #ff5cd6;
+  font-weight: 600;
+  padding: 0;
+}
 .event-row:hover { background: var(--bg-elev-2); }
 .event-row.selected { background: var(--bg-elev-2); border-left: 3px solid var(--accent); }
 
-.event-row .event-row-text {
+/* Two-line content column: summary text on top, frame/time stamp below.
+   The delete button sits to the right, vertically centered against both. */
+.event-row .event-row-body {
   flex: 1;
   min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
-.event-row .ev-frame { color: var(--text-dim); font-family: ui-monospace, monospace; flex-shrink: 0; }
+.event-row .event-row-text {
+  /* Allow up to two lines before truncating; most summaries fit on one. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+.event-row .ev-frame {
+  color: var(--text-dim);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+}
 
 .event-row.orphan {
   background: rgba(248, 81, 73, 0.10);

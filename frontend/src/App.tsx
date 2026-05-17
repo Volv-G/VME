@@ -1,6 +1,7 @@
 import { Link, Route, Routes } from "react-router-dom";
 import { TeamSelectPage } from "./routes/TeamSelectPage";
 import { TeamDashboardPage } from "./routes/TeamDashboardPage";
+import { TournamentDashboardPage } from "./routes/TournamentDashboardPage";
 import { MatchEditorPage } from "./routes/MatchEditorPage";
 
 export function App() {
@@ -16,7 +17,14 @@ export function App() {
         <Routes>
           <Route path="/" element={<TeamSelectPage />} />
           <Route path="/teams/:team" element={<TeamDashboardPage />} />
-          <Route path="/teams/:team/matches/:match" element={<MatchEditorPage />} />
+          <Route
+            path="/teams/:team/tournaments/:tournament"
+            element={<TournamentDashboardPage />}
+          />
+          <Route
+            path="/teams/:team/tournaments/:tournament/dates/:date/matches/:match"
+            element={<MatchEditorPage />}
+          />
         </Routes>
       </main>
     </div>

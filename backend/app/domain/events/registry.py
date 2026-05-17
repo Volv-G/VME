@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
+from dataclasses import MISSING, fields, is_dataclass
 from typing import Any, Type
 
 from .base import MatchEvent
@@ -22,11 +22,20 @@ def register_event(cls: Type[MatchEvent]) -> Type[MatchEvent]:
     return cls
 
 
+# Identity fields are always emitted, even when they happen to equal the
+# dataclass default - they're load-bearing for round-tripping and useful
+# at a glance when reading the JSON.
+_ALWAYS_EMIT = frozenset({"id", "clip_id", "local_frame", "type"})
+
+
 def event_to_dict(event: MatchEvent) -> dict[str, Any]:
     """Serialize an event to a JSON-compatible dict.
 
     Includes `type` (from `type_name`), `id`, and any dataclass fields except
-    transient ones (`state`).
+    transient ones (`state`). Fields whose value equals the dataclass default
+    are omitted to keep match.json readable - the deserializer will recreate
+    them from the same defaults. Identity fields (`id`, `clip_id`,
+    `local_frame`) are kept regardless so each event row stays self-describing.
     """
     data: dict[str, Any] = {"type": event.type_name, "id": event.id}
     if is_dataclass(event):
@@ -36,8 +45,27 @@ def event_to_dict(event: MatchEvent) -> dict[str, Any]:
             value = getattr(event, f.name)
             if hasattr(value, "value"):  # Enum
                 value = value.value
+            # Skip fields that match their declared default. `default_factory`
+            # gets resolved when MISSING isn't set; we compare against the
+            # actual default value. Identity fields bypass this filter.
+            if f.name not in _ALWAYS_EMIT and _is_default(f, value):
+                continue
             data[f.name] = value
     return data
+
+
+def _is_default(f: Any, value: Any) -> bool:
+    """True iff `value` equals the dataclass field's declared default."""
+    if f.default is not MISSING:
+        # Tuples and lists compare structurally, which is what we want for
+        # things like `blend_color = (0, 0, 0)`.
+        return value == f.default
+    if f.default_factory is not MISSING:  # type: ignore[misc]
+        try:
+            return value == f.default_factory()  # type: ignore[misc]
+        except Exception:
+            return False
+    return False
 
 
 def event_from_dict(data: dict[str, Any]) -> MatchEvent:

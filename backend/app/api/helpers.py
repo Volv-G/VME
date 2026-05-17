@@ -66,12 +66,17 @@ def serialize_event(match: Match, event: MatchEvent) -> EventOut:
     )
 
 
-def serialize_match(team: str, match_name: str, m: Match) -> MatchOut:
+def serialize_match(
+    team: str, tournament: str, date: str, match_name: str, m: Match
+) -> MatchOut:
+    match_index, _ = paths.parse_match_folder(match_name)
     return MatchOut(
         team=team,
+        tournament=tournament,
+        date=date,
         name=match_name,
+        match_index=match_index,
         opponent=m.opponent,
-        date=m.date,
         fps=m.fps,
         clips=[
             ClipOut(
@@ -106,12 +111,18 @@ def event_field_names(event: MatchEvent) -> set[str]:
     return {f.name for f in fields(event) if f.name != "state"}
 
 
-def save_match(team: str, match_name: str, m: Match) -> None:
-    m.save(paths.match_json_path(team, match_name))
+def save_match(
+    team: str, tournament: str, date: str, match_name: str, m: Match
+) -> None:
+    m.save(paths.match_json_path(team, tournament, date, match_name))
 
 
-def load_match_or_404(team: str, match_name: str) -> Match:
-    folder = paths.match_dir(team, match_name)
+def load_match_or_404(
+    team: str, tournament: str, date: str, match_name: str
+) -> Match:
+    folder = paths.match_dir(team, tournament, date, match_name)
     if not folder.exists():
-        raise FileNotFoundError(f"Match not found: {team}/{match_name}")
-    return scanner.load_or_create_match(team, match_name)
+        raise FileNotFoundError(
+            f"Match not found: {team}/{tournament}/{date}/{match_name}"
+        )
+    return scanner.load_or_create_match(team, tournament, date, match_name)

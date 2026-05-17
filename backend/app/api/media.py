@@ -12,18 +12,28 @@ from fastapi.responses import StreamingResponse
 from ..library import paths
 from .helpers import load_match_or_404
 
-router = APIRouter(prefix="/teams/{team}/matches/{match}/media", tags=["media"])
+router = APIRouter(
+    prefix="/teams/{team}/tournaments/{tournament}/dates/{date}/matches/{match}/media",
+    tags=["media"],
+)
 
 CHUNK_SIZE = 1024 * 1024
 
 
 @router.get("/clips/{clip_id}/stream")
-def stream_clip(team: str, match: str, clip_id: str, request: Request):
-    m = load_match_or_404(team, match)
+def stream_clip(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    clip_id: str,
+    request: Request,
+):
+    m = load_match_or_404(team, tournament, date, match)
     clip = m.get_clip(clip_id)
     if clip is None:
         raise HTTPException(404, "Clip not found")
-    file_path = paths.match_dir(team, match) / clip.filename
+    file_path = paths.match_dir(team, tournament, date, match) / clip.filename
     if not file_path.is_file():
         raise HTTPException(404, "Clip file missing on disk")
 

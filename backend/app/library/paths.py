@@ -4,15 +4,21 @@ Layout:
     media/
         <Team>/
             roster.json
-            <Match>/
-                source*.mp4         (one or more clips)
-                match.json
-                renders/
-                    *.mp4
+            <Tournament>/
+                <Date>/
+                    <Opponent>/
+                        source*.mp4         (one or more clips)
+                        match.json
+                        renders/
+                            *.mp4
 
-`<Team>` and `<Match>` directory names are sanitized with `safe_segment` so
-they are safe across the operating systems we care about while staying
-human-readable.
+Every path segment (`<Team>`, `<Tournament>`, `<Date>`, `<Opponent>`) is
+sanitized with `safe_segment` so it's safe across the operating systems we
+care about while staying human-readable.
+
+The "match" identifier in URLs and API calls is the opponent (the leaf folder
+name); the `<Date>` segment lives between the tournament and the match so
+multiple matches against the same opponent on different days don't collide.
 """
 
 from __future__ import annotations
@@ -37,21 +43,52 @@ def safe_segment(name: str) -> str:
     return cleaned or "unnamed"
 
 
+# Match folders are named `<NN>_<Opponent>` where NN is the 1-based order
+# of the match on that date. The numeric prefix keeps the on-disk listing
+# sorted in play order regardless of opponent name.
+_MATCH_FOLDER_RE = re.compile(r"^(\d+)_(.+)$")
+
+
+def parse_match_folder(folder_name: str) -> tuple[int | None, str]:
+    """Split a match folder name into `(index, opponent_part)`.
+
+    Returns `(None, folder_name)` for legacy folders that have no numeric
+    prefix.
+    """
+    m = _MATCH_FOLDER_RE.match(folder_name)
+    if not m:
+        return None, folder_name
+    return int(m.group(1)), m.group(2)
+
+
+def format_match_folder(index: int, opponent: str) -> str:
+    """Build a match folder name from an index and opponent."""
+    return f"{index:02d}_{safe_segment(opponent)}"
+
+
 def team_dir(team: str) -> Path:
     return MEDIA_ROOT / safe_segment(team)
 
 
-def match_dir(team: str, match: str) -> Path:
-    return team_dir(team) / safe_segment(match)
+def tournament_dir(team: str, tournament: str) -> Path:
+    return team_dir(team) / safe_segment(tournament)
 
 
-def match_json_path(team: str, match: str) -> Path:
-    return match_dir(team, match) / "match.json"
+def date_dir(team: str, tournament: str, date: str) -> Path:
+    return tournament_dir(team, tournament) / safe_segment(date)
+
+
+def match_dir(team: str, tournament: str, date: str, match: str) -> Path:
+    return date_dir(team, tournament, date) / safe_segment(match)
+
+
+def match_json_path(team: str, tournament: str, date: str, match: str) -> Path:
+    return match_dir(team, tournament, date, match) / "match.json"
 
 
 def team_roster_path(team: str) -> Path:
     return team_dir(team) / "roster.json"
 
 
-def renders_dir(team: str, match: str) -> Path:
-    return match_dir(team, match) / "renders"
+def renders_dir(team: str, tournament: str, date: str, match: str) -> Path:
+    return match_dir(team, tournament, date, match) / "renders"

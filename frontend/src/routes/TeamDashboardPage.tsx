@@ -1,22 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { MatchSummary, RosterDto } from "../types/api";
+import type { RosterDto, TournamentSummary } from "../types/api";
 import { RosterEditor } from "../components/RosterEditor";
+import { Modal } from "../components/Modal";
+import { displayName } from "../util/names";
 
 export function TeamDashboardPage() {
   const { team = "" } = useParams();
-  const [matches, setMatches] = useState<MatchSummary[]>([]);
+  const [tournaments, setTournaments] = useState<TournamentSummary[]>([]);
   const [roster, setRoster] = useState<RosterDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [newMatch, setNewMatch] = useState({ name: "", opponent: "", date: "" });
+  const [newName, setNewName] = useState("");
 
   const load = useCallback(async () => {
     try {
       setError(null);
-      const [m, r] = await Promise.all([api.listMatches(team), api.getRoster(team)]);
-      setMatches(m);
+      const [t, r] = await Promise.all([api.listTournaments(team), api.getRoster(team)]);
+      setTournaments(t);
       setRoster(r);
     } catch (e) {
       setError(String(e));
@@ -34,15 +36,11 @@ export function TeamDashboardPage() {
     }
   }
 
-  async function createMatch() {
-    if (!newMatch.name.trim()) return;
+  async function createTournament() {
+    if (!newName.trim()) return;
     try {
-      await api.createMatch(team, {
-        name: newMatch.name.trim(),
-        opponent: newMatch.opponent.trim(),
-        date: newMatch.date.trim(),
-      });
-      setNewMatch({ name: "", opponent: "", date: "" });
+      await api.createTournament(team, newName.trim());
+      setNewName("");
       setCreating(false);
       await load();
     } catch (e) {
@@ -54,36 +52,33 @@ export function TeamDashboardPage() {
     <div className="page">
       <div className="card">
         <div className="card-header">
-          <h2>{team}</h2>
+          <h2>{displayName(team)}</h2>
           <Link to="/" className="muted">← All teams</Link>
         </div>
         {error && <div className="error">{error}</div>}
       </div>
 
-      {roster && <RosterEditor value={roster} onSave={saveRoster} defaultName={team} />}
-
       <div className="card">
         <div className="card-header">
-          <h2>Matches</h2>
-          <button className="primary" onClick={() => setCreating(true)}>+ New match</button>
+          <h2>Tournaments</h2>
+          <button className="primary" onClick={() => setCreating(true)}>+ New tournament</button>
         </div>
 
-        {matches.length === 0 && (
-          <p className="muted">No matches yet.</p>
+        {tournaments.length === 0 && (
+          <p className="muted">No tournaments yet.</p>
         )}
 
         <div className="list">
-          {matches.map((m) => (
+          {tournaments.map((t) => (
             <Link
-              key={m.name}
-              to={`/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(m.name)}`}
+              key={t.name}
+              to={`/teams/${encodeURIComponent(team)}/tournaments/${encodeURIComponent(t.name)}`}
               className="list-row"
             >
               <div>
-                <div>{m.name}</div>
+                <div>{displayName(t.name)}</div>
                 <div className="row-meta">
-                  {m.date || "no date"} - vs {m.opponent || "TBD"} -{" "}
-                  {m.has_video ? `${m.clip_count} clip${m.clip_count === 1 ? "" : "s"}` : "no video uploaded"}
+                  {t.match_count} match{t.match_count === 1 ? "" : "es"}
                 </div>
               </div>
               <span className="muted">→</span>
@@ -92,33 +87,31 @@ export function TeamDashboardPage() {
         </div>
       </div>
 
-      {creating && (
-        <div className="modal-backdrop" onClick={() => setCreating(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3>New match</h3>
-            <div className="field-row">
-              <label>
-                Folder name
-                <input value={newMatch.name} onChange={(e) => setNewMatch({ ...newMatch, name: e.target.value })} />
-              </label>
-            </div>
-            <div className="field-row">
-              <label>
-                Opponent
-                <input value={newMatch.opponent} onChange={(e) => setNewMatch({ ...newMatch, opponent: e.target.value })} />
-              </label>
-              <label>
-                Date
-                <input type="date" value={newMatch.date} onChange={(e) => setNewMatch({ ...newMatch, date: e.target.value })} />
-              </label>
-            </div>
-            <div className="toolbar" style={{ marginTop: 16, justifyContent: "flex-end" }}>
-              <button onClick={() => setCreating(false)}>Cancel</button>
-              <button className="primary" onClick={createMatch}>Create</button>
-            </div>
-          </div>
+      {roster && <RosterEditor value={roster} onSave={saveRoster} defaultName={displayName(team)} />}
+
+      <Modal
+        open={creating}
+        title="New tournament"
+        onClose={() => setCreating(false)}
+        width="min(480px, 92vw)"
+      >
+        <div className="field-row">
+          <label>
+            Tournament name
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && createTournament()}
+              autoFocus
+              placeholder="e.g. PSR 2026"
+            />
+          </label>
         </div>
-      )}
+        <div className="toolbar" style={{ marginTop: 16, justifyContent: "flex-end" }}>
+          <button onClick={() => setCreating(false)}>Cancel</button>
+          <button className="primary" onClick={createTournament}>Create</button>
+        </div>
+      </Modal>
     </div>
   );
 }

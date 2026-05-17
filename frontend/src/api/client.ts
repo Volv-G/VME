@@ -4,9 +4,11 @@ import type {
   EventDto,
   MatchDto,
   MatchSummary,
+  RenderFileDto,
   RenderJobDto,
   RosterDto,
   TeamSummary,
+  TournamentSummary,
 } from "../types/api";
 
 // import.meta.env.BASE_URL is "/" in dev and "/vme/" in production builds.
@@ -25,50 +27,121 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+const enc = encodeURIComponent;
+// All match-scoped routes share this prefix. Match identity is now
+// (team, tournament, date, match), so the URL carries a `/dates/<date>/`
+// segment between the tournament and the match.
+const matchBase = (
+  team: string,
+  tournament: string,
+  date: string,
+  match: string
+) =>
+  `/teams/${enc(team)}/tournaments/${enc(tournament)}` +
+  `/dates/${enc(date)}/matches/${enc(match)}`;
+
 export const api = {
+  // ---- Teams + roster ---------------------------------------------------
   async listTeams(): Promise<TeamSummary[]> {
     return fetchJson<TeamSummary[]>("/teams");
   },
   async createTeam(name: string): Promise<TeamSummary> {
-    return fetchJson<TeamSummary>(`/teams?name=${encodeURIComponent(name)}`, { method: "POST" });
+    return fetchJson<TeamSummary>(`/teams?name=${enc(name)}`, { method: "POST" });
   },
   async getRoster(team: string): Promise<RosterDto> {
-    return fetchJson<RosterDto>(`/teams/${encodeURIComponent(team)}/roster`);
+    return fetchJson<RosterDto>(`/teams/${enc(team)}/roster`);
   },
   async putRoster(team: string, roster: RosterDto): Promise<RosterDto> {
-    return fetchJson<RosterDto>(`/teams/${encodeURIComponent(team)}/roster`, {
+    return fetchJson<RosterDto>(`/teams/${enc(team)}/roster`, {
       method: "PUT",
       body: JSON.stringify(roster),
     });
   },
 
-  async listMatches(team: string): Promise<MatchSummary[]> {
-    return fetchJson<MatchSummary[]>(`/teams/${encodeURIComponent(team)}/matches`);
+  // ---- Tournaments ------------------------------------------------------
+  async listTournaments(team: string): Promise<TournamentSummary[]> {
+    return fetchJson<TournamentSummary[]>(`/teams/${enc(team)}/tournaments`);
   },
-  async createMatch(team: string, payload: { name: string; opponent?: string; date?: string }): Promise<MatchDto> {
-    return fetchJson<MatchDto>(`/teams/${encodeURIComponent(team)}/matches`, {
+  async createTournament(team: string, name: string): Promise<TournamentSummary> {
+    return fetchJson<TournamentSummary>(`/teams/${enc(team)}/tournaments`, {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ name }),
     });
   },
-  async getMatch(team: string, match: string): Promise<MatchDto> {
-    return fetchJson<MatchDto>(`/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}`);
+  async deleteTournament(team: string, tournament: string): Promise<void> {
+    await fetchJson<unknown>(`/teams/${enc(team)}/tournaments/${enc(tournament)}`, {
+      method: "DELETE",
+    });
   },
-  async patchMatch(team: string, match: string, body: Record<string, unknown>): Promise<MatchDto> {
-    return fetchJson<MatchDto>(`/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}`, {
+
+  // ---- Matches ----------------------------------------------------------
+  async listMatches(team: string, tournament: string): Promise<MatchSummary[]> {
+    return fetchJson<MatchSummary[]>(
+      `/teams/${enc(team)}/tournaments/${enc(tournament)}/matches`
+    );
+  },
+  async createMatch(
+    team: string,
+    tournament: string,
+    payload: { opponent: string; date: string; match_index?: number | null }
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(
+      `/teams/${enc(team)}/tournaments/${enc(tournament)}/matches`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+  async getMatch(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(matchBase(team, tournament, date, match));
+  },
+  async patchMatch(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    body: Record<string, unknown>
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(matchBase(team, tournament, date, match), {
       method: "PATCH",
       body: JSON.stringify(body),
     });
   },
-  async deleteMatch(team: string, match: string): Promise<void> {
-    await fetchJson<unknown>(`/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}`, { method: "DELETE" });
+  async deleteMatch(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string
+  ): Promise<void> {
+    await fetchJson<unknown>(matchBase(team, tournament, date, match), {
+      method: "DELETE",
+    });
   },
-  async rescanMatch(team: string, match: string): Promise<MatchDto> {
-    return fetchJson<MatchDto>(`/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}/rescan`, { method: "POST" });
+  async rescanMatch(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(
+      `${matchBase(team, tournament, date, match)}/rescan`,
+      { method: "POST" }
+    );
   },
 
-  async uploadClip(team: string, match: string, file: File, onProgress?: (pct: number) => void): Promise<MatchDto> {
-    const url = `${BASE}/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}/clips`;
+  // ---- Clips ------------------------------------------------------------
+  async uploadClip(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    file: File,
+    onProgress?: (pct: number) => void
+  ): Promise<MatchDto> {
+    const url = `${BASE}${matchBase(team, tournament, date, match)}/clips`;
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", url);
@@ -85,44 +158,86 @@ export const api = {
       xhr.send(fd);
     });
   },
-  async reorderClips(team: string, match: string, clipIds: string[]): Promise<MatchDto> {
-    return fetchJson<MatchDto>(`/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}/clips`, {
-      method: "PUT",
-      body: JSON.stringify({ clip_ids: clipIds }),
-    });
+  async reorderClips(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    clipIds: string[]
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(
+      `${matchBase(team, tournament, date, match)}/clips`,
+      { method: "PUT", body: JSON.stringify({ clip_ids: clipIds }) }
+    );
   },
-  async deleteClip(team: string, match: string, clipId: string): Promise<MatchDto> {
-    return fetchJson<MatchDto>(`/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}/clips/${clipId}`, {
-      method: "DELETE",
-    });
+  async deleteClip(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    clipId: string
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(
+      `${matchBase(team, tournament, date, match)}/clips/${clipId}`,
+      { method: "DELETE" }
+    );
   },
-  async autoCuts(team: string, match: string): Promise<AutoCutsResultDto> {
+  async autoCuts(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string
+  ): Promise<AutoCutsResultDto> {
     return fetchJson<AutoCutsResultDto>(
-      `/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}/clips/auto-cuts`,
+      `${matchBase(team, tournament, date, match)}/clips/auto-cuts`,
       { method: "POST" }
     );
   },
 
-  async createEvent(team: string, match: string, body: { type: string; clip_id?: string; local_frame?: number; payload?: Record<string, unknown> }): Promise<MatchDto> {
-    return fetchJson<MatchDto>(`/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}/events`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+  // ---- Events -----------------------------------------------------------
+  async createEvent(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    body: { type: string; clip_id?: string; local_frame?: number; payload?: Record<string, unknown> }
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(
+      `${matchBase(team, tournament, date, match)}/events`,
+      { method: "POST", body: JSON.stringify(body) }
+    );
   },
-  async patchEvent(team: string, match: string, eventId: number, body: { clip_id?: string; local_frame?: number; payload?: Record<string, unknown> }): Promise<MatchDto> {
-    return fetchJson<MatchDto>(`/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}/events/${eventId}`, {
-      method: "PATCH",
-      body: JSON.stringify(body),
-    });
+  async patchEvent(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    eventId: number,
+    body: { clip_id?: string; local_frame?: number; payload?: Record<string, unknown> }
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(
+      `${matchBase(team, tournament, date, match)}/events/${eventId}`,
+      { method: "PATCH", body: JSON.stringify(body) }
+    );
   },
-  async deleteEvent(team: string, match: string, eventId: number): Promise<MatchDto> {
-    return fetchJson<MatchDto>(`/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}/events/${eventId}`, {
-      method: "DELETE",
-    });
+  async deleteEvent(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    eventId: number
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(
+      `${matchBase(team, tournament, date, match)}/events/${eventId}`,
+      { method: "DELETE" }
+    );
   },
 
+  // ---- Renders ----------------------------------------------------------
   async startRender(
     team: string,
+    tournament: string,
+    date: string,
     match: string,
     opts: {
       label?: string;
@@ -132,14 +247,17 @@ export const api = {
       secondsAround?: number;
     } = {}
   ): Promise<RenderJobDto> {
-    return fetchJson<RenderJobDto>(`/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}/renders`, {
-      method: "POST",
-      body: JSON.stringify({
-        label: opts.label,
-        playhead_frame: opts.playheadFrame,
-        seconds_around: opts.secondsAround,
-      }),
-    });
+    return fetchJson<RenderJobDto>(
+      `${matchBase(team, tournament, date, match)}/renders`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          label: opts.label,
+          playhead_frame: opts.playheadFrame,
+          seconds_around: opts.secondsAround,
+        }),
+      }
+    );
   },
   async cancelRender(jobId: string): Promise<RenderJobDto> {
     return fetchJson<RenderJobDto>(`/jobs/${jobId}/cancel`, { method: "POST" });
@@ -147,12 +265,57 @@ export const api = {
   jobEventsUrl(jobId: string): string {
     return `${BASE}/jobs/${jobId}/events`;
   },
-  downloadUrl(team: string, match: string, filename: string): string {
-    return `${BASE}/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}/renders/${encodeURIComponent(filename)}`;
+  async listRenders(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string
+  ): Promise<RenderFileDto[]> {
+    return fetchJson<RenderFileDto[]>(
+      `${matchBase(team, tournament, date, match)}/renders`
+    );
   },
-  clipStreamUrl(team: string, match: string, clipId: string): string {
-    return `${BASE}/teams/${encodeURIComponent(team)}/matches/${encodeURIComponent(match)}/media/clips/${clipId}/stream`;
+  async deleteRender(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    filename: string
+  ): Promise<void> {
+    await fetchJson<unknown>(
+      `${matchBase(team, tournament, date, match)}/renders/${enc(filename)}`,
+      { method: "DELETE" }
+    );
+  },
+  downloadUrl(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    filename: string
+  ): string {
+    return `${BASE}${matchBase(team, tournament, date, match)}/renders/${enc(filename)}`;
+  },
+  clipStreamUrl(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    clipId: string
+  ): string {
+    return `${BASE}${matchBase(team, tournament, date, match)}/media/clips/${clipId}/stream`;
   },
 };
 
-export type { AutoCutsResultDto, ClipDto, EventDto, MatchDto, MatchSummary, RenderJobDto, RosterDto, TeamSummary };
+export type {
+  AutoCutsResultDto,
+  ClipDto,
+  RenderFileDto,
+  EventDto,
+  MatchDto,
+  MatchSummary,
+  RenderJobDto,
+  RosterDto,
+  TeamSummary,
+  TournamentSummary,
+};

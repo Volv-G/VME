@@ -11,8 +11,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .auth import BasicAuthMiddleware, configure_from_env
-from .config import LOG_ROOT, MEDIA_ROOT, STATIC_ROOT
-from .api import clips, events, matches, media, renders, teams
+from .config import DATA_DIR, LOG_ROOT, MEDIA_ROOT, STATIC_ROOT
+from .api import clips, events, matches, media, renders, teams, tournaments
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,11 +48,17 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "media_root": str(MEDIA_ROOT)}
+    return {
+        "status": "ok",
+        "media_root": str(MEDIA_ROOT),
+        "data_dir": str(DATA_DIR) if DATA_DIR else "",
+    }
 
 
 api = FastAPI()
 api.include_router(teams.router)
+api.include_router(tournaments.router)
+api.include_router(matches.list_router)
 api.include_router(matches.router)
 api.include_router(clips.router)
 api.include_router(events.router)

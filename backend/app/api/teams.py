@@ -15,7 +15,9 @@ router = APIRouter(prefix="/teams", tags=["teams"])
 @router.get("", response_model=list[TeamSummaryOut])
 def list_teams() -> list[TeamSummaryOut]:
     return [
-        TeamSummaryOut(name=t.name, has_roster=t.has_roster, match_count=t.match_count)
+        TeamSummaryOut(
+            name=t.name, has_roster=t.has_roster, tournament_count=t.tournament_count
+        )
         for t in scanner.list_teams()
     ]
 
@@ -27,11 +29,13 @@ def create_team(name: str) -> TeamSummaryOut:
     scanner.create_team(name)
     return next(
         (
-            TeamSummaryOut(name=t.name, has_roster=t.has_roster, match_count=t.match_count)
+            TeamSummaryOut(
+                name=t.name, has_roster=t.has_roster, tournament_count=t.tournament_count
+            )
             for t in scanner.list_teams()
             if t.name == name or t.name == name.strip()
         ),
-        TeamSummaryOut(name=name, has_roster=False, match_count=0),
+        TeamSummaryOut(name=name, has_roster=False, tournament_count=0),
     )
 
 

@@ -9,13 +9,15 @@ import { Modal } from "../components/Modal";
 import { RenderPanel } from "../components/RenderPanel";
 import { Timeline } from "../components/Timeline/Timeline";
 import { VideoPlayer, type VideoPlayerHandle } from "../components/VideoPlayer";
+import { displayName } from "../util/names";
 
 const TOP_H_KEY = "vme.topRowH";
 const TOP_MIN = 220;
 const TIMELINE_MIN = 120;
 
 export function MatchEditorPage() {
-  const { team = "", match = "" } = useParams();
+  const { team = "", tournament = "", date = "", match = "" } = useParams();
+  const tournamentHref = `/teams/${encodeURIComponent(team)}/tournaments/${encodeURIComponent(tournament)}`;
   const [data, setData] = useState<MatchDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -72,13 +74,13 @@ export function MatchEditorPage() {
 
   const load = useCallback(async () => {
     try {
-      const m = await api.getMatch(team, match);
+      const m = await api.getMatch(team, tournament, date, match);
       setData(m);
       setError(null);
     } catch (e) {
       setError(String(e));
     }
-  }, [team, match]);
+  }, [team, tournament, date, match]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -88,27 +90,27 @@ export function MatchEditorPage() {
   }
 
   async function uploadClip(file: File, onProgress: (pct: number) => void) {
-    const m = await api.uploadClip(team, match, file, onProgress);
+    const m = await api.uploadClip(team, tournament, date, match, file, onProgress);
     setData(m);
   }
   async function reorderClips(ids: string[]) {
-    setData(await api.reorderClips(team, match, ids));
+    setData(await api.reorderClips(team, tournament, date, match, ids));
   }
   async function deleteClip(id: string) {
-    setData(await api.deleteClip(team, match, id));
+    setData(await api.deleteClip(team, tournament, date, match, id));
   }
   async function rescan() {
-    setData(await api.rescanMatch(team, match));
+    setData(await api.rescanMatch(team, tournament, date, match));
   }
-  async function createEvent(body: Parameters<typeof api.createEvent>[2]) {
-    setData(await api.createEvent(team, match, body));
+  async function createEvent(body: Parameters<typeof api.createEvent>[4]) {
+    setData(await api.createEvent(team, tournament, date, match, body));
   }
   async function deleteEvent(id: number) {
-    setData(await api.deleteEvent(team, match, id));
+    setData(await api.deleteEvent(team, tournament, date, match, id));
     if (selectedEventId === id) setSelectedEventId(null);
   }
   async function runAutoCuts() {
-    const r = await api.autoCuts(team, match);
+    const r = await api.autoCuts(team, tournament, date, match);
     setData(r.match);
     return r;
   }
@@ -118,7 +120,7 @@ export function MatchEditorPage() {
       <div className="page">
         {error ? <div className="error">{error}</div> : <p className="muted">Loading match...</p>}
         <div style={{ marginTop: 16 }}>
-          <Link to={`/teams/${encodeURIComponent(team)}`}>← Back to {team}</Link>
+          <Link to={tournamentHref}>← Back to {displayName(tournament)}</Link>
         </div>
       </div>
     );
@@ -127,10 +129,17 @@ export function MatchEditorPage() {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div className="editor-header">
-        <Link to={`/teams/${encodeURIComponent(team)}`} className="muted">← {team}</Link>
-        <strong>{data.name}</strong>
-        <span className="muted">vs {data.opponent || "TBD"} - {data.date || "no date"}</span>
-        <span className="muted frame-display">frame {currentFrame} / {data.clips.reduce((s, c) => s + c.frame_count, 0)}</span>
+        <Link to={tournamentHref} className="muted">← {displayName(tournament)}</Link>
+        <strong>
+          {data.match_index != null ? `Match ${data.match_index} – ` : ""}
+          vs {data.opponent || "TBD"}
+        </strong>
+        <span className="muted">{data.date || "no date"}</span>
+        <span className="muted frame-display">
+          frame {currentFrame} / {data.clips.reduce((s, c) => s + c.frame_count, 0)}
+          {" · "}
+          {data.fps.toFixed(2)} fps
+        </span>
         <div className="header-spacer" />
         <button onClick={() => setClipsOpen(true)}>Clips...</button>
         <button onClick={() => setRenderOpen(true)}>Render...</button>
@@ -145,6 +154,8 @@ export function MatchEditorPage() {
           <VideoPlayer
             ref={playerRef}
             team={team}
+            tournament={tournament}
+            date={date}
             match={match}
             clips={data.clips}
             fps={data.fps}
@@ -210,6 +221,8 @@ export function MatchEditorPage() {
       <Modal open={renderOpen} onClose={() => setRenderOpen(false)} title="Render" width="min(640px, 95vw)">
         <RenderPanel
           team={team}
+          tournament={tournament}
+          date={date}
           match={match}
           hasClips={data.clips.length > 0}
           currentFrame={currentFrame}

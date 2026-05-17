@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 def kick_off_render(
     job_id: str,
     team: str,
+    tournament: str,
+    date: str,
     match: str,
     label: str = "",
     *,
@@ -31,7 +33,7 @@ def kick_off_render(
     def run() -> None:
         try:
             _run_render(
-                job_id, team, match, label,
+                job_id, team, tournament, date, match, label,
                 playhead_frame=playhead_frame,
                 seconds_around=seconds_around,
             )
@@ -52,6 +54,8 @@ DEFAULT_PREVIEW_SECONDS_AROUND = 30.0
 def _run_render(
     job_id: str,
     team: str,
+    tournament: str,
+    date: str,
     match: str,
     label: str,
     *,
@@ -66,7 +70,7 @@ def _run_render(
     def cancel_check() -> bool:
         return cancel_event is not None and cancel_event.is_set()
 
-    m = scanner.load_or_create_match(team, match)
+    m = scanner.load_or_create_match(team, tournament, date, match)
     if not m.clips:
         raise RuntimeError("Match has no clips to render")
 
@@ -96,7 +100,7 @@ def _run_render(
             playhead_frame, half, start, end,
         )
 
-    renders = paths.renders_dir(team, match)
+    renders = paths.renders_dir(team, tournament, date, match)
     renders.mkdir(parents=True, exist_ok=True)
 
     label_segment = (label or "render").lower().replace(" ", "_")
@@ -104,7 +108,7 @@ def _run_render(
     output_filename = f"{label_segment}_{timestamp}.mp4"
     output_path = renders / output_filename
 
-    media_dir = paths.match_dir(team, match)
+    media_dir = paths.match_dir(team, tournament, date, match)
 
     last_pct = [0.0]
     last_emit = [time.time()]

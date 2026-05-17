@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { TeamSummary } from "../types/api";
+import { displayName } from "../util/names";
 
 export function TeamSelectPage() {
   const [teams, setTeams] = useState<TeamSummary[]>([]);
@@ -44,9 +45,9 @@ export function TeamSelectPage() {
           {teams.map((t) => (
             <Link key={t.name} to={`/teams/${encodeURIComponent(t.name)}`} className="list-row">
               <div>
-                <div>{t.name}</div>
+                <div>{displayName(t.name)}</div>
                 <div className="row-meta">
-                  {t.match_count} match{t.match_count === 1 ? "" : "es"}
+                  {t.tournament_count} tournament{t.tournament_count === 1 ? "" : "s"}
                   {t.has_roster ? "" : " - no roster yet"}
                 </div>
               </div>

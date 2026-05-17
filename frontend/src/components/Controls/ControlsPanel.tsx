@@ -5,6 +5,7 @@ import { RosterPicker } from "./RosterPicker";
 import { ScoreDisplay } from "./ScoreDisplay";
 import { ScoreFixDialog, MessageDialog } from "./InlineDialogs";
 import { stateAtPlayhead } from "./state";
+import { useHotkeyAction } from "../../hotkeys";
 
 type CreateBody = {
   type: string;
@@ -29,6 +30,11 @@ interface ActionDef {
   payload?: Record<string, unknown>;
 }
 
+// Per-player home-team action buttons rendered under the lineup grid. Order
+// matters: the 2-column layout pairs adjacent items, so keep related verbs
+// next to each other. Focus In/Out live here (rather than in the Match
+// section) because Focus In attributes to a specific player; Focus Out is
+// global but stays alongside its pair for discoverability.
 const PLAYER_ACTIONS: ActionDef[] = [
   { type: "kill", label: "+ Kill", needsPlayer: true },
   { type: "ace", label: "+ Ace", needsPlayer: true },
@@ -36,18 +42,47 @@ const PLAYER_ACTIONS: ActionDef[] = [
   { type: "dive", label: "Dive", needsPlayer: true },
   { type: "block", label: "Block", needsPlayer: true },
   { type: "highlight", label: "Highlight", needsPlayer: true },
+  { type: "focus_in", label: "Focus In", needsPlayer: true },
+  { type: "focus_out", label: "Focus Out", needsPlayer: false },
 ];
 
+// Match-level actions in display order. One flat 2-column grid; ordering
+// is chosen so each row is a natural pair:
+//   Ball Served | Replay        (rally markers)
+//   Cut Start   | Cut End       (cut boundaries)
+//   Game Start  | Game End      (game lifecycle)
+//   End Set     | Auto Cuts     (two singletons paired together)
+//   Score Fix   | Message       (annotations / dialogs)
+// Score Fix, Message, and Auto Cuts open dialogs / run bulk operations, so
+// they're rendered inline below rather than driven by this table.
 const MATCH_ACTIONS: ActionDef[] = [
   { type: "ball_served", label: "Ball Served", needsPlayer: false },
   { type: "replay", label: "Replay", needsPlayer: false },
-  { type: "focus_in", label: "Focus In", needsPlayer: true },
-  { type: "focus_out", label: "Focus Out", needsPlayer: false },
   { type: "cut_start", label: "Cut Start", needsPlayer: false },
-  { type: "cut_end", label: "Cut End", needsPlayer: false, payload: { fade_frames: 30, frame_shift: -30 } },
-  { type: "set_end", label: "End Set", needsPlayer: false, payload: { fade_frames: 30 } },
-  { type: "game_start", label: "Game Start", needsPlayer: false, payload: { fade_frames: 30 } },
-  { type: "game_end", label: "Game End", needsPlayer: false, payload: { fade_frames: 30 } },
+  {
+    type: "cut_end",
+    label: "Cut End",
+    needsPlayer: false,
+    payload: { fade_frames: 30, frame_shift: -30 },
+  },
+  {
+    type: "game_start",
+    label: "Game Start",
+    needsPlayer: false,
+    payload: { fade_frames: 30 },
+  },
+  {
+    type: "game_end",
+    label: "Game End",
+    needsPlayer: false,
+    payload: { fade_frames: 30 },
+  },
+  {
+    type: "set_end",
+    label: "End Set",
+    needsPlayer: false,
+    payload: { fade_frames: 30 },
+  },
 ];
 
 function resolveClipFromGlobal(
@@ -84,8 +119,10 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
     try {
       const r = await onAutoCuts();
       const parts: string[] = [`Added ${r.added} cut${r.added === 1 ? "" : "s"}`];
-      if (r.skipped_existing) parts.push(`${r.skipped_existing} already cut`);
-      if (r.skipped_too_far) parts.push(`${r.skipped_too_far} far apart`);
+      if (r.added_set_ends)
+        parts.push(`${r.added_set_ends} set end${r.added_set_ends === 1 ? "" : "s"}`);
+      if (r.skipped_existing) parts.push(`${r.skipped_existing} already marked`);
+      if (r.skipped_too_close) parts.push(`${r.skipped_too_close} continuous (no cut needed)`);
       if (r.skipped_too_short) parts.push(`${r.skipped_too_short} too short`);
       if (r.skipped_missing_time) parts.push(`${r.skipped_missing_time} missing timestamp`);
       setInfo(parts.join(" · "));
@@ -121,6 +158,12 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
       setBusy(false);
     }
   }
+
+  // Hotkey: Q -> Ball Served at current playhead.
+  useHotkeyAction("events.ballServed", () => {
+    if (busy) return;
+    void commit("ball_served");
+  });
 
   function onActionButton(a: ActionDef) {
     setErr(null);
@@ -246,9 +289,11 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
         </div>
       </div>
 
-      {/* Match-level actions */}
+      {/* Match-level actions, grouped by purpose so related buttons sit
+          next to each other. */}
       <div className="match-actions">
         <div className="section-title">Match</div>
+
         <div className="action-grid">
           {MATCH_ACTIONS.map((a) => (
             <button
@@ -261,7 +306,19 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
               {a.label}
             </button>
           ))}
-          {/* Score Fix and Message live here too. */}
+          {/* Auto Cuts sits in the same grid right after End Set so the two
+              singletons share a row instead of leaving an empty cell. */}
+          <button
+            type="button"
+            className="action-btn"
+            onClick={() => void runAutoCuts()}
+            disabled={busy || data.clips.length < 2}
+            title="Crossfade stop/restart joins; insert SetEnd at long gaps"
+          >
+            Auto Cuts
+          </button>
+          {/* Score corrections and inline notes - both open dialogs rather
+              than committing immediately. */}
           <button
             type="button"
             className={`action-btn${scoreFixOpen ? " armed" : ""}`}
@@ -285,15 +342,6 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
             disabled={busy}
           >
             Message
-          </button>
-          <button
-            type="button"
-            className="action-btn"
-            onClick={() => void runAutoCuts()}
-            disabled={busy || data.clips.length < 2}
-            title="Bridge every back-to-back clip boundary with a 1s+1s cut"
-          >
-            Auto Cuts
           </button>
         </div>
       </div>

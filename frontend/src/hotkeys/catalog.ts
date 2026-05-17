@@ -41,6 +41,12 @@ export const ACTION_CATALOG: readonly ActionDef[] = [
     label: "Step forward 1 second",
     category: "Playback",
   },
+  {
+    id: "events.ballServed",
+    label: "Ball Served",
+    category: "Events",
+    description: "Log a Ball Served event at the current playhead.",
+  },
 ] as const;
 
 /** Default key bindings shipped with the app. */
@@ -51,6 +57,7 @@ export const DEFAULT_BINDINGS: Bindings = {
   "playback.play4x": [],
   "playback.back1s": ["A"],
   "playback.fwd1s": ["D"],
+  "events.ballServed": ["Q"],
 };
 
 /** Look up an action def by id (handy for the configurator). */
