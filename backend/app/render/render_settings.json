@@ -1,0 +1,47 @@
+{
+  "windows": {
+    "codec": "libx264",
+    "preset": "medium",
+    "bitrate": "4500k",
+    "audio": true,
+    "audio_codec": "aac",
+    "audio_bitrate": "128k",
+    "threads": 8,
+    "ffmpeg_params": [
+      "-profile:v", "high",
+      "-level", "4.1",
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart"
+    ]
+  },
+  "darwin": {
+    "codec": "libx264",
+    "preset": "medium",
+    "bitrate": "4500k",
+    "audio": true,
+    "audio_codec": "aac",
+    "audio_bitrate": "128k",
+    "threads": 8,
+    "ffmpeg_params": [
+      "-profile:v", "high",
+      "-level", "4.1",
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart"
+    ]
+  },
+  "linux": {
+    "codec": "libx264",
+    "preset": "medium",
+    "bitrate": "4500k",
+    "audio": true,
+    "audio_codec": "aac",
+    "audio_bitrate": "128k",
+    "threads": 8,
+    "ffmpeg_params": [
+      "-profile:v", "high",
+      "-level", "4.1",
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart"
+    ]
+  }
+}

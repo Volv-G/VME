@@ -1,0 +1,28 @@
+[project]
+name = "vme-backend"
+version = "0.1.0"
+description = "Match Editor Web App backend"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "hypercorn>=0.17",
+    "python-multipart>=0.0.20",
+    "moviepy>=2.0.0",
+    "pillow>=10.0.0",
+    "numpy>=1.26",
+    "imageio-ffmpeg>=0.5.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.7",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

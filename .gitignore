@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Build output
+backend/static/
+
+# Generated
+certs/
+logs/
+tools/
+*.pfx
+
+# Secrets (credentials, cert paths) - never commit
+secrets.env
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Media (large files; user content)
+media/*/*/source*.mp4
+media/*/*/source*.mov
+media/*/*/source*.mkv
+media/*/*/renders/

@@ -1,0 +1,66 @@
+{
+  "team_name": "NW Jrs. 15 Grey",
+  "team_color": "#00aaff",
+  "players": [
+    {
+      "name": "Grace Martine",
+      "number": 29,
+      "short_name": "Grace M."
+    },
+    {
+      "name": "Peyton Cochrun",
+      "number": 30,
+      "short_name": "Peyton C."
+    },
+    {
+      "name": "Mikaela Berkley",
+      "number": 31,
+      "short_name": "Mikaela B."
+    },
+    {
+      "name": "Ashlyn Aslakson",
+      "number": 32,
+      "short_name": "Ashlyn A."
+    },
+    {
+      "name": "Claire Zhang",
+      "number": 33,
+      "short_name": "Claire Z."
+    },
+    {
+      "name": "Katja Guzovski",
+      "number": 34,
+      "short_name": "Katja G."
+    },
+    {
+      "name": "Erin Woodward",
+      "number": 36,
+      "short_name": "Erin W."
+    },
+    {
+      "name": "Milana Shikhanova",
+      "number": 37,
+      "short_name": "Milana S."
+    },
+    {
+      "name": "Isabella Ferretti",
+      "number": 38,
+      "short_name": "Isabella F."
+    },
+    {
+      "name": "Ekaterina Grebennikova",
+      "number": 39,
+      "short_name": "Kate G."
+    },
+    {
+      "name": "Indira Narayan",
+      "number": 40,
+      "short_name": "Indira N."
+    },
+    {
+      "name": "Jeneva Ibuki",
+      "number": 41,
+      "short_name": "Jeneva I."
+    }
+  ]
+}

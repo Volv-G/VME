@@ -1,0 +1,635 @@
+:root {
+  --bg: #0e1116;
+  --bg-elev: #161b22;
+  --bg-elev-2: #1c232c;
+  --border: #2a313c;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #4f8bff;
+  --accent-hover: #6ea1ff;
+  --danger: #f85149;
+  --success: #3fb950;
+  --warn: #d29922;
+  --home: #2d8a4e;
+  --away: #8a2d2d;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+button {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+button:hover:not(:disabled) { background: var(--bg-elev-2); border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+button.danger { color: var(--danger); border-color: var(--danger); }
+button.danger:hover:not(:disabled) { background: #2a1a1a; }
+
+input, select, textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.app-header {
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.app-header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+
+.app-header nav { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--text-dim); }
+.app-header nav a { color: var(--text-dim); }
+.app-header nav a:hover { color: var(--text); }
+
+.app-main { flex: 1; overflow: auto; }
+
+.page {
+  padding: 24px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.card-header h2 { margin: 0; font-size: 14px; font-weight: 600; }
+
+.list { display: flex; flex-direction: column; gap: 6px; }
+
+.list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--bg-elev-2);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.list-row:hover { border-color: var(--accent); }
+
+.row-meta { font-size: 12px; color: var(--text-dim); }
+
+.muted { color: var(--text-dim); }
+
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+.error { color: var(--danger); padding: 8px 12px; background: #2a1a1a; border-radius: 4px; }
+.info { color: #8ce0a0; padding: 8px 12px; background: #16261c; border-radius: 4px; font-size: 12px; }
+.success { color: var(--success); }
+
+/* Match editor layout: top row (video | controls | events) + splitter + full-width timeline */
+.editor-header {
+  padding: 8px 16px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.editor-header .header-spacer { flex: 1; }
+
+.editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px 280px;
+  grid-template-rows: minmax(220px, 1fr) 6px auto;
+  height: 100%;
+  gap: 8px;
+  padding: 8px;
+  min-height: 0;
+}
+
+.row-splitter {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  cursor: row-resize;
+  position: relative;
+  touch-action: none;
+}
+.row-splitter::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 1px;
+  bottom: 1px;
+  background: var(--border);
+  border-radius: 3px;
+  opacity: 0.4;
+  transition: opacity 0.15s, background 0.15s;
+}
+.row-splitter:hover::after { opacity: 1; background: var(--accent, #4f8bff); }
+.row-splitter:active::after { opacity: 1; background: var(--accent, #4f8bff); }
+
+.editor-video {
+  grid-column: 1;
+  grid-row: 1;
+  background: black;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  min-width: 0;
+}
+
+.editor-video video {
+  /* Fill the container instead of using intrinsic size + max-width/height.
+     This keeps the layout box constant while the source is reloading
+     (otherwise videoWidth/videoHeight = 0 mid-load collapses the element
+     to ~300x150 and the whole pane visibly snaps). object-fit: contain
+     letterboxes the actual frame inside a fixed-size box. */
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  display: block;
+}
+
+/* react-zoom-pan-pinch viewport: fill the editor-video stage and clip overflow. */
+.vp-zoom-wrapper {
+  width: 100% !important;
+  height: 100% !important;
+  cursor: grab;
+}
+.vp-zoom-wrapper:active { cursor: grabbing; }
+/* The transformed content fills the wrapper; the inner <video> is sized to
+   100% and uses object-fit: contain, so flex centering is unnecessary. */
+.vp-zoom-content {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.editor-controls {
+  grid-column: 2;
+  grid-row: 1;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 0;
+  overflow-y: auto;
+}
+.editor-events {
+  grid-column: 3;
+  grid-row: 1;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.editor-timeline {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.scroll-area {
+  overflow-y: auto;
+  flex: 1;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.event-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 12px;
+}
+.event-row:hover { background: var(--bg-elev-2); }
+.event-row.selected { background: var(--bg-elev-2); border-left: 3px solid var(--accent); }
+
+.event-row .event-row-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.event-row .ev-frame { color: var(--text-dim); font-family: ui-monospace, monospace; flex-shrink: 0; }
+
+.event-row.orphan {
+  background: rgba(248, 81, 73, 0.10);
+  border-left: 3px solid var(--danger, #f85149);
+  color: #fda49b;
+}
+.event-row.orphan:hover { background: rgba(248, 81, 73, 0.16); }
+.event-row.orphan.selected { background: rgba(248, 81, 73, 0.18); }
+.event-row .orphan-badge {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  line-height: 14px;
+  text-align: center;
+  border-radius: 50%;
+  background: var(--danger, #f85149);
+  color: #0e1116;
+  font-weight: 700;
+  font-size: 10px;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+.timeline-canvas { display: block; }
+
+.timeline-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-elev-2) transparent;
+}
+.timeline-scroll::-webkit-scrollbar { height: 8px; }
+.timeline-scroll::-webkit-scrollbar-thumb {
+  background: var(--bg-elev-2);
+  border-radius: 4px;
+}
+.timeline-scroll::-webkit-scrollbar-track { background: transparent; }
+
+/* --- Modal (overlay + card) --- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 24px;
+}
+.modal-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-header h2 { font-size: 14px; font-weight: 600; }
+.modal-close {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 22px;
+  line-height: 1;
+  padding: 0 6px;
+  cursor: pointer;
+}
+.modal-close:hover { color: var(--text); background: transparent; }
+.modal-body { padding: 16px; overflow-y: auto; }
+
+/* --- Controls panel --- */
+.controls-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+.score-display {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 8px 12px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.score-display .score-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+.score-display .score-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.score-display .score-points {
+  font-size: 28px;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+}
+.score-display .score-sets {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.score-display .score-sep {
+  font-size: 22px;
+  color: var(--text-dim);
+  margin: 0 4px;
+}
+.score-display .serve-dot {
+  margin-left: 4px;
+  color: var(--warn);
+}
+
+/* --- Team card --- */
+.team-card {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.team-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.team-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.team-name {
+  flex: 1;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Lineup grid (2x3) --- */
+.lineup-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(2, auto);
+  gap: 6px;
+}
+.lineup-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  min-height: 44px;
+}
+.lineup-cell .lineup-pos {
+  font-size: 9px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.lineup-cell .lineup-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.lineup-cell.empty .lineup-name { color: var(--text-dim); }
+.lineup-cell:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg-elev-2);
+}
+.lineup-grid.armed .lineup-cell:not(.empty) {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 1px var(--warn) inset;
+}
+
+.armed-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  background: rgba(210, 153, 34, 0.15);
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--warn);
+}
+.armed-banner button {
+  padding: 2px 8px;
+  font-size: 11px;
+  background: transparent;
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+/* --- Action grids --- */
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.action-btn {
+  text-align: center;
+  padding: 8px 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.action-btn.armed {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: #1a1206;
+}
+
+.match-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+/* --- Roster picker (replaces lineup grid during substitution) --- */
+.roster-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+}
+.roster-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.roster-picker-header button { padding: 2px 8px; font-size: 11px; }
+.roster-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.roster-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 4px;
+  font-size: 12px;
+  background: var(--bg-elev-2);
+}
+.roster-chip .chip-num { font-weight: 700; font-family: ui-monospace, monospace; }
+.roster-chip .chip-name {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.roster-chip.on-court {
+  opacity: 0.45;
+}
+
+/* --- Inline dialogs (Score Fix, Message) --- */
+.inline-dialog {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.inline-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.inline-dialog-header button { padding: 2px 8px; font-size: 11px; }
+
+.field-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.field-row label { flex: 1; min-width: 120px; }
+
+.player-controls {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 8px;
+  background: var(--bg-elev);
+  border-top: 1px solid var(--border);
+}
+
+.player-controls .step-btn {
+  min-width: 40px;
+  padding: 4px 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  text-align: center;
+}
+
+.player-controls .play-group {
+  display: flex;
+  gap: 2px;
+  margin: 0 6px;
+}
+.player-controls .play-btn {
+  min-width: 48px;
+  font-size: 14px;
+  font-family: ui-monospace, monospace;
+}
+
+.player-controls select {
+  margin-left: auto;
+  max-width: 220px;
+}
+
+.frame-display {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  color: var(--text-dim);
+  min-width: 110px;
+}

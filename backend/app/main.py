@@ -1,0 +1,90 @@
+"""FastAPI application: API + (in production) static frontend."""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from .auth import BasicAuthMiddleware, configure_from_env
+from .config import LOG_ROOT, MEDIA_ROOT, STATIC_ROOT
+from .api import clips, events, matches, media, renders, teams
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_ROOT / "backend.log", encoding="utf-8"),
+    ],
+)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="VME - Match Editor", version="0.1.0")
+
+# Note: middlewares run in reverse insertion order. CORS is added first so that
+# it sits *inside* the auth middleware - meaning auth runs first on every
+# request. CORS preflight (OPTIONS) is whitelisted in BasicAuthMiddleware.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # LAN tool; tighten if exposed externally
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+_auth_user, _auth_hash, _ = configure_from_env()
+app.add_middleware(
+    BasicAuthMiddleware,
+    username=_auth_user,
+    password_hash=_auth_hash,
+    public_paths={"/api/health"},
+)
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {"status": "ok", "media_root": str(MEDIA_ROOT)}
+
+
+api = FastAPI()
+api.include_router(teams.router)
+api.include_router(matches.router)
+api.include_router(clips.router)
+api.include_router(events.router)
+api.include_router(media.router)
+api.include_router(renders.router)
+app.mount("/api", api)
+
+
+# ---- Static frontend (only when built) -------------------------------------
+
+
+_INDEX = STATIC_ROOT / "index.html"
+
+if _INDEX.is_file():
+    app.mount("/assets", StaticFiles(directory=STATIC_ROOT / "assets"), name="assets")
+
+    @app.get("/{path:path}")
+    def spa_fallback(path: str):
+        candidate = STATIC_ROOT / path
+        if path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_INDEX)
+else:
+    @app.get("/")
+    def root() -> JSONResponse:
+        return JSONResponse(
+            {
+                "message": (
+                    "Match Editor API is running. Build the frontend (scripts/build.ps1) "
+                    "or run scripts/dev.ps1 for development."
+                ),
+                "media_root": str(MEDIA_ROOT),
+                "static_root": str(STATIC_ROOT),
+            }
+        )
