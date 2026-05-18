@@ -90,8 +90,30 @@ def team_roster_path(team: str) -> Path:
     return team_dir(team) / "roster.json"
 
 
+def tournament_json_path(team: str, tournament: str) -> Path:
+    """Sidecar metadata file for a tournament (abbreviation, full_name, ...).
+
+    Lives alongside the per-date subfolders inside the tournament dir.
+    Missing file = use folder-name fallbacks for all fields.
+    """
+    return tournament_dir(team, tournament) / "tournament.json"
+
+
 def renders_dir(team: str, tournament: str, date: str, match: str) -> Path:
     return match_dir(team, tournament, date, match) / "renders"
+
+
+def youtube_sidecar_path(render_path: Path) -> Path:
+    """YouTube-upload sidecar for a single rendered file.
+
+    Convention: append `.youtube.json` to the full render filename so the
+    pairing is unambiguous (e.g. `full_20260517_103045.mp4` ->
+    `full_20260517_103045.mp4.youtube.json`). This survives the user
+    renaming the .mp4 only when both files are renamed together - which
+    is fine; the alternative (replacing the extension) collides if
+    someone produces `foo.mp4` and `foo.mov`.
+    """
+    return render_path.with_name(render_path.name + ".youtube.json")
 
 
 def highlights_dir(team: str, tournament: str, date: str, match: str) -> Path:

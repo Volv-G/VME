@@ -2,6 +2,7 @@ import type {
   AutoCutsResultDto,
   ClipDto,
   EventDto,
+  FullRenderDto,
   MatchDto,
   MatchSummary,
   QueueStateDto,
@@ -9,7 +10,9 @@ import type {
   RenderJobDto,
   RosterDto,
   TeamSummary,
+  TournamentInfoDto,
   TournamentSummary,
+  YouTubeStatusDto,
 } from "../types/api";
 
 // import.meta.env.BASE_URL is "/" in dev and "/vme/" in production builds.
@@ -82,6 +85,59 @@ export const api = {
     await fetchJson<unknown>(`/teams/${enc(team)}/tournaments/${enc(tournament)}`, {
       method: "DELETE",
     });
+  },
+  async getTournamentInfo(
+    team: string,
+    tournament: string
+  ): Promise<TournamentInfoDto> {
+    return fetchJson<TournamentInfoDto>(
+      `/teams/${enc(team)}/tournaments/${enc(tournament)}/info`
+    );
+  },
+  async putTournamentInfo(
+    team: string,
+    tournament: string,
+    info: TournamentInfoDto
+  ): Promise<TournamentInfoDto> {
+    return fetchJson<TournamentInfoDto>(
+      `/teams/${enc(team)}/tournaments/${enc(tournament)}/info`,
+      { method: "PUT", body: JSON.stringify(info) }
+    );
+  },
+
+  // ---- Team-wide full renders + YouTube uploads -------------------------
+  async listTeamFullRenders(team: string): Promise<FullRenderDto[]> {
+    return fetchJson<FullRenderDto[]>(`/teams/${enc(team)}/full-renders`);
+  },
+  async youtubeStatus(): Promise<YouTubeStatusDto> {
+    return fetchJson<YouTubeStatusDto>(`/youtube/status`);
+  },
+  async enqueueYouTubeUpload(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    body: {
+      filename: string;
+      titleOverride?: string;
+      descriptionOverride?: string;
+      privacyOverride?: string;
+      playlistOverride?: string;
+    }
+  ): Promise<RenderJobDto> {
+    return fetchJson<RenderJobDto>(
+      `${matchBase(team, tournament, date, match)}/uploads/youtube`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          filename: body.filename,
+          title_override: body.titleOverride ?? null,
+          description_override: body.descriptionOverride ?? null,
+          privacy_override: body.privacyOverride ?? null,
+          playlist_override: body.playlistOverride ?? null,
+        }),
+      }
+    );
   },
 
   // ---- Matches ----------------------------------------------------------

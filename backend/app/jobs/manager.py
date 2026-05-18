@@ -50,11 +50,14 @@ class RenderJob:
     date: str
     match: str
     label: str = ""
-    # Kind of render this job represents. Drives dispatch in render_job.py:
+    # Kind of job this represents. Drives dispatch in render_job.py:
     #   - "full"               -> whole match, one output
     #   - "preview"            -> window around `playhead_frame`, one output
     #   - "highlights"         -> one mp4 per HighlightEvent (rally bounds)
     #   - "focused_highlights" -> one mp4 per FocusIn/FocusOut pair
+    #   - "youtube_upload"     -> upload an existing render file to YouTube
+    #                             (not a render at all; reuses the queue's
+    #                             FIFO + progress + SSE plumbing).
     # Stored as a plain string for forward compatibility (older clients
     # just don't know about new kinds; the backend still serializes them).
     kind: str = "full"
@@ -72,6 +75,11 @@ class RenderJob:
     # dispatcher's `next_pending()` filters them out so it never races to
     # double-run the same job.
     immediate: bool = False
+    # Free-form per-kind payload. Avoids cluttering this dataclass with
+    # fields that only one kind uses. Currently carries:
+    #   - youtube_upload: {filename, title, description, privacy_status,
+    #                      playlist_id, tags}
+    payload: dict[str, Any] = field(default_factory=dict)
 
     status: JobStatus = JobStatus.PENDING
     percent: float = 0.0
@@ -104,6 +112,7 @@ class RenderJob:
             "opponent": self.opponent,
             "match_index": self.match_index,
             "immediate": self.immediate,
+            "payload": self.payload,
             "status": self.status.value,
             "percent": round(self.percent, 1),
             "phase": self.phase,
@@ -137,6 +146,7 @@ class RenderJob:
             opponent=data.get("opponent", ""),
             match_index=data.get("match_index"),
             immediate=bool(data.get("immediate", False)),
+            payload=dict(data.get("payload") or {}),
             status=JobStatus(data.get("status", "pending")),
             percent=float(data.get("percent", 0.0)),
             phase=data.get("phase", "queued"),
@@ -182,6 +192,7 @@ class JobManager:
         opponent: str = "",
         match_index: Optional[int] = None,
         immediate: bool = False,
+        payload: Optional[dict[str, Any]] = None,
     ) -> RenderJob:
         """Create a pending job.
 
@@ -205,6 +216,7 @@ class JobManager:
             opponent=opponent,
             match_index=match_index,
             immediate=immediate,
+            payload=dict(payload or {}),
         )
         with self._lock:
             self._jobs[job.id] = job

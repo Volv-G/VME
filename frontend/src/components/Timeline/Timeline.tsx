@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ClipDto, EventDto } from "../../types/api";
 import { analyzeCuts } from "../cutAnalysis";
+import { analyzeFocus } from "../focusAnalysis";
 
 interface Props {
   clips: ClipDto[];
@@ -17,8 +18,16 @@ const CLIP_HEIGHT = 30;
 const EVENT_BAND_TOP = RULER_HEIGHT + CLIP_HEIGHT + 4;
 
 const MIN_ZOOM = 1;
+// Absolute ceiling. The effective cap is derived from the current
+// viewport so the canvas backing store can never exceed the browser's
+// max canvas size - see `maxZoom` below.
 const MAX_ZOOM = 200;
 const TICK_TARGET_PX = 90;
+// Hard ceiling on canvas pixel dimensions. Browsers reject canvases
+// larger than this (Chrome/Edge ~16384 px per side, Safari sometimes
+// less). A rejected canvas throws on draw, React unmounts, and the
+// whole editor goes blank - which is what over-zooming used to do.
+const MAX_CANVAS_PX = 16384;
 // Tick intervals in seconds. The first one whose on-screen spacing is >= the
 // target px width is picked as the labeled tick. We try sub-second intervals
 // when zoomed in enough that even 1s isn't tight; otherwise round numbers.
@@ -100,6 +109,22 @@ export function Timeline({
     }
     return offsets;
   }, [clips]);
+
+  // Derived max zoom: the largest factor that keeps the canvas backing
+  // store (viewWidth * zoom * dpr) under MAX_CANVAS_PX. Recomputed on
+  // every render so it adapts to window resizes and HiDPI changes.
+  const maxZoom = useMemo(() => {
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    const ceiling = MAX_CANVAS_PX / Math.max(1, viewWidth * dpr);
+    return clamp(Math.floor(ceiling * 10) / 10, MIN_ZOOM, MAX_ZOOM);
+  }, [viewWidth]);
+
+  // If a window-resize / DPR change drops `maxZoom` below the current
+  // zoom, snap back so we never produce an oversized canvas on the next
+  // render.
+  useEffect(() => {
+    if (zoom > maxZoom) setZoom(maxZoom);
+  }, [maxZoom, zoom]);
 
   const contentWidth = Math.max(viewWidth * zoom, viewWidth);
 
@@ -218,7 +243,12 @@ export function Timeline({
 
     // Cut regions (matched cut_start <-> cut_end pairs).
     const clipMap = new Map(clips.map((c, i) => [c.id, { idx: i, offset: clipOffsets[i] }]));
-    const { regions: cuts, orphanIds } = analyzeCuts(events);
+    const { regions: cuts, orphanIds: cutOrphans } = analyzeCuts(events);
+    const { orphanIds: focusOrphans } = analyzeFocus(events);
+    // Union so the timeline marker renders the focus-orphan FocusIn
+    // dot in red (same hollow-ring treatment as orphan cuts) - matches
+    // the EventList row badge.
+    const orphanIds = new Set([...cutOrphans, ...focusOrphans]);
     for (const r of cuts) {
       const x0 = px(r.start);
       const x1 = px(r.end);
@@ -303,8 +333,8 @@ export function Timeline({
   // shift+wheel) = pan. We attach a native non-passive listener so we can
   // actually preventDefault - React's synthetic onWheel is passive and
   // can't suppress browser defaults like Firefox's alt+wheel history nav.
-  const stateRef = useRef({ totalFrames, viewWidth, contentWidth, zoom });
-  stateRef.current = { totalFrames, viewWidth, contentWidth, zoom };
+  const stateRef = useRef({ totalFrames, viewWidth, contentWidth, zoom, maxZoom });
+  stateRef.current = { totalFrames, viewWidth, contentWidth, zoom, maxZoom };
 
   useEffect(() => {
     const container = containerRef.current;
@@ -334,7 +364,7 @@ export function Timeline({
       const frame =
         ((container.scrollLeft + cursorX) / s.contentWidth) * s.totalFrames;
       const factor = Math.exp(-e.deltaY * 0.0025);
-      const next = clamp(s.zoom * factor, MIN_ZOOM, MAX_ZOOM);
+      const next = clamp(s.zoom * factor, MIN_ZOOM, s.maxZoom);
       if (Math.abs(next - s.zoom) < 1e-3) return;
       pendingScrollRef.current = { frame, cursorX };
       setZoom(next);

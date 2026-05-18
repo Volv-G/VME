@@ -1,6 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { RenderFileDto, RenderJobDto } from "../types/api";
+import type {
+  RenderFileDto,
+  RenderJobDto,
+  YouTubeStatusDto,
+} from "../types/api";
+
+/** Is `filename` a top-level full render (not a highlight / focused
+ *  subfolder output, not a preview)? Matches `_is_full_render` on the
+ *  backend so the upload action only appears where the server will
+ *  accept it. */
+function isFullRender(filename: string): boolean {
+  if (filename.includes("/") || filename.includes("\\")) return false;
+  const lower = filename.toLowerCase();
+  if (!lower.endsWith(".mp4")) return false;
+  if (lower.startsWith("preview_") || lower === "preview.mp4") return false;
+  return true;
+}
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -51,6 +67,15 @@ export function RenderPanel({
     DEFAULT_PREVIEW_SECONDS
   );
   const [renders, setRenders] = useState<RenderFileDto[]>([]);
+  // YouTube readiness check. Fetched once on mount; controls whether
+  // the per-render "Upload" button is enabled.
+  const [ytStatus, setYtStatus] = useState<YouTubeStatusDto | null>(null);
+  // Map of <filename> -> youtube video id. Populated by polling the
+  // team's full-renders list (which carries sidecar info) so the
+  // upload button on this match page can switch to "on YouTube" after
+  // the queue finishes an upload.
+  const [uploads, setUploads] = useState<Record<string, string>>({});
+  const [uploadingName, setUploadingName] = useState<string | null>(null);
   // Jobs for THIS match only. Filtered client-side from the team list so
   // we share one polling loop with the queue widget on other pages.
   const [matchJobs, setMatchJobs] = useState<RenderJobDto[]>([]);
@@ -70,6 +95,40 @@ export function RenderPanel({
   useEffect(() => {
     void reloadRenders();
   }, [reloadRenders]);
+
+  // YouTube status (cheap; one-shot).
+  useEffect(() => {
+    void api.youtubeStatus().then(setYtStatus).catch(() => setYtStatus(null));
+  }, []);
+
+  // Pull the team's full-render listing and project the entries
+  // belonging to THIS match into a {filename -> video_id} map. We
+  // could expose this on the per-match endpoint instead, but reusing
+  // the team-wide endpoint keeps the team dashboard and the match
+  // page in agreement about which renders are "uploaded".
+  const reloadUploads = useCallback(async () => {
+    try {
+      const all = await api.listTeamFullRenders(team);
+      const mine: Record<string, string> = {};
+      for (const r of all) {
+        if (
+          r.tournament === tournament &&
+          r.date === date &&
+          r.match === match &&
+          r.youtube_video_id
+        ) {
+          mine[r.filename] = r.youtube_video_id;
+        }
+      }
+      setUploads(mine);
+    } catch {
+      /* non-fatal - the upload button will just stay enabled */
+    }
+  }, [team, tournament, date, match]);
+
+  useEffect(() => {
+    void reloadUploads();
+  }, [reloadUploads]);
 
   // ---- Per-match jobs ---------------------------------------------------
 
@@ -206,10 +265,35 @@ export function RenderPanel({
     try {
       await api.deleteRender(team, tournament, date, match, filename);
       await reloadRenders();
+      await reloadUploads();
     } catch (e) {
       setErr(String(e));
     }
   }
+
+  async function uploadToYouTube(filename: string) {
+    if (!ytStatus?.configured) return;
+    setErr(null);
+    setUploadingName(filename);
+    try {
+      await api.enqueueYouTubeUpload(team, tournament, date, match, {
+        filename,
+      });
+      await reloadJobs();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setUploadingName(null);
+    }
+  }
+
+  // When a job (incl. uploads) finishes, refresh the uploads map so
+  // the row switches to "on YouTube".
+  useEffect(() => {
+    if (matchJobs.some((j) => j.status === "done" && j.kind === "youtube_upload")) {
+      void reloadUploads();
+    }
+  }, [matchJobs, reloadUploads]);
 
   const windowSec = previewSeconds * 2;
   const windowFrames = Math.round(previewSeconds * (fps || 30) * 2);
@@ -345,6 +429,10 @@ export function RenderPanel({
             date={date}
             match={match}
             onDelete={removeRender}
+            onUpload={uploadToYouTube}
+            uploads={uploads}
+            uploadingName={uploadingName}
+            ytStatus={ytStatus}
           />
         )}
       </div>
@@ -361,6 +449,14 @@ interface RendersByDirProps {
   date: string;
   match: string;
   onDelete: (filename: string) => void;
+  /** Trigger a YouTube upload (full renders only). */
+  onUpload: (filename: string) => void;
+  /** Map of filename -> YouTube video id for already-uploaded renders. */
+  uploads: Record<string, string>;
+  /** Filename currently being enqueued (button disabled / spinner). */
+  uploadingName: string | null;
+  /** Whether the server can upload at all; null while loading. */
+  ytStatus: YouTubeStatusDto | null;
 }
 
 function RendersByDir({
@@ -370,6 +466,10 @@ function RendersByDir({
   date,
   match,
   onDelete,
+  onUpload,
+  uploads,
+  uploadingName,
+  ytStatus,
 }: RendersByDirProps) {
   // Group by parent directory. Top-level files (no slash) collect under
   // the empty-string key and render without a group heading so the
@@ -406,6 +506,8 @@ function RendersByDir({
           )}
           {groups.get(dir)!.map((r) => {
             const leaf = r.filename.split("/").pop() || r.filename;
+            const canUpload = isFullRender(r.filename);
+            const uploaded = uploads[r.filename];
             return (
               <div
                 key={r.filename}
@@ -438,6 +540,36 @@ function RendersByDir({
                     {formatBytes(r.size_bytes)} · {formatAge(r.created_at)}
                   </div>
                 </div>
+                {canUpload &&
+                  (uploaded ? (
+                    <a
+                      href={`https://youtu.be/${uploaded}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: "#3aa55d", whiteSpace: "nowrap" }}
+                      title="Open on YouTube"
+                    >
+                      ▶ YouTube
+                    </a>
+                  ) : (
+                    <button
+                      onClick={() => onUpload(r.filename)}
+                      disabled={
+                        !ytStatus?.configured ||
+                        uploadingName === r.filename
+                      }
+                      title={
+                        ytStatus?.configured
+                          ? "Enqueue an upload of this render to YouTube"
+                          : ytStatus?.reason ||
+                            "YouTube uploads are not configured for this server"
+                      }
+                    >
+                      {uploadingName === r.filename
+                        ? "Enqueueing…"
+                        : "Upload"}
+                    </button>
+                  ))}
                 <button
                   className="danger"
                   onClick={() => onDelete(r.filename)}

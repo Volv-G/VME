@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { EventDto, RosterDto } from "../types/api";
 import { EMPTY_STATE } from "./Controls/state";
 import { analyzeCuts } from "./cutAnalysis";
+import { analyzeFocus } from "./focusAnalysis";
 import { summarizeEvent } from "./eventSummary";
 
 interface Props {
@@ -36,7 +37,15 @@ export function EventList({
   const lowerQuery = trimmed.toLowerCase();
 
   const ctx = { homeRoster, opponentRoster, homeName, opponentName, fps };
-  const { orphanIds } = analyzeCuts(events);
+  // Two independent orphan-detection passes - merged here so the same
+  // red badge / `.orphan` class flags both unpaired cuts AND unannotated
+  // focus spans. Membership in either set is enough to highlight.
+  const { orphanIds: cutOrphans } = analyzeCuts(events);
+  const { orphanIds: focusOrphans } = analyzeFocus(events);
+  const orphanIds = useMemo(
+    () => new Set([...cutOrphans, ...focusOrphans]),
+    [cutOrphans, focusOrphans]
+  );
 
   // Pre-compute summary strings so the empty-list check below still has a
   // search bar and the match count is consistent with what's rendered.
@@ -97,7 +106,11 @@ export function EventList({
         const orphanReason =
           ev.type === "cut_start"
             ? "Cut Start without a matching Cut End"
-            : "Cut End without a preceding Cut Start";
+            : ev.type === "cut_end"
+            ? "Cut End without a preceding Cut Start"
+            : ev.type === "focus_in"
+            ? "FocusIn with no matching player event in the rally - this focus will be skipped at render time"
+            : "Orphan event";
         const title = isOrphan ? `${summary} - ${orphanReason}` : summary;
         return (
           <div

@@ -5,10 +5,45 @@ export interface PlayerDto {
   profile_pic_path?: string | null;
 }
 
+export interface YouTubeConfigDto {
+  privacy_status: "private" | "unlisted" | "public";
+  playlist_id?: string | null;
+  title_template?: string | null;
+  description_template?: string | null;
+}
+
+/** Team-level render-output naming templates. Slashes in a template
+ *  create subfolders inside the match's renders/ dir. All fields
+ *  optional - empty means "use server default". */
+export interface NamingConfigDto {
+  /** Filename for full / preview renders. Default:
+   *  `{label}_{timestamp}.mp4` */
+  full_render_template?: string | null;
+  /** Path (relative to renders/) for one per-event highlight clip.
+   *  Default: `highlights/{team}/{player}/{action}/
+   *           {date}_vs_{opponent}_{match_timestamp}_{action}.mp4` */
+  highlight_template?: string | null;
+  /** Path (relative to renders/) for one FocusIn/Out clip. Default:
+   *  `focused/{team}/{player}/
+   *   {date}_vs_{opponent}_{start_timestamp}-{end_timestamp}.mp4` */
+  focused_template?: string | null;
+}
+
 export interface RosterDto {
   team_name?: string | null;
   team_color?: string | null;
+  /** Team-level YouTube upload defaults. Optional on input - the server
+   *  preserves any previously-saved settings when omitted. */
+  youtube?: YouTubeConfigDto | null;
+  /** Team-level render-output naming templates. Optional - omitted
+   *  block leaves previously-saved values intact. */
+  naming?: NamingConfigDto | null;
   players: PlayerDto[];
+}
+
+export interface TournamentInfoDto {
+  abbreviation?: string | null;
+  full_name?: string | null;
 }
 
 export interface TeamSummary {
@@ -102,7 +137,12 @@ export interface RenderJobDto {
    *  - "preview"            window around `playhead_frame`, one output
    *  - "highlights"         one mp4 per highlight (rally bounds)
    *  - "focused_highlights" one mp4 per FocusIn/FocusOut span */
-  kind: "full" | "preview" | "highlights" | "focused_highlights";
+  kind:
+    | "full"
+    | "preview"
+    | "highlights"
+    | "focused_highlights"
+    | "youtube_upload";
   /** Render parameters captured at enqueue time. */
   playhead_frame: number | null;
   seconds_around: number | null;
@@ -138,6 +178,33 @@ export interface RenderFileDto {
   size_bytes: number;
   /** Unix seconds; file mtime, used as creation proxy. */
   created_at: number;
+}
+
+/** A full-match render listed on the team dashboard, with optional
+ *  YouTube upload state read from the per-render sidecar. */
+export interface FullRenderDto {
+  team: string;
+  tournament: string;
+  date: string;
+  match: string;
+  filename: string;
+  size_bytes: number;
+  created_at: number;
+  opponent: string;
+  match_index: number | null;
+  youtube_video_id?: string | null;
+  youtube_uploaded_at?: number | null;
+}
+
+/** Whether the backend can upload to YouTube right now.
+ *  `configured=false` => UI disables the upload button and shows
+ *  `reason` as a tooltip. */
+export interface YouTubeStatusDto {
+  configured: boolean;
+  reason: string;
+  has_client_secret: boolean;
+  has_token: boolean;
+  library_installed: boolean;
 }
 
 export interface AutoCutsResultDto {

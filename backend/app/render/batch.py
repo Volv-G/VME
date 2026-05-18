@@ -34,9 +34,9 @@ from ..domain.events.player import (
 )
 from ..domain.events.serve import BallServedEvent
 from ..domain.match import Match
-from ..domain.roster import Roster
-from ..domain.team import Team
-from ..library import paths
+from ..domain.roster import NamingConfig, Roster
+from ..domain.tournament import Tournament
+from . import naming
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,16 @@ class BatchClip:
 
 
 def highlights_from_match(
-    match: Match, home_roster: Roster, home_team_name: str
+    match: Match,
+    home_roster: Roster,
+    home_team_name: str,
+    *,
+    team: str = "",
+    tournament: str = "",
+    date: str = "",
+    match_name: str = "",
+    tournament_info: Optional[Tournament] = None,
+    naming_config: Optional[NamingConfig] = None,
 ) -> list[BatchClip]:
     """Build a `BatchClip` for every player-attributed event in the match.
 
@@ -103,7 +112,8 @@ def highlights_from_match(
     # later when finding rally bounds for each highlight.
     indexed = list(_indexed_events(match))
 
-    file_prefix = _match_file_prefix(match)
+    nc = naming_config or NamingConfig()
+    ti = tournament_info or Tournament()
 
     out: list[BatchClip] = []
     for ev, g in indexed:
@@ -115,22 +125,37 @@ def highlights_from_match(
         if end <= start:
             continue
 
-        player_part, team_part = _player_and_team_folders(
-            ev.team, ev.player_number, home_roster, home_team_name, match
+        ts = naming.format_match_timestamp(g, fps)
+        vars_ = naming.build_highlight_vars(
+            team=team,
+            tournament=tournament,
+            date=date,
+            match=match_name,
+            match_obj=match,
+            home_team_name=home_team_name,
+            tournament_abbreviation=ti.abbreviation or "",
+            tournament_full_name=ti.full_name or "",
+            team_enum=ev.team,
+            jersey=ev.player_number,
+            home_roster=home_roster,
+            action=ev.type_name,
+            match_timestamp=ts,
         )
-        # Action label (e.g. "kill", "dig") becomes a subfolder so a
-        # player's folder is grouped by action when browsed, AND appears
-        # in the filename so files stay self-describing if they get
-        # moved/flattened (e.g. dropped into a per-player archive across
-        # matches). The clip filename also records WHEN the moment
-        # happened in this match (date, opponent, in-match timestamp).
-        action = ev.type_name
-        ts = _format_timestamp(g, fps)
-        rel = (
-            f"highlights/{team_part}/{player_part}/{action}/"
-            f"{file_prefix}_{ts}_{action}.mp4"
+        try:
+            rel = naming.render_naming_template(nc.highlight_template, vars_)
+        except naming.TemplateError as exc:
+            logger.warning(
+                "highlight template failed for #%s %s @ %s: %s",
+                ev.player_number,
+                ev.type_name,
+                ts,
+                exc,
+            )
+            continue
+        label = (
+            f"#{ev.player_number} {vars_.get('team', '?')} "
+            f"{ev.type_name} @ {ts}"
         )
-        label = f"#{ev.player_number} {team_part} {action} @ {ts}"
         out.append(
             BatchClip(
                 start_frame=start,
@@ -191,7 +216,16 @@ def _rally_bounds(
 
 
 def focused_from_match(
-    match: Match, home_roster: Roster, home_team_name: str
+    match: Match,
+    home_roster: Roster,
+    home_team_name: str,
+    *,
+    team: str = "",
+    tournament: str = "",
+    date: str = "",
+    match_name: str = "",
+    tournament_info: Optional[Tournament] = None,
+    naming_config: Optional[NamingConfig] = None,
 ) -> list[BatchClip]:
     """Build a `BatchClip` for every matched FocusIn/FocusOut pair.
 
@@ -231,28 +265,64 @@ def focused_from_match(
         )
 
     fps = _fps(match)
-    file_prefix = _match_file_prefix(match)
+    fallback = int(round(FALLBACK_HALF_WINDOW_SECONDS * fps))
+    nc = naming_config or NamingConfig()
+    ti = tournament_info or Tournament()
 
     out: list[BatchClip] = []
     for in_ev, start, end in spans:
-        player_part, team_part = _player_and_team_folders(
-            in_ev.team,
-            in_ev.player_number,
-            home_roster,
-            home_team_name,
-            match,
+        start_ts = naming.format_match_timestamp(start, fps)
+        end_ts = naming.format_match_timestamp(end, fps)
+        # Action label for the focused clip: lift the FIRST PlayerEvent
+        # for the same player in the rally containing the FocusIn.
+        # If the rally has no such event, the focus span is treated as
+        # an annotation mistake (the user marked a focus but never
+        # tagged what the player did) and we skip the clip entirely.
+        # The frontend flags the same condition with a red badge on the
+        # FocusIn row so the user can fix it; see
+        # `frontend/src/components/focusAnalysis.ts`.
+        action = _first_action_for_player_in_rally(
+            indexed, start, in_ev.team, in_ev.player_number, fallback
         )
-        start_ts = _format_timestamp(start, fps)
-        end_ts = _format_timestamp(end, fps)
-        # No action subfolder for focused clips - focus spans aren't
-        # typed - but the same date_vs_opponent_timestamp naming makes
-        # them consistent with the highlights output and meaningful
-        # when flattened into a per-player archive across matches.
-        rel = (
-            f"focused/{team_part}/{player_part}/"
-            f"{file_prefix}_{start_ts}-{end_ts}.mp4"
+        if action is None:
+            logger.info(
+                "skipping focused clip for #%d at %s: "
+                "no matching player event in the rally",
+                in_ev.player_number,
+                start_ts,
+            )
+            continue
+        vars_ = naming.build_focused_vars(
+            team=team,
+            tournament=tournament,
+            date=date,
+            match=match_name,
+            match_obj=match,
+            home_team_name=home_team_name,
+            tournament_abbreviation=ti.abbreviation or "",
+            tournament_full_name=ti.full_name or "",
+            team_enum=in_ev.team,
+            jersey=in_ev.player_number,
+            home_roster=home_roster,
+            start_timestamp=start_ts,
+            end_timestamp=end_ts,
+            action=action,
         )
-        label = f"#{in_ev.player_number} {team_part} {start_ts}-{end_ts}"
+        try:
+            rel = naming.render_naming_template(nc.focused_template, vars_)
+        except naming.TemplateError as exc:
+            logger.warning(
+                "focused template failed for #%s @ %s-%s: %s",
+                in_ev.player_number,
+                start_ts,
+                end_ts,
+                exc,
+            )
+            continue
+        label = (
+            f"#{in_ev.player_number} {vars_.get('team', '?')} "
+            f"{start_ts}-{end_ts}"
+        )
         out.append(
             BatchClip(
                 start_frame=start,
@@ -280,33 +350,42 @@ def _indexed_events(match: Match) -> Iterator[tuple]:
         yield ev, g
 
 
-def _player_and_team_folders(
-    team: Team,
-    jersey: int,
-    home_roster: Roster,
-    home_team_name: str,
-    match: Match,
-) -> tuple[str, str]:
-    """Return `(player_subfolder, team_subfolder)` for filesystem use.
+def _first_action_for_player_in_rally(
+    indexed: list[tuple],
+    focus_in_global: int,
+    player_team,  # Team enum; typed loosely to avoid forward ref churn
+    player_number: int,
+    fallback_half: int,
+) -> Optional[str]:
+    """Return the action label of the first player-tagged event by
+    `(player_team, player_number)` inside the rally that contains
+    `focus_in_global`, or None if no such event exists.
 
-    Sanitized for filesystem safety. Unknown players just get the jersey
-    number; the team folder falls back to a generic label when no
-    metadata is available.
+    Rally bounds use the same `_rally_bounds` heuristic that highlights
+    use - nearest preceding BallServed to next BallServed / scoring
+    event - so a focused clip's action label matches whatever the
+    highlight clip for that same rally would carry.
+
+    Returning None signals an unannotated focus span: the caller skips
+    the clip rather than producing a meaningless `focus/` output.
+    The same condition is flagged in the UI's event list (see
+    frontend `focusAnalysis.ts`) so the user can fix the annotation.
     """
-    if team == Team.HOME:
-        roster = home_roster
-        team_label = home_team_name or "Home"
-    else:
-        roster = match.opponent_roster
-        team_label = (
-            match.opponent_roster.team_name or match.opponent or "Opponent"
-        )
-    player = roster.find_by_number(jersey)
-    name = player.short_name or player.name if player else None
-    return (
-        paths.player_folder_name(jersey, name),
-        paths.safe_segment(team_label),
+    rally_start, rally_end = _rally_bounds(
+        indexed, focus_in_global, fallback_half
     )
+    for ev, g in indexed:
+        if g < rally_start:
+            continue
+        if g > rally_end:
+            break
+        if (
+            isinstance(ev, PlayerEvent)
+            and ev.team == player_team
+            and ev.player_number == player_number
+        ):
+            return ev.type_name
+    return None
 
 
 def _fps(match: Match) -> float:
@@ -315,33 +394,3 @@ def _fps(match: Match) -> float:
     if match.clips and match.clips[0].fps > 0:
         return match.clips[0].fps
     return match.fps or 30.0
-
-
-def _match_file_prefix(match: Match) -> str:
-    """Build the `<date>_vs_<opponent>` filename prefix.
-
-    Both segments are filesystem-sanitized via `paths.safe_segment` so
-    free-form opponent names ("NW Jrs. 15 Blue") become safe leaves
-    ("NW_Jrs._15_Blue"). Missing date / opponent fall back to readable
-    placeholders rather than empty strings so we never produce names
-    like `__03m22s.mp4`.
-    """
-    date = paths.safe_segment(match.date) if match.date else "no-date"
-    opponent = (
-        paths.safe_segment(match.opponent) if match.opponent else "TBD"
-    )
-    return f"{date}_vs_{opponent}"
-
-
-def _format_timestamp(global_frame: int, fps: float) -> str:
-    """Zero-padded `HHhMMmSSs` of an in-match frame position.
-
-    Always emits hours so files sort chronologically inside a folder
-    even for long matches (and so a 2 hour match's frame-1 clip doesn't
-    sort *after* a 59 minute clip from the same match).
-    """
-    total_s = int(global_frame / max(fps, 1e-6))
-    h = total_s // 3600
-    m = (total_s % 3600) // 60
-    s = total_s % 60
-    return f"{h:02d}h{m:02d}m{s:02d}s"

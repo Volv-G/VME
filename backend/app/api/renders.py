@@ -21,9 +21,11 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from ..jobs.manager import JOBS, JobStatus
 from ..jobs.render_job import kick_off_immediate
-from ..library import paths
+from ..library import paths, scanner
+from ..upload import youtube as youtube_uploader
+from ..upload.templates import build_vars, render_template
 from .helpers import load_match_or_404
-from .schemas import RenderFileOut, RenderRequestIn
+from .schemas import RenderFileOut, RenderRequestIn, UploadYouTubeRequestIn
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +79,129 @@ def enqueue_render(
     )
     if body.immediate:
         kick_off_immediate(job)
+    return job.to_dict()
+
+
+# ---- YouTube upload status + enqueue --------------------------------------
+
+
+@router.get("/youtube/status")
+def youtube_status() -> dict:
+    """Report whether YouTube uploads are configured on this server.
+
+    Frontend uses `configured=False` to disable the upload button and
+    show `reason` as a tooltip. Cheap to call - no network round-trips.
+    """
+    s = youtube_uploader.get_status()
+    return {
+        "configured": s.configured,
+        "reason": s.reason,
+        "has_client_secret": s.has_client_secret,
+        "has_token": s.has_token,
+        "library_installed": s.library_installed,
+    }
+
+
+@router.post(
+    "/teams/{team}/tournaments/{tournament}/dates/{date}/matches/{match}/uploads/youtube"
+)
+def enqueue_youtube_upload(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    body: UploadYouTubeRequestIn,
+) -> dict:
+    """Enqueue a YouTube upload of an existing full-match render.
+
+    Only top-level files inside the match's `renders/` directory are
+    uploadable (rejects highlights / focused outputs - those live in
+    subfolders). Templates from the team profile are expanded here, at
+    enqueue time, so the persisted job carries the resolved strings
+    (the team profile can change without affecting queued uploads).
+    """
+    s = youtube_uploader.get_status()
+    if not s.configured:
+        raise HTTPException(400, f"YouTube upload not configured: {s.reason}")
+
+    # Eligibility: file must be a top-level mp4 in renders/. Anything
+    # with a slash in `filename` is a batch output (highlights /
+    # focused) and not uploadable per the spec ("only for the full
+    # renders").
+    if "/" in body.filename or "\\" in body.filename:
+        raise HTTPException(
+            400, "Only top-level full renders can be uploaded."
+        )
+    renders_root = paths.renders_dir(team, tournament, date, match)
+    file_path = renders_root / body.filename
+    if not file_path.is_file():
+        raise HTTPException(404, f"Render file not found: {body.filename}")
+
+    try:
+        m = load_match_or_404(team, tournament, date, match)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    roster = scanner.load_team_roster(team)
+    tournament_info = scanner.load_tournament_info(team, tournament)
+
+    # Resolve title / description via the team templates - or use the
+    # caller's overrides verbatim. Either way the persisted job carries
+    # final strings, not templates, so subsequent edits to the team
+    # profile don't retroactively change queued jobs.
+    vars_ = build_vars(
+        team=team,
+        tournament=tournament,
+        date=date,
+        match=match,
+        match_obj=m,
+        roster=roster,
+        tournament_info=tournament_info,
+    )
+    try:
+        title = (
+            body.title_override
+            if body.title_override is not None
+            else render_template(roster.youtube.title_template, vars_)
+        )
+        description = (
+            body.description_override
+            if body.description_override is not None
+            else render_template(roster.youtube.description_template, vars_)
+        )
+    except (KeyError, IndexError, ValueError) as exc:
+        # KeyError = unknown placeholder; ValueError = malformed template.
+        raise HTTPException(
+            400,
+            f"Failed to expand title/description template: {exc}",
+        ) from exc
+
+    privacy = body.privacy_override or roster.youtube.privacy_status
+    playlist = (
+        body.playlist_override
+        if body.playlist_override is not None
+        else roster.youtube.playlist_id
+    )
+
+    match_index, _ = paths.parse_match_folder(match)
+    job = JOBS.enqueue(
+        team=team,
+        tournament=tournament,
+        date=date,
+        match=match,
+        label=f"upload: {body.filename}",
+        kind="youtube_upload",
+        opponent=m.opponent or "",
+        match_index=match_index,
+        immediate=False,
+        payload={
+            "filename": body.filename,
+            "title": title,
+            "description": description,
+            "privacy_status": privacy,
+            "playlist_id": playlist,
+            "tags": [],
+        },
+    )
     return job.to_dict()
 
 
@@ -254,6 +379,14 @@ def delete_render(
     if not target.is_file():
         raise HTTPException(404, "Render file not found")
     target.unlink()
+    # Also drop the YouTube sidecar if present - keeping it would
+    # confuse subsequent listings into thinking an uploaded file still
+    # exists locally.
+    sidecar = paths.youtube_sidecar_path(target)
+    try:
+        sidecar.unlink(missing_ok=True)
+    except OSError:
+        pass
     # Best-effort prune of empty parent dirs (e.g. delete the last
     # highlight for a player and their folder goes away too). Stop at
     # the renders root so we never remove `renders/` itself.

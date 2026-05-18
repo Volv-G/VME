@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { MatchSummary } from "../types/api";
+import type { MatchSummary, TournamentInfoDto } from "../types/api";
 import { Modal } from "../components/Modal";
 import { displayName } from "../util/names";
 
@@ -9,6 +9,17 @@ export function TournamentDashboardPage() {
   const { team = "", tournament = "" } = useParams();
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Display-names sidecar. Used by the YouTube title/description
+  // templates; empty values fall back to the folder slug pretty-printed.
+  const [info, setInfo] = useState<TournamentInfoDto>({
+    abbreviation: "",
+    full_name: "",
+  });
+  const [savedInfo, setSavedInfo] = useState<TournamentInfoDto>({
+    abbreviation: "",
+    full_name: "",
+  });
+  const [savingInfo, setSavingInfo] = useState(false);
   const [creating, setCreating] = useState(false);
   // `match_index` is a string in form state so the user can clear the field
   // while editing; we coerce to number on submit.
@@ -46,11 +57,48 @@ export function TournamentDashboardPage() {
   const load = useCallback(async () => {
     try {
       setError(null);
-      setMatches(await api.listMatches(team, tournament));
+      const [ms, ti] = await Promise.all([
+        api.listMatches(team, tournament),
+        api.getTournamentInfo(team, tournament).catch(() => ({
+          abbreviation: "",
+          full_name: "",
+        })),
+      ]);
+      setMatches(ms);
+      const normalized: TournamentInfoDto = {
+        abbreviation: ti.abbreviation ?? "",
+        full_name: ti.full_name ?? "",
+      };
+      setInfo(normalized);
+      setSavedInfo(normalized);
     } catch (e) {
       setError(String(e));
     }
   }, [team, tournament]);
+
+  async function saveInfo() {
+    setSavingInfo(true);
+    try {
+      const saved = await api.putTournamentInfo(team, tournament, {
+        abbreviation: info.abbreviation || null,
+        full_name: info.full_name || null,
+      });
+      const normalized: TournamentInfoDto = {
+        abbreviation: saved.abbreviation ?? "",
+        full_name: saved.full_name ?? "",
+      };
+      setInfo(normalized);
+      setSavedInfo(normalized);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSavingInfo(false);
+    }
+  }
+
+  const infoDirty =
+    info.abbreviation !== savedInfo.abbreviation ||
+    info.full_name !== savedInfo.full_name;
 
   useEffect(() => { void load(); }, [load]);
 
@@ -92,6 +140,48 @@ export function TournamentDashboardPage() {
           </Link>
         </div>
         {error && <div className="error">{error}</div>}
+
+        {/* Display-name overrides. These power the YouTube upload
+            templates ({tournament_abbr} / {tournament_full}). Both are
+            optional - empty means "fall back to the folder name with
+            underscores replaced by spaces". */}
+        <div
+          className="field-row"
+          style={{ flexWrap: "wrap", gap: 12, marginTop: 8 }}
+        >
+          <label style={{ flex: "1 1 200px" }}>
+            Abbreviation
+            <input
+              value={info.abbreviation ?? ""}
+              onChange={(e) =>
+                setInfo({ ...info, abbreviation: e.target.value })
+              }
+              placeholder={displayName(tournament)}
+              title="Short name used in YouTube titles; falls back to the folder name when empty"
+            />
+          </label>
+          <label style={{ flex: "2 1 320px" }}>
+            Full name
+            <input
+              value={info.full_name ?? ""}
+              onChange={(e) =>
+                setInfo({ ...info, full_name: e.target.value })
+              }
+              placeholder={info.abbreviation || displayName(tournament)}
+              title="Long name used in YouTube descriptions; falls back to the abbreviation when empty"
+            />
+          </label>
+          <div style={{ display: "flex", alignItems: "flex-end" }}>
+            <button
+              className="primary"
+              onClick={saveInfo}
+              disabled={!infoDirty || savingInfo}
+              title={infoDirty ? "Save tournament metadata" : "No changes"}
+            >
+              {savingInfo ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="card">

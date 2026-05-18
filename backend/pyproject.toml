@@ -12,6 +12,14 @@ dependencies = [
     "pillow>=10.0.0",
     "numpy>=1.26",
     "imageio-ffmpeg>=0.5.1",
+    # YouTube uploads. These are imported lazily inside app/upload/ so
+    # the rest of the app still boots when they're missing - useful for
+    # dev installs that don't need uploads. The upload endpoint returns
+    # a clear "not installed" error in that case.
+    "google-api-python-client>=2.140",
+    "google-auth>=2.32",
+    "google-auth-oauthlib>=1.2",
+    "google-auth-httplib2>=0.2",
 ]
 
 [dependency-groups]
@@ -22,6 +30,14 @@ dev = [
 
 [tool.uv]
 package = false
+
+# Tell setuptools which top-level directories actually contain Python
+# packages. Without this it does flat-layout auto-discovery and refuses
+# to pick when it sees both `app/` (the actual code) and `static/` (the
+# built frontend bundle, not Python at all) at the project root.
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["static*", "scripts*", "tests*"]
 
 [tool.ruff]
 line-length = 100

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from ..domain.tournament import Tournament
 from ..library import paths, scanner
-from .schemas import CreateTournamentIn, TournamentSummaryOut
+from .schemas import CreateTournamentIn, TournamentInfoOut, TournamentSummaryOut
 
 router = APIRouter(prefix="/teams/{team}/tournaments", tags=["tournaments"])
 
@@ -43,3 +44,36 @@ def delete_tournament(team: str, tournament: str) -> dict[str, bool]:
         raise HTTPException(404, "Tournament not found")
     scanner.delete_tournament(team, tournament)
     return {"deleted": True}
+
+
+@router.get("/{tournament}/info", response_model=TournamentInfoOut)
+def get_tournament_info(team: str, tournament: str) -> TournamentInfoOut:
+    """Read the tournament.json sidecar (abbreviation / full_name).
+
+    Returns empty defaults if the sidecar doesn't exist; the client can
+    then fall back to the folder-slug pretty-printed string.
+    """
+    if not paths.tournament_dir(team, tournament).exists():
+        raise HTTPException(404, "Tournament not found")
+    info = scanner.load_tournament_info(team, tournament)
+    return TournamentInfoOut(
+        abbreviation=info.abbreviation, full_name=info.full_name
+    )
+
+
+@router.put("/{tournament}/info", response_model=TournamentInfoOut)
+def put_tournament_info(
+    team: str, tournament: str, body: TournamentInfoOut
+) -> TournamentInfoOut:
+    """Write the tournament.json sidecar. Empty strings -> None so an
+    explicit "clear this field" round-trip works."""
+    if not paths.tournament_dir(team, tournament).exists():
+        raise HTTPException(404, "Tournament not found")
+    info = Tournament(
+        abbreviation=(body.abbreviation or None),
+        full_name=(body.full_name or None),
+    )
+    scanner.save_tournament_info(team, tournament, info)
+    return TournamentInfoOut(
+        abbreviation=info.abbreviation, full_name=info.full_name
+    )

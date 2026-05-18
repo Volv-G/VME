@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..library import paths, scanner
+from ..render import naming as render_naming
 from ..render.batch import (
     BatchClip,
     focused_from_match,
@@ -23,6 +24,10 @@ from ..render.batch import (
 from ..render.overlays.scoreboard import TeamBranding
 from ..render.renderer import MatchRenderer, RenderCancelled, RenderProgress
 from .manager import JOBS, RenderJob
+
+# Upload module is imported lazily inside `_run_upload` so the queue
+# can still operate (and the dispatcher start cleanly) on installs that
+# don't have the google-api-python-client stack.
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +55,12 @@ def run_render(job: RenderJob) -> None:
 
     def cancel_check() -> bool:
         return cancel_event.is_set()
+
+    # Uploads don't need a Match loaded - they only need the existing
+    # render file on disk - so dispatch them before the match-load.
+    if job.kind == "youtube_upload":
+        _run_upload(job, cancel_check)
+        return
 
     m = scanner.load_or_create_match(job.team, job.tournament, job.date, job.match)
     if not m.clips:
@@ -97,10 +108,41 @@ def run_render(job: RenderJob) -> None:
     renders = paths.renders_dir(job.team, job.tournament, job.date, job.match)
     renders.mkdir(parents=True, exist_ok=True)
 
-    label_segment = (job.label or "render").lower().replace(" ", "_")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_filename = f"{label_segment}_{timestamp}.mp4"
+    # Resolve the output filename via the team's full-render template.
+    # The default template (set in NamingConfig) is `{label}_{timestamp}.mp4`,
+    # which reproduces the legacy behavior verbatim. We still wrap in a
+    # try/except so a broken user template never crashes the dispatcher -
+    # we fall back to the default in that case and log the failure.
+    tournament_info = scanner.load_tournament_info(job.team, job.tournament)
+    full_vars = render_naming.build_full_render_vars(
+        team=job.team,
+        tournament=job.tournament,
+        date=job.date,
+        match=job.match,
+        match_obj=m,
+        home_team_name=home_roster.team_name or job.team,
+        tournament_abbreviation=tournament_info.abbreviation or "",
+        tournament_full_name=tournament_info.full_name or "",
+        label=job.label or "render",
+        timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+    )
+    try:
+        output_filename = render_naming.render_naming_template(
+            home_roster.naming.full_render_template, full_vars
+        )
+    except render_naming.TemplateError as exc:
+        logger.warning(
+            "full-render template %r failed (%s); falling back to default",
+            home_roster.naming.full_render_template,
+            exc,
+        )
+        output_filename = render_naming.render_naming_template(
+            render_naming.DEFAULT_FULL_RENDER_TEMPLATE, full_vars
+        )
     output_path = renders / output_filename
+    # Templates may carry forward slashes (subfolders) - ensure the
+    # destination directory exists before the renderer tries to write.
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     media_dir = paths.match_dir(job.team, job.tournament, job.date, job.match)
 
@@ -145,6 +187,10 @@ def run_render(job: RenderJob) -> None:
             )
         raise
 
+    # `output_filename` may be a relative subpath (e.g. `pre/foo.mp4`)
+    # when the template puts the file in a subfolder. We keep it relative
+    # to the renders root because the download endpoint resolves
+    # filenames relative to that root via its {filename:path} converter.
     JOBS.mark_done(job.id, output_filename)
 
 
@@ -177,15 +223,26 @@ def _run_batch(
     )
 
     # Detect spans up front so we know `total` for progress reporting and
-    # can fail fast if there's nothing to render.
+    # can fail fast if there's nothing to render. We thread the team's
+    # naming templates + tournament info through so the per-clip paths
+    # respect user-configured output naming.
+    tournament_info = scanner.load_tournament_info(job.team, job.tournament)
+    batch_kwargs = dict(
+        team=job.team,
+        tournament=job.tournament,
+        date=job.date,
+        match_name=job.match,
+        tournament_info=tournament_info,
+        naming_config=home_roster.naming,
+    )
     if job.kind == "highlights":
         clips = highlights_from_match(
-            m, home_roster, home_roster.team_name or job.team
+            m, home_roster, home_roster.team_name or job.team, **batch_kwargs
         )
         what = "highlight"
     elif job.kind == "focused_highlights":
         clips = focused_from_match(
-            m, home_roster, home_roster.team_name or job.team
+            m, home_roster, home_roster.team_name or job.team, **batch_kwargs
         )
         what = "focused clip"
     else:
@@ -289,6 +346,105 @@ def _run_batch(
     # `output_filename` is used by the UI as a download link target; with
     # nested subfolders the relative_path is the right thing to record.
     JOBS.mark_done(job.id, first_output or "")
+
+
+# ---------------------------------------------------------------------------
+# YouTube upload path
+# ---------------------------------------------------------------------------
+
+
+def _run_upload(job: RenderJob, cancel_check) -> None:
+    """Upload a previously-rendered file to YouTube.
+
+    Reads the upload metadata from `job.payload` (filename, title,
+    description, privacy, playlist, tags). On success writes a
+    `<file>.youtube.json` sidecar next to the render so the UI can
+    show the upload state on subsequent listings, and stores the
+    YouTube URL in `output_filename` so the existing job-done UI can
+    surface it as a clickable link.
+
+    Cancellation: the long upload loop polls `cancel_check()` between
+    chunks (see `youtube.upload_video`). A cancelled upload aborts at
+    the next chunk boundary; the partial YouTube upload session is
+    abandoned (no recovery - YouTube doesn't expose a stable resume
+    handle across process restarts).
+    """
+    payload = job.payload or {}
+    filename = payload.get("filename")
+    if not filename:
+        raise RuntimeError("Upload job is missing `filename` in payload")
+    title = payload.get("title") or ""
+    description = payload.get("description") or ""
+    privacy_status = payload.get("privacy_status") or "unlisted"
+    playlist_id = payload.get("playlist_id") or None
+    tags = list(payload.get("tags") or [])
+
+    renders = paths.renders_dir(job.team, job.tournament, job.date, job.match)
+    file_path = renders / filename
+    if not file_path.is_file():
+        raise RuntimeError(f"Render file not found: {file_path}")
+
+    # Lazy import: keeps the dispatcher healthy on machines without the
+    # google-* deps installed.
+    from ..upload.youtube import upload_video
+
+    last_emit = [time.time()]
+    last_pct = [0.0]
+
+    def on_progress(pct: float, done: int, total: int) -> None:
+        now = time.time()
+        # Throttle to the same cadence as renders so SSE listeners get
+        # a smooth bar without spamming the manager.
+        if pct - last_pct[0] >= 0.5 or now - last_emit[0] > 0.4:
+            JOBS.update(
+                job.id,
+                percent=pct,
+                phase="uploading",
+                message=f"{_fmt_mb(done)} / {_fmt_mb(total)}",
+            )
+            last_pct[0] = pct
+            last_emit[0] = now
+
+    logger.info(
+        "upload job %s -> YouTube: file=%s privacy=%s playlist=%s",
+        job.id,
+        file_path,
+        privacy_status,
+        playlist_id,
+    )
+    result = upload_video(
+        file_path=file_path,
+        title=title,
+        description=description,
+        privacy_status=privacy_status,
+        tags=tags,
+        playlist_id=playlist_id,
+        progress_cb=on_progress,
+        cancel_check=cancel_check,
+    )
+
+    # Persist the upload record alongside the file. Subsequent listings
+    # (team dashboard, render panel) pick this up via
+    # `scanner.load_youtube_sidecar`.
+    scanner.save_youtube_sidecar(
+        file_path,
+        {
+            "video_id": result.video_id,
+            "video_url": result.video_url,
+            "uploaded_at": time.time(),
+            "title": title,
+            "privacy_status": privacy_status,
+            "playlist_id": playlist_id,
+        },
+    )
+    # Surface the YouTube URL via `output_filename` so existing job-row
+    # UI renders a clickable link (it already treats output_filename
+    # as a download-link target).
+    JOBS.mark_done(job.id, result.video_url)
+
+
+def _fmt_mb(n: int) -> str:
+    return f"{n / (1024 * 1024):.1f} MB"
 
 
 def kick_off_immediate(job: RenderJob) -> None:

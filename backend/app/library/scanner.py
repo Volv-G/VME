@@ -6,9 +6,12 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+import json
+
 from ..config import MEDIA_ROOT, VIDEO_EXTENSIONS
 from ..domain.match import Clip, Match, new_clip_id
 from ..domain.roster import Roster
+from ..domain.tournament import Tournament
 from . import paths
 from .probe import probe
 
@@ -27,6 +30,34 @@ class TournamentSummary:
     team: str
     name: str
     match_count: int
+
+
+@dataclass
+class FullRenderInfo:
+    """One full-match render visible at the team-dashboard level.
+
+    "Full" here means "a render at the top level of a match's `renders/`
+    directory" - we deliberately skip the nested `highlights/` and
+    `focused/` subtrees because those are batch outputs and the team
+    page would drown in them. Preview renders also live at the top
+    level, so we filter those out by filename prefix - preview filenames
+    start with `preview_` (see render_job.py's label_segment).
+    """
+
+    team: str
+    tournament: str
+    date: str
+    match: str
+    # Leaf filename inside the match's renders/ dir.
+    filename: str
+    size_bytes: int
+    created_at: float
+    opponent: str = ""
+    match_index: int | None = None
+    # Populated from the `.youtube.json` sidecar if a successful upload
+    # has been recorded for this file. None when no upload exists.
+    youtube_video_id: str | None = None
+    youtube_uploaded_at: float | None = None
 
 
 @dataclass
@@ -148,6 +179,146 @@ def save_team_roster(team: str, roster: Roster) -> None:
     p = paths.team_roster_path(team)
     p.parent.mkdir(parents=True, exist_ok=True)
     roster.save(p)
+
+
+def load_tournament_info(team: str, tournament: str) -> Tournament:
+    """Read the tournament.json sidecar (or return defaults if absent)."""
+    p = paths.tournament_json_path(team, tournament)
+    if not p.exists():
+        return Tournament()
+    return Tournament.load(p)
+
+
+def save_tournament_info(
+    team: str, tournament: str, info: Tournament
+) -> None:
+    p = paths.tournament_json_path(team, tournament)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    info.save(p)
+
+
+def load_youtube_sidecar(render_path: Path) -> dict | None:
+    """Read a render's YouTube-upload sidecar (or None if absent / unreadable).
+
+    Sidecar shape: `{ "video_id": str, "uploaded_at": float,
+    "title": str, "privacy_status": str, "playlist_id": str | None }`.
+    Anything else in the file is ignored on read; we just round-trip the
+    keys we care about.
+    """
+    p = paths.youtube_sidecar_path(render_path)
+    if not p.is_file():
+        return None
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return None
+        return data
+    except (OSError, ValueError):
+        return None
+
+
+def save_youtube_sidecar(render_path: Path, info: dict) -> None:
+    """Write the YouTube-upload sidecar next to a render file.
+
+    Caller is responsible for the dict shape; we just JSON-dump it.
+    """
+    p = paths.youtube_sidecar_path(render_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("w", encoding="utf-8") as f:
+        json.dump(info, f, indent=2)
+
+
+def _is_full_render(render_filename: str) -> bool:
+    """True iff `render_filename` represents a full-match render.
+
+    Filtering rules (kept here so list_team_full_renders and the upload
+    endpoint agree on what's eligible):
+      - Must be a top-level .mp4 inside the renders/ dir (no slashes:
+        anything in `highlights/` or `focused/` is excluded).
+      - Preview outputs are excluded by their `preview_` filename prefix
+        (see render_job.py: previews use label='preview' which becomes
+        the segment).
+    """
+    if "/" in render_filename or "\\" in render_filename:
+        return False
+    if not render_filename.lower().endswith(".mp4"):
+        return False
+    leaf = render_filename.lower()
+    if leaf.startswith("preview_") or leaf == "preview.mp4":
+        return False
+    return True
+
+
+def list_team_full_renders(team: str) -> list[FullRenderInfo]:
+    """Enumerate all full-match renders under a team, across tournaments.
+
+    Walks `<team>/<tournament>/<date>/<match>/renders/` for each match
+    folder and picks up top-level mp4s only. Each entry includes the
+    YouTube upload state if a `.youtube.json` sidecar is present.
+
+    Sorted newest-first by file mtime so the team dashboard shows
+    recent renders at the top without further client-side sorting.
+    """
+    team_path = paths.team_dir(team)
+    if not team_path.exists():
+        return []
+    out: list[FullRenderInfo] = []
+    for tournament_d in team_path.iterdir():
+        if not tournament_d.is_dir():
+            continue
+        for date_d in tournament_d.iterdir():
+            if not date_d.is_dir():
+                continue
+            for match_d in date_d.iterdir():
+                if not match_d.is_dir():
+                    continue
+                renders = match_d / "renders"
+                if not renders.is_dir():
+                    continue
+                idx, opponent_part = paths.parse_match_folder(match_d.name)
+                # Prefer the match.json's opponent if available - it's the
+                # display string the user typed, vs. the folder-slug fallback.
+                opponent = opponent_part
+                match_json = match_d / "match.json"
+                if match_json.exists():
+                    try:
+                        opponent = (
+                            Match.load(match_json).opponent or opponent
+                        )
+                    except Exception:
+                        pass
+                for p in renders.iterdir():
+                    if not p.is_file():
+                        continue
+                    if not _is_full_render(p.name):
+                        continue
+                    try:
+                        stat = p.stat()
+                    except OSError:
+                        continue
+                    sidecar = load_youtube_sidecar(p)
+                    out.append(
+                        FullRenderInfo(
+                            team=team,
+                            tournament=tournament_d.name,
+                            date=date_d.name,
+                            match=match_d.name,
+                            filename=p.name,
+                            size_bytes=stat.st_size,
+                            created_at=stat.st_mtime,
+                            opponent=opponent,
+                            match_index=idx,
+                            youtube_video_id=(
+                                sidecar.get("video_id") if sidecar else None
+                            ),
+                            youtube_uploaded_at=(
+                                sidecar.get("uploaded_at") if sidecar else None
+                            ),
+                        )
+                    )
+    out.sort(key=lambda r: r.created_at, reverse=True)
+    return out
 
 
 def load_or_create_match(

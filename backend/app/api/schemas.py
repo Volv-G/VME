@@ -14,10 +14,49 @@ class PlayerOut(BaseModel):
     profile_pic_path: Optional[str] = None
 
 
+class YouTubeConfigOut(BaseModel):
+    """Team-level YouTube upload defaults.
+
+    Round-trips through roster.json. All fields are optional on input;
+    server-side defaults kick in for omitted keys (see
+    `domain/roster.py::YouTubeConfig.from_dict`).
+    """
+
+    privacy_status: str = "unlisted"
+    playlist_id: Optional[str] = None
+    title_template: Optional[str] = None
+    description_template: Optional[str] = None
+
+
+class NamingConfigOut(BaseModel):
+    """Team-level render-output naming templates.
+
+    All fields optional on input - server fills in defaults that match
+    the legacy hard-coded paths (see `app/render/naming.py`).
+    """
+
+    full_render_template: Optional[str] = None
+    highlight_template: Optional[str] = None
+    focused_template: Optional[str] = None
+
+
 class RosterOut(BaseModel):
     team_name: Optional[str] = None
     team_color: Optional[str] = None
+    youtube: Optional[YouTubeConfigOut] = None
+    naming: Optional[NamingConfigOut] = None
     players: list[PlayerOut] = Field(default_factory=list)
+
+
+class TournamentInfoOut(BaseModel):
+    """Display metadata for a tournament (the `tournament.json` sidecar).
+
+    Both fields optional; missing values fall back to the folder slug
+    pretty-printed (`_` -> space) on the server side.
+    """
+
+    abbreviation: Optional[str] = None
+    full_name: Optional[str] = None
 
 
 class TeamSummaryOut(BaseModel):
@@ -45,6 +84,43 @@ class MatchSummaryOut(BaseModel):
     clip_count: int
     has_match_json: bool
     has_video: bool
+
+
+class FullRenderOut(BaseModel):
+    """A full-match render listed on the team dashboard.
+
+    Carries the location (team/tournament/date/match/filename) needed to
+    download / upload, plus the YouTube upload state if a sidecar exists
+    for this file.
+    """
+
+    team: str
+    tournament: str
+    date: str
+    match: str
+    filename: str
+    size_bytes: int
+    created_at: float
+    opponent: str = ""
+    match_index: Optional[int] = None
+    youtube_video_id: Optional[str] = None
+    youtube_uploaded_at: Optional[float] = None
+
+
+class UploadYouTubeRequestIn(BaseModel):
+    """Request body for enqueueing a YouTube upload of a rendered file.
+
+    `filename` is the leaf inside the match's `renders/` folder (no
+    subfolders allowed - only full renders are uploadable). Templates
+    on the team profile produce title/description by default; the
+    optional overrides here let the user tweak before submitting.
+    """
+
+    filename: str
+    title_override: Optional[str] = None
+    description_override: Optional[str] = None
+    privacy_override: Optional[str] = None
+    playlist_override: Optional[str] = None
 
 
 class ClipOut(BaseModel):

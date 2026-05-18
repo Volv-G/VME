@@ -14,6 +14,119 @@ class PlayerNotFoundError(Exception):
     """Raised when a player is not found in the roster."""
 
 
+# Default templates used when the team profile doesn't override them.
+# Format placeholders: {date}, {team}, {opponent}, {tournament_abbr},
+# {tournament_full}, {match_index}. (See app.upload.templates.)
+DEFAULT_YT_TITLE_TEMPLATE = (
+    "{date}. {tournament_abbr}. M{match_index}. {opponent}"
+)
+DEFAULT_YT_DESCRIPTION_TEMPLATE = (
+    "{date}. {tournament_full}. Match {match_index}. {opponent}"
+)
+
+# Default render-output naming. Replicates the previous hard-coded
+# behavior exactly so existing files keep their format unless the team
+# overrides these on the profile. Documented in app/render/naming.py.
+DEFAULT_FULL_RENDER_TEMPLATE = "{label}_{timestamp}.mp4"
+DEFAULT_HIGHLIGHT_TEMPLATE = (
+    "highlights/{team}/{player}/{action}/"
+    "{date}_vs_{opponent}_{match_timestamp}_{action}.mp4"
+)
+DEFAULT_FOCUSED_TEMPLATE = (
+    "focused/{team}/{player}/{action}/"
+    "{date}_vs_{opponent}_{start_timestamp}-{end_timestamp}.mp4"
+)
+
+
+@dataclass
+class NamingConfig:
+    """Per-team render-output naming templates.
+
+    Stored under `roster.json -> naming`. Defaults reproduce the
+    previous hard-coded behavior exactly so a team with no `naming`
+    block (or any subset of fields unset) still gets the same paths
+    as before this feature was added.
+
+    The three templates apply to different render kinds; the variables
+    available to each differ - see `app/render/naming.py` for the
+    full list.
+    """
+
+    full_render_template: str = DEFAULT_FULL_RENDER_TEMPLATE
+    highlight_template: str = DEFAULT_HIGHLIGHT_TEMPLATE
+    focused_template: str = DEFAULT_FOCUSED_TEMPLATE
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "full_render_template": self.full_render_template,
+            "highlight_template": self.highlight_template,
+            "focused_template": self.focused_template,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "NamingConfig":
+        if not isinstance(data, dict):
+            return cls()
+        return cls(
+            full_render_template=(
+                data.get("full_render_template") or DEFAULT_FULL_RENDER_TEMPLATE
+            ),
+            highlight_template=(
+                data.get("highlight_template") or DEFAULT_HIGHLIGHT_TEMPLATE
+            ),
+            focused_template=(
+                data.get("focused_template") or DEFAULT_FOCUSED_TEMPLATE
+            ),
+        )
+
+
+@dataclass
+class YouTubeConfig:
+    """Per-team YouTube upload defaults.
+
+    Stored under `roster.json -> youtube`. All fields are optional so an
+    older roster.json (no `youtube` block) still loads cleanly - the
+    upload UI just treats the team as "not YouTube-configured" and
+    disables the upload button with a tooltip.
+    """
+
+    # YouTube `privacyStatus`. Defaults to "unlisted" because public is
+    # rarely what you want for a fresh upload and private would prevent
+    # sharing via link.
+    privacy_status: str = "unlisted"
+    # Playlist to attach uploaded videos to. None = don't add to any
+    # playlist. We don't validate the id format here; the YouTube API
+    # will reject malformed ids at upload time.
+    playlist_id: Optional[str] = None
+    # Templates run through `str.format(**vars)` at upload-enqueue time.
+    title_template: str = DEFAULT_YT_TITLE_TEMPLATE
+    description_template: str = DEFAULT_YT_DESCRIPTION_TEMPLATE
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "privacy_status": self.privacy_status,
+            "playlist_id": self.playlist_id,
+            "title_template": self.title_template,
+            "description_template": self.description_template,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "YouTubeConfig":
+        if not isinstance(data, dict):
+            return cls()
+        return cls(
+            privacy_status=data.get("privacy_status") or "unlisted",
+            playlist_id=data.get("playlist_id") or None,
+            title_template=(
+                data.get("title_template") or DEFAULT_YT_TITLE_TEMPLATE
+            ),
+            description_template=(
+                data.get("description_template")
+                or DEFAULT_YT_DESCRIPTION_TEMPLATE
+            ),
+        )
+
+
 @dataclass
 class Roster:
     """A list of players belonging to a team.
@@ -26,6 +139,14 @@ class Roster:
     players: list[Player] = field(default_factory=list)
     team_name: Optional[str] = None
     team_color: Optional[str] = None
+    # Team-level YouTube upload defaults. Always present (defaults applied
+    # when the roster.json has no `youtube` block) so call sites can read
+    # `roster.youtube.privacy_status` etc. without None-checking.
+    youtube: YouTubeConfig = field(default_factory=YouTubeConfig)
+    # Output-file naming templates for renders. Like `youtube`, always
+    # present with defaults applied - call sites can read
+    # `roster.naming.full_render_template` without None-checking.
+    naming: NamingConfig = field(default_factory=NamingConfig)
 
     def __iter__(self) -> Iterator[Player]:
         return iter(self.players)
@@ -52,6 +173,8 @@ class Roster:
         return {
             "team_name": self.team_name,
             "team_color": self.team_color,
+            "youtube": self.youtube.to_dict(),
+            "naming": self.naming.to_dict(),
             "players": [p.to_dict() for p in self.players],
         }
 
@@ -63,6 +186,8 @@ class Roster:
             return cls(
                 team_name=data.get("team_name"),
                 team_color=data.get("team_color"),
+                youtube=YouTubeConfig.from_dict(data.get("youtube")),
+                naming=NamingConfig.from_dict(data.get("naming")),
                 players=[Player.from_dict(p) for p in data.get("players", [])],
             )
         return cls()
