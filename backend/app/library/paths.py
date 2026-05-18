@@ -92,3 +92,38 @@ def team_roster_path(team: str) -> Path:
 
 def renders_dir(team: str, tournament: str, date: str, match: str) -> Path:
     return match_dir(team, tournament, date, match) / "renders"
+
+
+def highlights_dir(team: str, tournament: str, date: str, match: str) -> Path:
+    """Root for per-player highlight clips: `<renders>/highlights/`.
+
+    Each highlight is one file under `highlights/<team>/<NN>_<player>/`.
+    Sub-folders keep many small clips browsable when a long match has
+    dozens of highlights per player.
+    """
+    return renders_dir(team, tournament, date, match) / "highlights"
+
+
+def focused_dir(team: str, tournament: str, date: str, match: str) -> Path:
+    """Root for per-player focused clips: `<renders>/focused/`.
+
+    Same shape as `highlights_dir` but bounded by FocusIn/FocusOut
+    events instead of rally boundaries.
+    """
+    return renders_dir(team, tournament, date, match) / "focused"
+
+
+def player_folder_name(jersey: int, display_name: str | None) -> str:
+    """Build a per-player folder name: `<NN>_<name>` (or just `NN`).
+
+    Jersey is zero-padded so folders sort by number on disk. `name` is
+    sanitized for filesystem safety; an unknown player just gets the
+    jersey number alone (no trailing underscore).
+    """
+    nn = f"{int(jersey):02d}"
+    if not display_name:
+        return nn
+    safe = safe_segment(display_name)
+    if not safe or safe == "unnamed":
+        return nn
+    return f"{nn}_{safe}"

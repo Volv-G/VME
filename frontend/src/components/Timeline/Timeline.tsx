@@ -349,9 +349,13 @@ export function Timeline({
     const x = e.clientX - rect.left; // canvas-relative; already accounts for scroll
     const y = e.clientY - rect.top;
     const frame = clamp(Math.round((x / contentWidth) * totalFrames), 0, totalFrames - 1);
+    const clipMap = new Map(clips.map((c, i) => [c.id, { idx: i, offset: clipOffsets[i] }]));
+
+    // First: precise hit on an event marker (used to be the only
+    // event-selection path). Tight tolerance so the user can still
+    // drop a seek between two adjacent events.
     if (y >= EVENT_BAND_TOP - 8) {
       const tolerance = (8 / contentWidth) * totalFrames;
-      const clipMap = new Map(clips.map((c, i) => [c.id, { idx: i, offset: clipOffsets[i] }]));
       let best: { ev: EventDto; dist: number } | null = null;
       for (const ev of events) {
         const f = eventGlobalFrame(ev, clipMap);
@@ -364,7 +368,20 @@ export function Timeline({
         return;
       }
     }
+
+    // Plain seek anywhere else on the timeline (ruler / clips bar /
+    // empty space). Also focus the closest event so the event list
+    // scrolls to where the user is looking - keeping the two views in
+    // sync without a second click.
     onSeek(frame);
+    let closest: { id: number; dist: number } | null = null;
+    for (const ev of events) {
+      const f = eventGlobalFrame(ev, clipMap);
+      if (f === null) continue;
+      const d = Math.abs(f - frame);
+      if (closest === null || d < closest.dist) closest = { id: ev.id, dist: d };
+    }
+    if (closest) onSelectEvent(closest.id);
   }
 
   const zoomPct = Math.round(zoom * 100);

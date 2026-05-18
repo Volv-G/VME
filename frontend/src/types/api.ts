@@ -97,6 +97,21 @@ export interface RenderJobDto {
   date: string;
   match: string;
   label: string;
+  /** What sort of render this job represents.
+   *  - "full"               whole match, one output
+   *  - "preview"            window around `playhead_frame`, one output
+   *  - "highlights"         one mp4 per highlight (rally bounds)
+   *  - "focused_highlights" one mp4 per FocusIn/FocusOut span */
+  kind: "full" | "preview" | "highlights" | "focused_highlights";
+  /** Render parameters captured at enqueue time. */
+  playhead_frame: number | null;
+  seconds_around: number | null;
+  /** Display helpers - filled by the backend so the queue UI doesn't need
+   *  to refetch each match.json. */
+  opponent: string;
+  match_index: number | null;
+  /** Immediate jobs (previews) bypass the queue and run right away. */
+  immediate: boolean;
   status: "pending" | "running" | "done" | "failed" | "cancelled";
   percent: number;
   phase: string;
@@ -107,6 +122,15 @@ export interface RenderJobDto {
   started_at: number | null;
   finished_at: number | null;
   cancel_requested: boolean;
+}
+
+/** Aggregate state of the global render queue. */
+export interface QueueStateDto {
+  /** True when the dispatcher is processing pending jobs. */
+  active: boolean;
+  pending: number;
+  running: number;
+  total: number;
 }
 
 export interface RenderFileDto {
@@ -123,6 +147,9 @@ export interface AutoCutsResultDto {
   skipped_missing_time: number;
   skipped_too_short: number;
   added_set_ends: number;
+  /** GameStart / GameEnd lifecycle events inserted by the run (0 or 1 each). */
+  added_game_start: number;
+  added_game_end: number;
   skipped_too_close: number;
 }
 

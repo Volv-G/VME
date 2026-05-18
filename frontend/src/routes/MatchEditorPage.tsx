@@ -103,14 +103,27 @@ export function MatchEditorPage() {
     setData(await api.rescanMatch(team, tournament, date, match));
   }
   async function createEvent(body: Parameters<typeof api.createEvent>[4]) {
-    setData(await api.createEvent(team, tournament, date, match, body));
+    // Capture the existing event ids BEFORE the call so we can identify
+    // the newly added one in the response. The server returns the whole
+    // match (no dedicated "created event" response), so a set-diff is
+    // the simplest robust way - works even if the server inserts events
+    // out of submission order (e.g. when sorting by frame).
+    const prevIds = new Set(data?.events.map((e) => e.id) ?? []);
+    const updated = await api.createEvent(team, tournament, date, match, body);
+    setData(updated);
+    const created = updated.events.find((e) => !prevIds.has(e.id));
+    if (created) {
+      // Select it so the EventList scrolls to and highlights the new row.
+      // Don't seek - the playhead is already where the user added it.
+      setSelectedEventId(created.id);
+    }
   }
   async function deleteEvent(id: number) {
     setData(await api.deleteEvent(team, tournament, date, match, id));
     if (selectedEventId === id) setSelectedEventId(null);
   }
-  async function runAutoCuts() {
-    const r = await api.autoCuts(team, tournament, date, match);
+  async function runAutoCuts(opts: { hasIntroClip?: boolean } = {}) {
+    const r = await api.autoCuts(team, tournament, date, match, opts);
     setData(r.match);
     return r;
   }

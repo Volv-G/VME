@@ -4,6 +4,7 @@ import type {
   EventDto,
   MatchDto,
   MatchSummary,
+  QueueStateDto,
   RenderFileDto,
   RenderJobDto,
   RosterDto,
@@ -28,6 +29,15 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const enc = encodeURIComponent;
+
+/** Encode a path segment-by-segment so `/` separators stay literal.
+ *  `encodeURIComponent` would turn them into `%2F`, which FastAPI's
+ *  `{path}` converter does NOT decode back to a slash - so download
+ *  / delete on nested render files (`highlights/.../foo.mp4`) would 404.
+ */
+function encPath(p: string): string {
+  return p.split("/").map(encodeURIComponent).join("/");
+}
 // All match-scoped routes share this prefix. Match identity is now
 // (team, tournament, date, match), so the URL carries a `/dates/<date>/`
 // segment between the tournament and the match.
@@ -186,11 +196,15 @@ export const api = {
     team: string,
     tournament: string,
     date: string,
-    match: string
+    match: string,
+    opts: { hasIntroClip?: boolean } = {}
   ): Promise<AutoCutsResultDto> {
     return fetchJson<AutoCutsResultDto>(
       `${matchBase(team, tournament, date, match)}/clips/auto-cuts`,
-      { method: "POST" }
+      {
+        method: "POST",
+        body: JSON.stringify({ has_intro_clip: !!opts.hasIntroClip }),
+      }
     );
   },
 
@@ -233,18 +247,29 @@ export const api = {
     );
   },
 
-  // ---- Renders ----------------------------------------------------------
-  async startRender(
+  // ---- Render queue -----------------------------------------------------
+  /**
+   * Enqueue a render job. Returns the new job in `pending` status.
+   *
+   * The job does NOT start until the global queue is active
+   * (`startQueue()`); this lets the user line up several renders without
+   * the server tying up CPU mid-edit.
+   */
+  async enqueueRender(
     team: string,
     tournament: string,
     date: string,
     match: string,
     opts: {
       label?: string;
+      /** Render kind. Defaults to "full" server-side. */
+      kind?: "full" | "preview" | "highlights" | "focused_highlights";
       /** Source/global frame to center a preview around (omit for full render). */
       playheadFrame?: number;
       /** Half-window length in seconds for preview (defaults to 30 on the server). */
       secondsAround?: number;
+      /** When true, bypass the queue and start rendering immediately. */
+      immediate?: boolean;
     } = {}
   ): Promise<RenderJobDto> {
     return fetchJson<RenderJobDto>(
@@ -253,14 +278,31 @@ export const api = {
         method: "POST",
         body: JSON.stringify({
           label: opts.label,
+          kind: opts.kind,
           playhead_frame: opts.playheadFrame,
           seconds_around: opts.secondsAround,
+          immediate: opts.immediate,
         }),
       }
     );
   },
   async cancelRender(jobId: string): Promise<RenderJobDto> {
     return fetchJson<RenderJobDto>(`/jobs/${jobId}/cancel`, { method: "POST" });
+  },
+  async deleteJob(jobId: string): Promise<void> {
+    await fetchJson<unknown>(`/jobs/${jobId}`, { method: "DELETE" });
+  },
+  async listTeamJobs(team: string): Promise<RenderJobDto[]> {
+    return fetchJson<RenderJobDto[]>(`/teams/${enc(team)}/jobs`);
+  },
+  async getQueueState(): Promise<QueueStateDto> {
+    return fetchJson<QueueStateDto>(`/queue/state`);
+  },
+  async startQueue(): Promise<QueueStateDto> {
+    return fetchJson<QueueStateDto>(`/queue/start`, { method: "POST" });
+  },
+  async stopQueue(): Promise<QueueStateDto> {
+    return fetchJson<QueueStateDto>(`/queue/stop`, { method: "POST" });
   },
   jobEventsUrl(jobId: string): string {
     return `${BASE}/jobs/${jobId}/events`;
@@ -283,7 +325,7 @@ export const api = {
     filename: string
   ): Promise<void> {
     await fetchJson<unknown>(
-      `${matchBase(team, tournament, date, match)}/renders/${enc(filename)}`,
+      `${matchBase(team, tournament, date, match)}/renders/${encPath(filename)}`,
       { method: "DELETE" }
     );
   },
@@ -294,7 +336,7 @@ export const api = {
     match: string,
     filename: string
   ): string {
-    return `${BASE}${matchBase(team, tournament, date, match)}/renders/${enc(filename)}`;
+    return `${BASE}${matchBase(team, tournament, date, match)}/renders/${encPath(filename)}`;
   },
   clipStreamUrl(
     team: string,
@@ -314,6 +356,7 @@ export type {
   EventDto,
   MatchDto,
   MatchSummary,
+  QueueStateDto,
   RenderJobDto,
   RosterDto,
   TeamSummary,

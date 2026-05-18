@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { RosterDto, TournamentSummary } from "../types/api";
 import { RosterEditor } from "../components/RosterEditor";
 import { Modal } from "../components/Modal";
+import { TeamRenderQueue } from "../components/TeamRenderQueue";
 import { displayName } from "../util/names";
 
 export function TeamDashboardPage() {
@@ -86,6 +87,8 @@ export function TeamDashboardPage() {
           ))}
         </div>
       </div>
+
+      <TeamRenderQueue team={team} />
 
       {roster && <RosterEditor value={roster} onSave={saveRoster} defaultName={displayName(team)} />}
 

@@ -142,6 +142,19 @@ class EventUpdateIn(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class AutoCutsIn(BaseModel):
+    """Options for the auto-cuts run.
+
+    `has_intro_clip` tells the server that clip 0 is a title / intro reel
+    rather than gameplay. When true, the GameStart event is anchored to
+    the start of clip 1 (with a fade-in from black) and the normal
+    cut/crossfade between clips 0 and 1 is suppressed so the fade-in is
+    the only transition the viewer sees.
+    """
+
+    has_intro_clip: bool = False
+
+
 class AutoCutsOut(BaseModel):
     """Result of an auto-cuts run.
 
@@ -154,6 +167,11 @@ class AutoCutsOut(BaseModel):
     added: int
     # Number of SetEnd lifecycle events inserted at inter-set gaps.
     added_set_ends: int
+    # GameStart / GameEnd lifecycle events inserted by this run (0 or 1
+    # each - the events are idempotent so re-running auto-cuts won't keep
+    # adding more).
+    added_game_start: int = 0
+    added_game_end: int = 0
     skipped_existing: int
     skipped_missing_time: int
     skipped_too_short: int
@@ -177,8 +195,16 @@ class RenderRequestIn(BaseModel):
     is rendered (preview); otherwise the whole match renders."""
 
     label: Optional[str] = None
+    # Render kind. Defaults to "full"; clients can request "highlights"
+    # or "focused_highlights" for batch jobs (one mp4 per detected span).
+    kind: Optional[str] = None
     # Source/global frame around which to render a preview window. None for full render.
     playhead_frame: Optional[int] = None
     # Half-window length in seconds (so the preview is 2*seconds_around long).
     # Only used when playhead_frame is set.
     seconds_around: Optional[float] = None
+    # When True, run the job immediately in its own thread instead of
+    # waiting for the dispatcher. Intended for short previews where the
+    # user wants instant feedback - long full renders should always be
+    # queued so they don't tie up the machine mid-edit.
+    immediate: bool = False

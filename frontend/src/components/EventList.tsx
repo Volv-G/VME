@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { EventDto, RosterDto } from "../types/api";
 import { EMPTY_STATE } from "./Controls/state";
 import { analyzeCuts } from "./cutAnalysis";
@@ -55,6 +55,20 @@ export function EventList({
     ? summaries.filter((s) => s.toLowerCase().includes(lowerQuery)).length
     : 0;
 
+  // Auto-scroll the selected row into view whenever the selection
+  // changes. Used when an event is added or clicked elsewhere (e.g. the
+  // timeline) - the user shouldn't have to hunt for it in a long list.
+  // `block: 'nearest'` avoids gratuitous scrolling when the row is
+  // already visible, and uses smooth scrolling so the motion is
+  // legible rather than a jarring jump.
+  const selectedRowRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (selectedId == null) return;
+    const el = selectedRowRef.current;
+    if (el)
+      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [selectedId]);
+
   return (
     <div>
       <div className="event-search">
@@ -88,6 +102,7 @@ export function EventList({
         return (
           <div
             key={ev.id}
+            ref={ev.id === selectedId ? selectedRowRef : undefined}
             className={
               "event-row" +
               (ev.id === selectedId ? " selected" : "") +

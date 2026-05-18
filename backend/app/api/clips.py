@@ -11,11 +11,15 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from ..library import paths, scanner
 from ..library.probe import probe
 from ..library.transcode import transcode_to_fps
-from ..domain.events.lifecycle import SetEndEvent
+from ..domain.events.lifecycle import (
+    GameEndEvent,
+    GameStartEvent,
+    SetEndEvent,
+)
 from ..domain.events.timeline import CutEndEvent, CutStartEvent
 from ..domain.match import Clip, Match, new_clip_id
 from .helpers import load_match_or_404, save_match, serialize_match
-from .schemas import AutoCutsOut, MatchOut, ReorderClipsIn
+from .schemas import AutoCutsIn, AutoCutsOut, MatchOut, ReorderClipsIn
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +154,11 @@ def reorder_clips(
 # route that declares a different HTTP method).
 @router.post("/auto-cuts", response_model=AutoCutsOut)
 def auto_cuts(
-    team: str, tournament: str, date: str, match: str
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    body: AutoCutsIn | None = None,
 ) -> AutoCutsOut:
     """Insert crossfades between clips separated by a real recording gap.
 
@@ -174,25 +182,75 @@ def auto_cuts(
     are skipped.
     """
     m = load_match_or_404(team, tournament, date, match)
+    has_intro = bool(body and body.has_intro_clip)
+
+    added = 0
+    added_set_ends = 0
+    added_game_start = 0
+    added_game_end = 0
+    skipped_existing = 0
+    skipped_missing_time = 0
+    skipped_too_short = 0
+    skipped_too_close = 0
+
+    # ---- GameStart -------------------------------------------------------
+    # Place a GameStart at the start of gameplay. With an intro clip, the
+    # intro is clip 0 and the game begins at clip 1; without one, clip 0
+    # is gameplay from frame 0. In both cases the lifecycle event's own
+    # fade-from-black gives a clean transition into the scoreboard view.
+    if m.clips:
+        if has_intro and len(m.clips) >= 2:
+            gs_clip = m.clips[1]
+        else:
+            gs_clip = m.clips[0]
+        if not _has_nearby_lifecycle(m, gs_clip.id, 0, "game_start"):
+            fade = max(1, round(gs_clip.fps * AUTO_CUT_FADE_SECONDS))
+            m.add_event(
+                GameStartEvent(
+                    id=0,
+                    clip_id=gs_clip.id,
+                    local_frame=0,
+                    fade_frames=fade,
+                )
+            )
+            added_game_start = 1
+
+    # ---- GameEnd at end of last clip ------------------------------------
+    if m.clips:
+        last = m.clips[-1]
+        last_local = last.frame_count - 1
+        if not _has_nearby_lifecycle(m, last.id, last_local, "game_end"):
+            fade = max(1, round(last.fps * AUTO_CUT_FADE_SECONDS))
+            m.add_event(
+                GameEndEvent(
+                    id=0,
+                    clip_id=last.id,
+                    local_frame=last_local,
+                    fade_frames=fade,
+                )
+            )
+            added_game_end = 1
+
     if len(m.clips) < 2:
+        if added_game_start or added_game_end:
+            save_match(team, tournament, date, match, m)
         return AutoCutsOut(
             match=serialize_match(team, tournament, date, match, m),
             added=0,
             added_set_ends=0,
+            added_game_start=added_game_start,
+            added_game_end=added_game_end,
             skipped_existing=0,
             skipped_missing_time=0,
             skipped_too_short=0,
             skipped_too_close=0,
         )
 
-    added = 0
-    added_set_ends = 0
-    skipped_existing = 0
-    skipped_missing_time = 0
-    skipped_too_short = 0
-    skipped_too_close = 0
-
-    for i in range(len(m.clips) - 1):
+    # With an intro clip, skip the pair (0, 1): the GameStart fade-in we
+    # just inserted is the transition - adding a crossfade there too
+    # would double-blend the same join.
+    first_pair = 1 if has_intro else 0
+    for i in range(first_pair, len(m.clips) - 1):
         a, b = m.clips[i], m.clips[i + 1]
         pad_a = round(a.fps * AUTO_CUT_PAD_SECONDS)
         pad_b = round(b.fps * AUTO_CUT_PAD_SECONDS)
@@ -265,16 +323,18 @@ def auto_cuts(
         )
         added += 1
 
-    if added or added_set_ends:
+    if added or added_set_ends or added_game_start or added_game_end:
         save_match(team, tournament, date, match, m)
         logger.info(
-            "auto-cuts %s/%s/%s/%s: cuts=%d set_ends=%d skipped_existing=%d too_short=%d too_close=%d missing_time=%d",
+            "auto-cuts %s/%s/%s/%s: cuts=%d set_ends=%d game_start=%d game_end=%d skipped_existing=%d too_short=%d too_close=%d missing_time=%d",
             team,
             tournament,
             date,
             match,
             added,
             added_set_ends,
+            added_game_start,
+            added_game_end,
             skipped_existing,
             skipped_too_short,
             skipped_too_close,
@@ -285,6 +345,8 @@ def auto_cuts(
         match=serialize_match(team, tournament, date, match, m),
         added=added,
         added_set_ends=added_set_ends,
+        added_game_start=added_game_start,
+        added_game_end=added_game_end,
         skipped_existing=skipped_existing,
         skipped_missing_time=skipped_missing_time,
         skipped_too_short=skipped_too_short,
@@ -328,6 +390,30 @@ def _has_nearby_set_end(
     """True if a SetEnd already sits within `tolerance` frames of this spot."""
     for e in m.events:
         if not isinstance(e, SetEndEvent):
+            continue
+        if e.clip_id != clip_id:
+            continue
+        if abs(e.local_frame - local_frame) <= tolerance:
+            return True
+    return False
+
+
+def _has_nearby_lifecycle(
+    m: Match,
+    clip_id: str,
+    local_frame: int,
+    type_name: str,
+    tolerance: int = 30,
+) -> bool:
+    """True if a GameStart / GameEnd of `type_name` already sits within
+    `tolerance` frames of this spot. Used for idempotency: re-running
+    auto-cuts should not stack a fresh GameStart on top of an existing
+    one. Matching by `type_name` (not class) is fine because both event
+    classes set their `type_name` ClassVar to a unique string and either
+    one would be wrong to duplicate.
+    """
+    for e in m.events:
+        if e.type_name != type_name:
             continue
         if e.clip_id != clip_id:
             continue

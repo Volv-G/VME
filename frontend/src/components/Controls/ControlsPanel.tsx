@@ -18,7 +18,9 @@ interface Props {
   data: MatchDto;
   currentFrame: number;
   onCreate: (body: CreateBody) => Promise<void>;
-  onAutoCuts: () => Promise<AutoCutsResultDto>;
+  onAutoCuts: (opts: {
+    hasIntroClip?: boolean;
+  }) => Promise<AutoCutsResultDto>;
 }
 
 interface ActionDef {
@@ -35,9 +37,13 @@ interface ActionDef {
 // next to each other. Focus In/Out live here (rather than in the Match
 // section) because Focus In attributes to a specific player; Focus Out is
 // global but stays alongside its pair for discoverability.
+// Ace is `needsPlayer: false` because the server is always at home P1 -
+// no point making the user click the lineup. The button handler below
+// resolves the jersey from `live.home_positions[1]` and commits
+// directly. Errors surface as a banner if P1 is empty (lineup not set).
 const PLAYER_ACTIONS: ActionDef[] = [
   { type: "kill", label: "+ Kill", needsPlayer: true },
-  { type: "ace", label: "+ Ace", needsPlayer: true },
+  { type: "ace", label: "+ Ace", needsPlayer: false },
   { type: "dig", label: "Dig", needsPlayer: true },
   { type: "dive", label: "Dive", needsPlayer: true },
   { type: "block", label: "Block", needsPlayer: true },
@@ -111,16 +117,39 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  // After a Kill is committed we transition into "pick the assister"
+  // mode. Holds the killer's jersey so the picker can (a) suppress
+  // self-assist and (b) show a helpful banner. `null` = not waiting.
+  const [pendingAssistKiller, setPendingAssistKiller] = useState<
+    number | null
+  >(null);
 
   async function runAutoCuts() {
     setErr(null);
     setInfo(null);
+    // Ask up-front whether clip 0 is an intro/title reel. The answer
+    // changes WHERE the GameStart event lands (intro = start of clip 1;
+    // no intro = start of clip 0) and whether the crossfade between
+    // clips 0 and 1 is suppressed. Native confirm is fine - it's a
+    // single yes/no and blocks until answered. Only ask when there's
+    // more than one clip; a one-clip match can't have an intro AND
+    // gameplay, so the question is meaningless.
+    let hasIntroClip = false;
+    if (data.clips.length >= 2) {
+      hasIntroClip = window.confirm(
+        "Is the FIRST clip an intro / title reel?\n\n" +
+          "OK  - skip clip 1; place GameStart at clip 2 with a fade-in.\n" +
+          "Cancel - clip 1 is gameplay; GameStart goes at its first frame."
+      );
+    }
     setBusy(true);
     try {
-      const r = await onAutoCuts();
+      const r = await onAutoCuts({ hasIntroClip });
       const parts: string[] = [`Added ${r.added} cut${r.added === 1 ? "" : "s"}`];
       if (r.added_set_ends)
         parts.push(`${r.added_set_ends} set end${r.added_set_ends === 1 ? "" : "s"}`);
+      if (r.added_game_start) parts.push("game start");
+      if (r.added_game_end) parts.push("game end");
       if (r.skipped_existing) parts.push(`${r.skipped_existing} already marked`);
       if (r.skipped_too_close) parts.push(`${r.skipped_too_close} continuous (no cut needed)`);
       if (r.skipped_too_short) parts.push(`${r.skipped_too_short} too short`);
@@ -138,22 +167,29 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
     setSubPosition(null);
     setScoreFixOpen(false);
     setMessageOpen(false);
+    setPendingAssistKiller(null);
   }
 
-  async function commit(type: string, payload: Record<string, unknown> = {}) {
+  async function commit(
+    type: string,
+    payload: Record<string, unknown> = {},
+    opts: { keepOverlays?: boolean } = {}
+  ): Promise<boolean> {
     if (data.clips.length === 0) {
       setErr("No clips uploaded yet.");
-      return;
+      return false;
     }
     const r = resolveClipFromGlobal(data.clips, currentFrame);
-    if (!r) return;
+    if (!r) return false;
     setErr(null);
     setBusy(true);
     try {
       await onCreate({ type, clip_id: r.clipId, local_frame: r.localFrame, payload });
-      clearOverlays();
+      if (!opts.keepOverlays) clearOverlays();
+      return true;
     } catch (e) {
       setErr(String(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -167,10 +203,22 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
 
   function onActionButton(a: ActionDef) {
     setErr(null);
+    // Cancel any pending assist flow when the user picks a new action.
+    setPendingAssistKiller(null);
     if (a.needsPlayer) {
       // Toggle armed state: clicking the same one cancels.
       setArmed((cur) => (cur?.type === a.type ? null : a));
       setSubPosition(null);
+      return;
+    }
+    if (a.type === "ace") {
+      // The server is always home P1 in volleyball - no need to ask.
+      const server = live.home_positions[1];
+      if (server == null) {
+        setErr("No player at P1 - set the home lineup first.");
+        return;
+      }
+      void commit("ace", { team: "home", player_number: server });
       return;
     }
     if (a.type === "score_correction") {
@@ -188,11 +236,37 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
     void commit(a.type, a.payload ?? {});
   }
 
-  function onLineupCellClick(position: number) {
+  async function onLineupCellClick(position: number) {
+    // Pending-assist flow takes priority over the armed-action flow:
+    // once a Kill is logged we want the next lineup tap to be the
+    // assister, even if `armed` was somehow non-null.
+    if (pendingAssistKiller != null) {
+      const jersey = live.home_positions[position];
+      if (jersey == null) return;
+      if (jersey === pendingAssistKiller) return; // no self-assist
+      await commit("assist", { team: "home", player_number: jersey });
+      // commit() runs clearOverlays() which also clears
+      // pendingAssistKiller - good, the flow ends here.
+      return;
+    }
     if (armed) {
       const jersey = live.home_positions[position];
       if (jersey == null) return; // no player to attribute to
-      void commit(armed.type, { team: "home", player_number: jersey, ...(armed.payload ?? {}) });
+      const armedType = armed.type;
+      const armedPayload = armed.payload ?? {};
+      const ok = await commit(
+        armedType,
+        { team: "home", player_number: jersey, ...armedPayload },
+        // Keep overlays for the Kill -> Assist follow-up so the lineup
+        // grid stays mounted in the same render pass. Without this the
+        // grid would flash closed before pendingAssistKiller takes
+        // effect.
+        { keepOverlays: armedType === "kill" }
+      );
+      if (ok && armedType === "kill") {
+        setArmed(null);
+        setPendingAssistKiller(jersey);
+      }
       return;
     }
     setSubPosition(position);
@@ -245,7 +319,11 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
           <LineupGrid
             positions={live.home_positions}
             roster={data.home_roster}
-            armedActionLabel={armed?.label ?? null}
+            armedActionLabel={
+              pendingAssistKiller != null
+                ? `Assister for kill by #${pendingAssistKiller}`
+                : armed?.label ?? null
+            }
             onPositionClick={onLineupCellClick}
           />
         )}
@@ -254,6 +332,17 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
           <div className="armed-banner">
             <span>Pick a position for <strong>{armed.label}</strong></span>
             <button onClick={() => setArmed(null)}>Cancel</button>
+          </div>
+        )}
+        {pendingAssistKiller != null && (
+          <div className="armed-banner">
+            <span>
+              Pick the assister for kill by{" "}
+              <strong>#{pendingAssistKiller}</strong> - or skip
+            </span>
+            <button onClick={() => setPendingAssistKiller(null)}>
+              Skip assist
+            </button>
           </div>
         )}
 

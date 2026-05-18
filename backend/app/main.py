@@ -13,6 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from .auth import BasicAuthMiddleware, configure_from_env
 from .config import DATA_DIR, LOG_ROOT, MEDIA_ROOT, STATIC_ROOT
 from .api import clips, events, matches, media, renders, teams, tournaments
+from .jobs import persistence as jobs_persistence
+from .jobs.dispatcher import DISPATCHER
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +55,27 @@ def health() -> dict[str, str]:
         "media_root": str(MEDIA_ROOT),
         "data_dir": str(DATA_DIR) if DATA_DIR else "",
     }
+
+
+@app.on_event("startup")
+def _startup_jobs() -> None:
+    """Hydrate the render queue from disk and start the dispatcher thread.
+
+    Order matters: load BEFORE installing the persistence hook so the
+    initial load doesn't re-write the file with the same contents, and
+    BEFORE starting the dispatcher so any pending jobs are visible to it.
+    """
+    jobs_persistence.load()
+    jobs_persistence.install_hook()
+    DISPATCHER.start()
+
+
+@app.on_event("shutdown")
+def _shutdown_jobs() -> None:
+    """Stop the dispatcher cleanly so the daemon thread exits before the
+    process does. Persistence is hooked into every state change so no
+    explicit flush is needed here."""
+    DISPATCHER.stop()
 
 
 api = FastAPI()
