@@ -139,6 +139,20 @@ def run_render(job: RenderJob) -> None:
         output_filename = render_naming.render_naming_template(
             render_naming.DEFAULT_FULL_RENDER_TEMPLATE, full_vars
         )
+
+    # Previews are temporary scratch outputs - their filenames carry a
+    # `preview_` prefix so they're visually distinct from full renders
+    # AND so `_is_full_render` (scanner.py) excludes them from team
+    # dashboards / YouTube upload eligibility. The team's template might
+    # not include `{label}` at all, so we enforce the prefix here on the
+    # FINAL basename rather than relying on template content.
+    if job.kind == "preview":
+        parts = output_filename.rsplit("/", 1)
+        leaf = parts[-1]
+        if not leaf.lower().startswith("preview_"):
+            parts[-1] = f"preview_{leaf}"
+            output_filename = "/".join(parts)
+
     output_path = renders / output_filename
     # Templates may carry forward slashes (subfolders) - ensure the
     # destination directory exists before the renderer tries to write.

@@ -6,6 +6,7 @@ import { ScoreDisplay } from "./ScoreDisplay";
 import { ScoreFixDialog, MessageDialog } from "./InlineDialogs";
 import { stateAtPlayhead } from "./state";
 import { useHotkeyAction } from "../../hotkeys";
+import { eventIcon } from "../eventStyle";
 
 type CreateBody = {
   type: string;
@@ -30,6 +31,12 @@ interface ActionDef {
   needsPlayer: boolean;
   /** Static payload merged in when the event is created. */
   payload?: Record<string, unknown>;
+  /**
+   * Override the emoji shown on the button. Falls back to `eventIcon(type)`
+   * when omitted - which is the right answer for almost every action since
+   * the type itself already tells you what verb is being logged.
+   */
+  icon?: string;
 }
 
 // Per-player home-team action buttons rendered under the lineup grid. Order
@@ -42,8 +49,8 @@ interface ActionDef {
 // resolves the jersey from `live.home_positions[1]` and commits
 // directly. Errors surface as a banner if P1 is empty (lineup not set).
 const PLAYER_ACTIONS: ActionDef[] = [
-  { type: "kill", label: "+ Kill", needsPlayer: true },
-  { type: "ace", label: "+ Ace", needsPlayer: false },
+  { type: "kill", label: "Kill", needsPlayer: true },
+  { type: "ace", label: "Ace", needsPlayer: false },
   { type: "dig", label: "Dig", needsPlayer: true },
   { type: "dive", label: "Dive", needsPlayer: true },
   { type: "block", label: "Block", needsPlayer: true },
@@ -302,6 +309,15 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
             style={{ background: data.home_roster.team_color || "#2d8a4e" }}
           />
           <strong className="team-name">{homeName}</strong>
+          <button
+            className="first-serve-btn"
+            onClick={() => commit("first_serve", { team: "home" })}
+            disabled={busy}
+            title={`Mark ${homeName} as first server (this set)`}
+            aria-label={`Mark ${homeName} as first server`}
+          >
+            {eventIcon("first_serve")}
+          </button>
           <button className="primary" onClick={() => commit("score", { team: "home" })} disabled={busy}>
             +1
           </button>
@@ -348,15 +364,13 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
 
         <div className="action-grid">
           {PLAYER_ACTIONS.map((a) => (
-            <button
+            <ActionButton
               key={a.type}
-              type="button"
-              className={`action-btn${armed?.type === a.type ? " armed" : ""}`}
-              onClick={() => onActionButton(a)}
+              action={a}
+              armed={armed?.type === a.type}
               disabled={busy}
-            >
-              {a.label}
-            </button>
+              onClick={() => onActionButton(a)}
+            />
           ))}
         </div>
       </div>
@@ -372,6 +386,15 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
             style={{ background: data.opponent_roster.team_color || "#8a2d2d" }}
           />
           <strong className="team-name">{opponentName}</strong>
+          <button
+            className="first-serve-btn"
+            onClick={() => commit("first_serve", { team: "away" })}
+            disabled={busy}
+            title={`Mark ${opponentName} as first server (this set)`}
+            aria-label={`Mark ${opponentName} as first server`}
+          >
+            {eventIcon("first_serve")}
+          </button>
           <button className="primary" onClick={() => commit("score", { team: "away" })} disabled={busy}>
             +1
           </button>
@@ -385,18 +408,18 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
 
         <div className="action-grid">
           {MATCH_ACTIONS.map((a) => (
-            <button
+            <ActionButton
               key={a.type}
-              type="button"
-              className={`action-btn${armed?.type === a.type ? " armed" : ""}`}
-              onClick={() => onActionButton(a)}
+              action={a}
+              armed={armed?.type === a.type}
               disabled={busy}
-            >
-              {a.label}
-            </button>
+              onClick={() => onActionButton(a)}
+            />
           ))}
           {/* Auto Cuts sits in the same grid right after End Set so the two
-              singletons share a row instead of leaving an empty cell. */}
+              singletons share a row instead of leaving an empty cell.
+              Doesn't map to an event type (it's a bulk operation), so we
+              hand-pick the icon rather than going through ActionButton. */}
           <button
             type="button"
             className="action-btn"
@@ -404,10 +427,14 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
             disabled={busy || data.clips.length < 2}
             title="Crossfade stop/restart joins; insert SetEnd at long gaps"
           >
-            Auto Cuts
+            <span aria-hidden="true" className="action-icon">
+              ⚙️
+            </span>
+            <span className="action-label">Auto Cuts</span>
           </button>
           {/* Score corrections and inline notes - both open dialogs rather
-              than committing immediately. */}
+              than committing immediately. Reuse the event icons so the
+              relationship to the underlying event type is obvious. */}
           <button
             type="button"
             className={`action-btn${scoreFixOpen ? " armed" : ""}`}
@@ -418,7 +445,10 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
             }}
             disabled={busy}
           >
-            Score Fix
+            <span aria-hidden="true" className="action-icon">
+              {eventIcon("score_correction")}
+            </span>
+            <span className="action-label">Score Fix</span>
           </button>
           <button
             type="button"
@@ -430,7 +460,10 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
             }}
             disabled={busy}
           >
-            Message
+            <span aria-hidden="true" className="action-icon">
+              {eventIcon("message")}
+            </span>
+            <span className="action-label">Message</span>
           </button>
         </div>
       </div>
@@ -450,5 +483,39 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Single button in either action grid. Renders an emoji prefix + label,
+ * with a tooltip that mirrors the label so the icon stays decorative.
+ * Pulling this out of the parent body avoids repeating the icon-lookup
+ * boilerplate in two near-identical .map() blocks.
+ */
+function ActionButton({
+  action,
+  armed,
+  disabled,
+  onClick,
+}: {
+  action: ActionDef;
+  armed: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const icon = action.icon ?? eventIcon(action.type);
+  return (
+    <button
+      type="button"
+      className={`action-btn${armed ? " armed" : ""}`}
+      onClick={onClick}
+      disabled={disabled}
+      title={action.label}
+    >
+      <span aria-hidden="true" className="action-icon">
+        {icon}
+      </span>
+      <span className="action-label">{action.label}</span>
+    </button>
   );
 }

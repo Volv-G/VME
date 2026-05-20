@@ -4,6 +4,7 @@ import { EMPTY_STATE } from "./Controls/state";
 import { analyzeCuts } from "./cutAnalysis";
 import { analyzeFocus } from "./focusAnalysis";
 import { summarizeEvent } from "./eventSummary";
+import { eventIcon } from "./eventStyle";
 
 interface Props {
   events: EventDto[];
@@ -133,6 +134,9 @@ export function EventList({
             <div className="event-row-body">
               <div className="event-row-text" title={title}>
                 {isOrphan && <span className="orphan-badge" title={orphanReason}>!</span>}
+                <span className="event-row-icon" aria-hidden="true">
+                  {eventIcon(ev.type)}
+                </span>
                 {renderWithHighlight(summary, lowerQuery)}
               </div>
               <div className="ev-frame">{frameLabel(ev.global_frame, fps)}</div>

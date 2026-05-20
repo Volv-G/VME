@@ -420,6 +420,8 @@ def apply_overlay_state(
                         progress=age / popup_frames,
                         team=ovr.team.value if ovr.team is not None else None,
                         player_number=ovr.player_number,
+                        player_out_number=ovr.player_out_number,
+                        title_scale=ovr.title_scale,
                     )
                 )
             elif isinstance(ovr, MessagePopupEffect):

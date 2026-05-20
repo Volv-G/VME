@@ -23,7 +23,14 @@ from ..frame_map import ActiveMessage
 from .scoreboard import TeamBranding
 
 OVERLAY_OPACITY = 0.9
-TITLE_FONT_SCALE = 0.028
+# Title and subtitle render at the same scale on purpose - the title is
+# bold, the subtitle is regular, so the visual hierarchy comes from
+# weight rather than size. Pre-2026 the title was ~40% bigger than the
+# subtitle which made action labels ("Kill", "Ace") shout over the
+# player info the viewer actually cares about. Substitution popups
+# originally pioneered this proportion via a per-effect `title_scale=0.7`
+# override; it now applies to every popup by default.
+TITLE_FONT_SCALE = 0.020
 SUBTITLE_FONT_SCALE = 0.020
 ACCENT_BAR_WIDTH = 6
 PADDING = 16
@@ -63,10 +70,12 @@ class MessageOverlayRenderer:
         y_offset = h - bottom_margin
 
         for msg in messages:
-            title = msg.text or ""
+            title = self._resolve_team_placeholders(msg.text or "")
             subtitle = self._resolve_subtitle(msg)
             bg = self._resolve_bg(msg)
-            box = self._build_box(title, subtitle, h, msg.image_path, bg)
+            box = self._build_box(
+                title, subtitle, h, msg.image_path, bg, title_scale=msg.title_scale
+            )
             x_off = self._x_offset(msg.progress, box.width)
             x = w - box.width - margin + x_off
             y = y_offset - box.height
@@ -80,18 +89,54 @@ class MessageOverlayRenderer:
 
     # ------------------------------------------------------------------
 
+    def _resolve_team_placeholders(self, text: str) -> str:
+        """Substitute `{home}` / `{away}` in popup text with the actual
+        team names from the renderer's TeamBranding context.
+
+        Uses `format_map` with a defaulting dict so unknown placeholders
+        (and stray `{` that turn up in user-typed messages) survive
+        unchanged - we don't want a typo'd Message event to crash the
+        renderer. Implementation is shared by all popup flavors so any
+        future event can use the same placeholders just by putting them
+        in its `text`.
+        """
+        if not text or "{" not in text:
+            return text
+        home_name = self._home_branding.name if self._home_branding else "Home"
+        away_name = self._away_branding.name if self._away_branding else "Away"
+        try:
+            return text.format_map(_SafeFormatDict(home=home_name, away=away_name))
+        except (ValueError, IndexError):
+            # `format_map` can still raise on malformed format spec strings
+            # (e.g. "{home:}"). In that case just return the original
+            # text unchanged - better than nothing on the rendered video.
+            return text
+
     def _resolve_subtitle(self, msg: ActiveMessage) -> Optional[str]:
         if msg.player_number is None:
             return None
         roster = self._roster_for(msg.team)
-        name_part = f"#{msg.player_number}"
+        # Two-player subtitle (substitution): "#OUT name → #IN name".
+        # The arrow's directionality matters - the outgoing player is
+        # on the left, the incoming on the right, matching the natural
+        # reading order of "who became who".
+        if msg.player_out_number is not None:
+            in_label = self._format_player(roster, msg.player_number)
+            out_label = self._format_player(roster, msg.player_out_number)
+            return f"{out_label} → {in_label}"
+        return self._format_player(roster, msg.player_number)
+
+    @staticmethod
+    def _format_player(roster: Optional[Roster], jersey: int) -> str:
+        """Compose `#NN First L.` or just `#NN` when the roster has no match."""
+        label = f"#{jersey}"
         if roster is not None:
-            player = roster.find_by_number(msg.player_number)
+            player = roster.find_by_number(jersey)
             if player is not None:
                 short = player.short_name or _short_from_name(player.name)
                 if short:
-                    name_part = f"#{msg.player_number} {short}"
-        return name_part
+                    label = f"#{jersey} {short}"
+        return label
 
     def _resolve_bg(self, msg: ActiveMessage) -> tuple[int, int, int, int]:
         # Explicit hex on the message wins.
@@ -124,8 +169,12 @@ class MessageOverlayRenderer:
         video_height: int,
         image_path: Optional[str],
         bg_color: tuple[int, int, int, int],
+        title_scale: float = 1.0,
     ) -> Image.Image:
-        title_font = _load_font(int(video_height * TITLE_FONT_SCALE), bold=True)
+        # `title_scale` clamped to a sane range so a typo in the effect
+        # (e.g. 0.0) can't produce a zero-pixel font that crashes PIL.
+        scale = max(0.4, min(2.0, title_scale or 1.0))
+        title_font = _load_font(int(video_height * TITLE_FONT_SCALE * scale), bold=True)
         subtitle_font = (
             _load_font(int(video_height * SUBTITLE_FONT_SCALE), bold=False)
             if subtitle
@@ -233,6 +282,16 @@ def _hex_to_rgba(hex_color: str) -> tuple[int, int, int, int]:
         return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), 255)
     except ValueError:
         return BG_COLOR_DEFAULT
+
+
+class _SafeFormatDict(dict):
+    """`dict` that leaves unknown `{key}` placeholders intact instead of
+    raising `KeyError`. Used by `_resolve_team_placeholders` so messages
+    that happen to contain literal braces - e.g. a user-typed annotation
+    with curly brackets - aren't an error."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
 
 
 def _short_from_name(name: str) -> str:

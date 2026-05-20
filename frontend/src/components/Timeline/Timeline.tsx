@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ClipDto, EventDto } from "../../types/api";
 import { analyzeCuts } from "../cutAnalysis";
 import { analyzeFocus } from "../focusAnalysis";
+import { EVENT_COLORS } from "../eventStyle";
 
 interface Props {
   clips: ClipDto[];
@@ -34,21 +35,6 @@ const MAX_CANVAS_PX = 16384;
 const TICK_LADDER_SEC = [
   0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200,
 ];
-
-const EVENT_COLORS: Record<string, string> = {
-  game_start: "#3fb950",
-  game_end: "#3fb950",
-  set_end: "#d29922",
-  score: "#4f8bff",
-  kill: "#f78166",
-  ace: "#a371f7",
-  cut_start: "#f85149",
-  cut_end: "#f85149",
-  clip_transition: "#d29922",
-  message: "#8b949e",
-  ball_served: "#3fb950",
-  default: "#6ea1ff",
-};
 
 function fmtTime(seconds: number): string {
   const sign = seconds < 0 ? "-" : "";

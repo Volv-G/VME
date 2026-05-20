@@ -34,6 +34,13 @@ class ActiveMessage:
     # provides an explicit override.
     team: Optional[str] = None
     player_number: Optional[int] = None
+    # Secondary jersey for substitution popups. When set, the subtitle
+    # becomes "#OUT name → #IN name" rather than just the primary player.
+    player_out_number: Optional[int] = None
+    # Multiplier on the title font size (1.0 = default). Lets specific
+    # popups (e.g. "Sub") shrink the headline when the meaningful
+    # content lives in the subtitle.
+    title_scale: float = 1.0
 
 
 @dataclass

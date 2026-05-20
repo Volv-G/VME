@@ -64,6 +64,16 @@ class PlayerPopupEffect:
     subtitle with the jersey number and name resolved from the roster.
     When `team` is set and `bg_color` is None, the renderer tints the popup
     with that team's color so home/away events are visually distinct.
+
+    `player_out_number` is the secondary jersey for substitution-style
+    popups; when set the renderer formats the subtitle as
+    "#OUT name → #IN name" instead of just the incoming player.
+
+    `title_scale` shrinks (or enlarges) the title font relative to its
+    default size. Kept as an escape hatch for popups that need a
+    larger-than-usual headline; substitution events used to set this to
+    0.7 but that proportion is now the renderer's default for every
+    popup (see `overlays/message.py::TITLE_FONT_SCALE`).
     """
 
     text: str
@@ -71,6 +81,8 @@ class PlayerPopupEffect:
     team: Optional[Team] = None
     image_path: Optional[str] = None
     bg_color: Optional[str] = None  # explicit hex override; else from team
+    player_out_number: Optional[int] = None
+    title_scale: float = 1.0
 
 
 @dataclass(frozen=True)

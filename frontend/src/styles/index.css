@@ -355,6 +355,15 @@ label {
   margin-right: 6px;
   vertical-align: 1px;
 }
+/* Decorative leading icon on each event row. Stays small so it reads
+   as a glyph next to the summary rather than competing with it. */
+.event-row .event-row-icon {
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: -1px;
+}
 
 .timeline-canvas { display: block; }
 
@@ -562,15 +571,47 @@ label {
   gap: 6px;
 }
 .action-btn {
+  /* Buttons render <icon> <label> in a tight flex row so the emoji
+     reads as a leading glyph rather than floating away from the
+     verb when the label wraps. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   text-align: center;
   padding: 8px 6px;
   font-size: 12px;
   font-weight: 500;
+  /* min-width: 0 lets the label truncate cleanly inside the grid cell
+     rather than overflowing the button when an opponent name is long. */
+  min-width: 0;
+}
+.action-btn .action-icon {
+  font-size: 14px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+.action-btn .action-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .action-btn.armed {
   background: var(--warn);
   border-color: var(--warn);
   color: #1a1206;
+}
+
+/* Icon-only "1st serve" button in each team-card-header. Sits between
+   the team name and the +1 button. Square footprint so it doesn't push
+   the team name off-screen on narrow controls panels. */
+.first-serve-btn {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 1;
 }
 
 .match-actions {
