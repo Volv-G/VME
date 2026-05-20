@@ -1,12 +1,35 @@
-"""Clip endpoints: upload, reorder, delete, auto-cuts."""
+"""Clip endpoints: upload, reorder, delete, auto-cuts.
+
+Upload flavors
+--------------
+  1. `POST /clips/uploads` + `PUT /clips/uploads/{sid}/chunk` +
+     `POST /clips/uploads/{sid}/finalize` - resumable chunked upload.
+     Each PUT is a small body (default 32 MiB) so no individual request
+     hits the IIS/ARR ~2 GiB single-request barrier. Default path for
+     browser uploads.
+  2. `POST /clips/import-path` - server-side ingest from a local file
+     or folder path. Skips HTTP entirely; useful when the browser and
+     the server are on the same machine and the source video already
+     lives somewhere accessible to the service user.
+
+Both flavors converge on `_ingest_file_into_match()` once the file
+sits in the match folder. That keeps fps-normalization, probing, and
+clip-id assignment in one place.
+"""
 
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+import time
+import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
+from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException, Request
 
 from ..library import paths, scanner
 from ..library.probe import probe
@@ -19,7 +42,16 @@ from ..domain.events.lifecycle import (
 from ..domain.events.timeline import CutEndEvent, CutStartEvent
 from ..domain.match import Clip, Match, new_clip_id
 from .helpers import load_match_or_404, save_match, serialize_match
-from .schemas import AutoCutsIn, AutoCutsOut, MatchOut, ReorderClipsIn
+from .schemas import (
+    AutoCutsIn,
+    AutoCutsOut,
+    ImportPathIn,
+    ImportPathOut,
+    MatchOut,
+    ReorderClipsIn,
+    UploadSessionStartIn,
+    UploadSessionOut,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,36 +87,66 @@ AUTO_SET_END_GAP_SECONDS = 180.0
 AUTO_CUT_FADE_SECONDS = AUTO_CUT_PAD_SECONDS
 
 
-@router.post("", response_model=MatchOut)
-async def upload_clip(
+# --- Shared ingest helpers ----------------------------------------------------
+#
+# All three upload flavors (legacy single-request, chunked, path-import)
+# converge on `_ingest_file_into_match()` once the source bytes are
+# sitting in the match folder. Keeping the probe / transcode / clip-id /
+# fps-sync logic in one place means a bugfix to e.g. transcode error
+# handling doesn't have to be replicated three times.
+
+_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm"}
+
+
+def _resolve_match_folder(
+    team: str, tournament: str, date: str, match: str
+) -> Path:
+    folder = paths.match_dir(team, tournament, date, match)
+    if not folder.exists():
+        raise HTTPException(404, "Match folder not found")
+    return folder
+
+
+def _next_available_name(folder: Path, basename: str) -> Path:
+    """Resolve a non-colliding destination path inside `folder`.
+
+    Mirrors the pre-existing collision rule: append `_1`, `_2`, ... to
+    the stem until the name is free.
+    """
+    dest = folder / Path(basename).name  # strip any leading path components
+    if not dest.exists():
+        return dest
+    stem, suffix = dest.stem, dest.suffix
+    n = 1
+    while True:
+        candidate = folder / f"{stem}_{n}{suffix}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
+def _ingest_file_into_match(
     team: str,
     tournament: str,
     date: str,
     match: str,
-    file: UploadFile = File(...),
-) -> MatchOut:
-    folder = paths.match_dir(team, tournament, date, match)
-    if not folder.exists():
-        raise HTTPException(404, "Match folder not found")
+    dest: Path,
+    *,
+    m: Optional[Match] = None,
+    save: bool = True,
+) -> Match:
+    """Probe `dest`, transcode-if-needed, add to `m.clips`, save.
 
-    safe_name = Path(file.filename or "upload.mp4").name
-    dest = folder / safe_name
-    if dest.exists():
-        # Stash with numeric suffix.
-        stem, suffix = dest.stem, dest.suffix
-        n = 1
-        while True:
-            candidate = folder / f"{stem}_{n}{suffix}"
-            if not candidate.exists():
-                dest = candidate
-                break
-            n += 1
+    `m` is loaded from disk if not provided. `save=False` lets callers
+    batch many files into a single save (path-import folder mode).
+    Returns the (possibly newly loaded) Match.
 
-    with dest.open("wb") as out:
-        shutil.copyfileobj(file.file, out)
-
+    Raises HTTPException on transcode failure, after removing `dest` so
+    a retry isn't blocked by the partial file.
+    """
     info = probe(dest)
-    m = load_match_or_404(team, tournament, date, match)
+    if m is None:
+        m = load_match_or_404(team, tournament, date, match)
 
     # FPS normalization rule: the first clip's playback rate becomes the
     # project FPS (sync_match_fps below). Every subsequent clip whose
@@ -128,8 +190,340 @@ async def upload_clip(
             )
         )
     scanner.sync_match_fps(m)
-    save_match(team, tournament, date, match, m)
+    if save:
+        save_match(team, tournament, date, match, m)
+    return m
+
+
+# --- Chunked / resumable upload -----------------------------------------------
+#
+# Protocol:
+#   POST   /clips/uploads          {filename, total_size}  -> {session_id, received: 0}
+#   PUT    /clips/uploads/{sid}/chunk?offset=<bytes>       -> {received: <new>}
+#                                  body = raw octet-stream (one chunk)
+#   POST   /clips/uploads/{sid}/finalize                   -> MatchOut
+#   DELETE /clips/uploads/{sid}                            -> {cancelled: true}
+#
+# Sessions live in-memory (lost across service restart - that's fine for
+# v1). The corresponding `.upload-{sid}.<name>.part` files persist on
+# disk; orphans are cleaned up the next time `_purge_stale_sessions()`
+# runs (called from session create, so each new upload tidies the slate).
+#
+# Each PUT carries one chunk. The default client chunk size is 32 MiB,
+# well under the IIS 2 GiB barrier. Chunks must arrive in order from the
+# current `received` offset; the offset query parameter is checked
+# against the on-disk file size so a client retry that resends the same
+# chunk is rejected (avoids duplicating bytes).
+
+_UPLOAD_PART_PREFIX = ".upload-"
+_SESSION_TTL_SECONDS = 6 * 3600  # 6 h - long enough for any realistic upload
+
+
+@dataclass
+class _UploadSession:
+    session_id: str
+    team: str
+    tournament: str
+    date: str
+    match: str
+    filename: str  # eventual destination basename (collision-resolved)
+    total_size: int
+    part_path: Path  # absolute path to the .part file
+    received: int = 0
+    started_at: float = field(default_factory=time.time)
+    lock: Lock = field(default_factory=Lock)
+
+
+_sessions: dict[str, _UploadSession] = {}
+_sessions_lock = Lock()
+
+
+def _purge_stale_sessions() -> None:
+    """Drop sessions older than TTL and delete their .part files.
+
+    Called opportunistically from session create. Cheap (linear in the
+    session count, which is bounded by concurrent uploads).
+    """
+    cutoff = time.time() - _SESSION_TTL_SECONDS
+    with _sessions_lock:
+        stale = [sid for sid, s in _sessions.items() if s.started_at < cutoff]
+        for sid in stale:
+            sess = _sessions.pop(sid)
+            sess.part_path.unlink(missing_ok=True)
+
+
+@router.post("/uploads", response_model=UploadSessionOut)
+def start_upload_session(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    body: UploadSessionStartIn,
+) -> UploadSessionOut:
+    """Create a chunked-upload session.
+
+    Reserves the destination filename now (collision-resolved) so a
+    second concurrent session for the same source can't race onto the
+    same .part path.
+    """
+    _purge_stale_sessions()
+    folder = _resolve_match_folder(team, tournament, date, match)
+
+    if body.total_size <= 0:
+        raise HTTPException(400, "total_size must be positive")
+    safe_basename = Path(body.filename or "upload.mp4").name
+    if not safe_basename:
+        raise HTTPException(400, "filename required")
+
+    # Resolve collision NOW so the final-name slot is taken even before
+    # the first byte arrives. Concurrent sessions for the same source
+    # name get distinct destinations (foo.mp4, foo_1.mp4, ...).
+    dest = _next_available_name(folder, safe_basename)
+
+    session_id = uuid.uuid4().hex
+    part_path = folder / f"{_UPLOAD_PART_PREFIX}{session_id}.{dest.name}.part"
+    # Touch the part file so reads of its size succeed on the first PUT.
+    part_path.touch()
+
+    sess = _UploadSession(
+        session_id=session_id,
+        team=team,
+        tournament=tournament,
+        date=date,
+        match=match,
+        filename=dest.name,
+        total_size=body.total_size,
+        part_path=part_path,
+    )
+    with _sessions_lock:
+        _sessions[session_id] = sess
+    return UploadSessionOut(
+        session_id=session_id,
+        filename=dest.name,
+        total_size=body.total_size,
+        received=0,
+    )
+
+
+def _get_session(sid: str) -> _UploadSession:
+    with _sessions_lock:
+        sess = _sessions.get(sid)
+    if sess is None:
+        raise HTTPException(404, "Upload session not found or expired")
+    return sess
+
+
+@router.put("/uploads/{session_id}/chunk", response_model=UploadSessionOut)
+async def append_upload_chunk(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    session_id: str,
+    offset: int,
+    request: Request,
+) -> UploadSessionOut:
+    """Append a chunk at `offset`. Body is raw octet-stream bytes.
+
+    `offset` MUST equal the current `received` count - this rejects
+    both duplicate retries (offset behind) and skipped chunks (offset
+    ahead). A client that wants to recover should query the session,
+    discover the true `received`, and resume from there. Per-session
+    lock serializes concurrent chunks for the same session.
+    """
+    sess = _get_session(session_id)
+    if (sess.team, sess.tournament, sess.date, sess.match) != (
+        team, tournament, date, match,
+    ):
+        # The session belongs to a different match. Refuse rather than
+        # silently write to the wrong folder.
+        raise HTTPException(400, "Session does not belong to this match")
+
+    with sess.lock:
+        if offset != sess.received:
+            raise HTTPException(
+                409,
+                f"Offset mismatch: expected {sess.received}, got {offset}",
+            )
+        # Stream the request body to the part file. Iterating the raw
+        # stream avoids buffering the full chunk in memory; the chunk
+        # may be tens of MiB.
+        bytes_written = 0
+        with sess.part_path.open("ab") as f:
+            async for piece in request.stream():
+                if not piece:
+                    continue
+                f.write(piece)
+                bytes_written += len(piece)
+        sess.received += bytes_written
+        if sess.received > sess.total_size:
+            # Client lied about total_size. Trim back so finalize won't
+            # silently accept a too-large file.
+            sess.part_path.unlink(missing_ok=True)
+            with _sessions_lock:
+                _sessions.pop(session_id, None)
+            raise HTTPException(
+                400,
+                f"Received {sess.received} bytes, exceeds declared total_size "
+                f"{sess.total_size}; session aborted",
+            )
+
+    return UploadSessionOut(
+        session_id=session_id,
+        filename=sess.filename,
+        total_size=sess.total_size,
+        received=sess.received,
+    )
+
+
+@router.get("/uploads/{session_id}", response_model=UploadSessionOut)
+def get_upload_session(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    session_id: str,
+) -> UploadSessionOut:
+    """Inspect session state. Used by clients to resume after a network
+    blip (find out how many bytes the server already has)."""
+    sess = _get_session(session_id)
+    return UploadSessionOut(
+        session_id=session_id,
+        filename=sess.filename,
+        total_size=sess.total_size,
+        received=sess.received,
+    )
+
+
+@router.post("/uploads/{session_id}/finalize", response_model=MatchOut)
+def finalize_upload(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    session_id: str,
+) -> MatchOut:
+    """Promote the .part file to its final name and ingest into the match."""
+    sess = _get_session(session_id)
+    with sess.lock:
+        if sess.received != sess.total_size:
+            raise HTTPException(
+                409,
+                f"Cannot finalize: received {sess.received} of {sess.total_size} bytes",
+            )
+        folder = _resolve_match_folder(team, tournament, date, match)
+        # The destination slot was reserved at session start, but check
+        # again in case another flow (manual file drop + rescan, second
+        # session) grabbed it in the meantime.
+        final_path = folder / sess.filename
+        if final_path.exists():
+            final_path = _next_available_name(folder, sess.filename)
+            sess.filename = final_path.name
+        os.replace(sess.part_path, final_path)
+        with _sessions_lock:
+            _sessions.pop(session_id, None)
+    m = _ingest_file_into_match(team, tournament, date, match, final_path)
     return serialize_match(team, tournament, date, match, m)
+
+
+@router.delete("/uploads/{session_id}")
+def cancel_upload(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    session_id: str,
+) -> dict[str, bool]:
+    """Cancel an in-progress upload. Removes the .part file."""
+    with _sessions_lock:
+        sess = _sessions.pop(session_id, None)
+    if sess is not None:
+        sess.part_path.unlink(missing_ok=True)
+    return {"cancelled": True}
+
+
+# --- Server-side path import --------------------------------------------------
+
+
+@router.post("/import-path", response_model=ImportPathOut)
+def import_from_path(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    body: ImportPathIn,
+) -> ImportPathOut:
+    """Ingest one or more video files from a local server-side path.
+
+    Bypasses HTTP transfer entirely - the path is read directly by the
+    service process from the local filesystem. Useful when the browser
+    and server are on the same machine and the source clip already
+    sits somewhere accessible to the service user.
+
+    `source_path` may point at:
+      - a single video file: imported as one clip.
+      - a directory: all top-level video files in it are imported, in
+        sorted filename order.
+
+    `mode` selects copy (default, non-destructive) or move (instant
+    rename when source and dest are on the same drive, otherwise a
+    copy+delete). Move is preferable for large files to avoid doubling
+    disk usage during ingest.
+    """
+    src = Path(body.source_path).expanduser()
+    if not src.is_absolute():
+        raise HTTPException(400, "source_path must be absolute")
+    if not src.exists():
+        raise HTTPException(404, f"Source not found: {src}")
+
+    if src.is_dir():
+        files = sorted(
+            p for p in src.iterdir()
+            if p.is_file() and p.suffix.lower() in _VIDEO_EXTENSIONS
+        )
+        if not files:
+            raise HTTPException(
+                400, f"No recognized video files in directory: {src}"
+            )
+    else:
+        if src.suffix.lower() not in _VIDEO_EXTENSIONS:
+            raise HTTPException(
+                400, f"Not a recognized video file extension: {src.suffix}"
+            )
+        files = [src]
+
+    folder = _resolve_match_folder(team, tournament, date, match)
+    move = body.mode == "move"
+
+    # Load once, mutate across all files, save once at the end. Avoids
+    # N round-trips through the on-disk match.json.
+    m = load_match_or_404(team, tournament, date, match)
+    imported_names: list[str] = []
+    for src_file in files:
+        dest = _next_available_name(folder, src_file.name)
+        try:
+            if move:
+                # `os.replace` does an atomic rename when source and
+                # dest are on the same volume; falls back to copy+
+                # remove on cross-volume moves (shutil.move handles
+                # both).
+                shutil.move(str(src_file), str(dest))
+            else:
+                shutil.copy2(src_file, dest)
+        except OSError as exc:
+            raise HTTPException(
+                500, f"Failed to {'move' if move else 'copy'} {src_file}: {exc}"
+            ) from exc
+        _ingest_file_into_match(
+            team, tournament, date, match, dest, m=m, save=False
+        )
+        imported_names.append(dest.name)
+
+    save_match(team, tournament, date, match, m)
+    return ImportPathOut(
+        imported=imported_names,
+        match=serialize_match(team, tournament, date, match, m),
+    )
 
 
 @router.put("", response_model=MatchOut)

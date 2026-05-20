@@ -202,6 +202,23 @@ Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
 Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
     -Filter "system.webServer/proxy" -Name "responseBufferLimit" -Value 0
 
+# Upload read-ahead. IIS modules (auth, request filtering) want to
+# inspect the first N bytes of every request body before handing it
+# off to ARR. Default is 49,152 bytes (48 KB), which can produce
+# mysterious mid-upload stalls on multi-hundred-MB video uploads when
+# the module pipeline interacts with chunked transfer encoding or
+# auth challenges - the browser's progress bar freezes at some non-100%
+# percentage and no POST shows up in the backend's access log. Bumping
+# this to 32 MiB covers the entire multipart header section of any
+# realistic clip upload, after which ARR streams the rest.
+#
+# Set at applicationHost level rather than web.config because the
+# `system.webServer/serverRuntime` section is locked by default and a
+# web.config override yields HTTP 500.19 "This configuration section
+# cannot be used at this path" (error 0x80070021).
+Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
+    -Filter "system.webServer/serverRuntime" -Name "uploadReadAheadSize" -Value 33554432
+
 # ---- Tear down legacy standalone 'MatchEditor' site --------------------------
 $legacy = Get-Website -Name "MatchEditor" -ErrorAction SilentlyContinue
 if ($legacy) {

@@ -205,6 +205,57 @@ class ReorderClipsIn(BaseModel):
     clip_ids: list[str]
 
 
+class UploadSessionStartIn(BaseModel):
+    """Body for `POST .../clips/uploads` (begin a chunked upload).
+
+    `filename` is the source basename - the server may rename to avoid
+    collisions and reports the resolved name back via `UploadSessionOut`.
+    `total_size` is the full source length in bytes; the server uses it
+    to validate that chunks don't overrun and to decide when finalize
+    is allowed.
+    """
+
+    filename: str
+    total_size: int
+
+
+class UploadSessionOut(BaseModel):
+    """Server view of a chunked-upload session.
+
+    Returned by session-create, chunk-append, get, in roughly the same
+    shape so the client can poll the same model after a network blip
+    to recover its current offset.
+    """
+
+    session_id: str
+    filename: str
+    total_size: int
+    received: int
+
+
+class ImportPathIn(BaseModel):
+    """Body for `POST .../clips/import-path` (server-side ingest).
+
+    `source_path` must be an absolute path on the server's filesystem.
+    May point at a single video file or a directory of them.
+    `mode` is "copy" (default, non-destructive) or "move" (which uses
+    `shutil.move` - rename when same-volume, copy+delete when across).
+    """
+
+    source_path: str
+    mode: str = "copy"  # "copy" | "move"
+
+
+class ImportPathOut(BaseModel):
+    """Result of a path-import. `imported` is the list of destination
+    basenames added to the match folder (collision-resolved). `match`
+    is the updated match so the UI can refresh without an extra GET.
+    """
+
+    imported: list[str]
+    match: MatchOut
+
+
 class EventCreateIn(BaseModel):
     type: str
     clip_id: Optional[str] = None

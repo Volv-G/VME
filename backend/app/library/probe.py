@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from .ffmpeg_tools import ffprobe_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,12 +31,10 @@ class VideoInfo:
 
 
 def _ffprobe_path() -> str:
-    """Return path to ffprobe.
-
-    `imageio-ffmpeg` bundles ffmpeg only; ffprobe must be on PATH (the user
-    has it). We fall back to plain `ffprobe` if it is.
-    """
-    return "ffprobe"
+    """Return path to ffprobe. Delegates to the shared resolver in
+    `app.library.ffmpeg_tools` so probe + transcode share the same
+    discovery logic and the same VME_FFPROBE override."""
+    return ffprobe_path()
 
 
 def probe(path: str | Path) -> Optional[VideoInfo]:

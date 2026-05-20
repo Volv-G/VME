@@ -240,7 +240,11 @@ class Match:
             "fps": self.fps,
             "clips": [c.to_dict() for c in self.clips],
             "events": [event_to_dict(e) for e in self.events],
-            "opponent_roster": self.opponent_roster.to_dict(),
+            # `include_admin=False`: opponent's youtube/naming
+            # settings are meaningless (the opponent isn't uploading
+            # to your channel and doesn't influence your file
+            # naming). Strips those keys so match.json stays clean.
+            "opponent_roster": self.opponent_roster.to_dict(include_admin=False),
         }
 
     @classmethod

@@ -169,14 +169,32 @@ class Roster:
                 return p
         return None
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
+    def to_dict(self, *, include_admin: bool = True) -> dict[str, Any]:
+        """Serialize the roster.
+
+        `include_admin` controls whether the team-owner-only blocks
+        (`youtube`, `naming`) are emitted. They're meaningful for the
+        team's OWN roster.json - that's where you configure where YOUR
+        renders get uploaded and how YOUR output files are named - but
+        carry no meaning for the opponent_roster embedded in a match
+        (the opponent isn't going to upload anything to your channel
+        nor influence your output paths). `Match.to_dict` passes False
+        so old match.json files stop accumulating `"youtube": {...}`
+        / `"naming": {...}` junk under `opponent_roster`.
+
+        Loading is always lenient: `from_dict` accepts either flavor,
+        so a freshly-saved match.json (no admin fields) and a legacy
+        one (admin fields present from the bug era) both load cleanly.
+        """
+        out: dict[str, Any] = {
             "team_name": self.team_name,
             "team_color": self.team_color,
-            "youtube": self.youtube.to_dict(),
-            "naming": self.naming.to_dict(),
-            "players": [p.to_dict() for p in self.players],
         }
+        if include_admin:
+            out["youtube"] = self.youtube.to_dict()
+            out["naming"] = self.naming.to_dict()
+        out["players"] = [p.to_dict() for p in self.players]
+        return out
 
     @classmethod
     def from_dict(cls, data: Any) -> "Roster":

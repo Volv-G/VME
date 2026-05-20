@@ -1,8 +1,14 @@
-"""Match-level endpoints: list, create, fetch, update, delete, rescan.
+"""Match-level endpoints: list, create, fetch, update, delete.
 
 Match identity is `(team, tournament, date, name)` where `name` is the
-opponent-derived folder leaf. The `dates/{date}` URL segment is what makes
-the (date, opponent) pair routable.
+opponent-derived folder leaf. The `dates/{date}` URL segment is what
+makes the (date, opponent) pair routable.
+
+Note: there is intentionally no dedicated `/rescan` endpoint. Every
+GET on this resource goes through `load_match_or_404` ->
+`scanner.load_or_create_match` -> `reconcile_clips`, which adds any
+video files that have appeared in the match folder since the last
+load. The frontend gets the same effect just by refetching the match.
 """
 
 from __future__ import annotations
@@ -106,10 +112,4 @@ def delete_match(
     return {"deleted": True}
 
 
-@router.post("/{match}/rescan", response_model=MatchOut)
-def rescan_match(team: str, tournament: str, date: str, match: str) -> MatchOut:
-    if not paths.match_dir(team, tournament, date, match).exists():
-        raise HTTPException(404, "Match folder not found")
-    m = scanner.load_or_create_match(team, tournament, date, match)
-    save_match(team, tournament, date, match, m)
-    return serialize_match(team, tournament, date, match, m)
+

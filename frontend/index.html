@@ -3,6 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- %BASE_URL% expands to "/" in dev and "/vme/" in prod builds, so
+         the favicon resolves correctly under both. The PNG lives in
+         frontend/public/ - Vite copies the entire `public/` tree to the
+         build root verbatim. -->
+    <link rel="icon" type="image/png" href="%BASE_URL%favicon.png" />
     <title>Match Editor</title>
   </head>
   <body>

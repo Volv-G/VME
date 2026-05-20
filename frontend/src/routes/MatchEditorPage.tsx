@@ -89,18 +89,39 @@ export function MatchEditorPage() {
     playerRef.current?.seekToGlobalFrame(globalFrame);
   }
 
-  async function uploadClip(file: File, onProgress: (pct: number) => void) {
-    const m = await api.uploadClip(team, tournament, date, match, file, onProgress);
+  async function uploadClip(
+    file: File,
+    onProgress: (pct: number) => void,
+    signal?: AbortSignal
+  ) {
+    const m = await api.uploadClip(
+      team,
+      tournament,
+      date,
+      match,
+      file,
+      onProgress,
+      signal
+    );
     setData(m);
+  }
+  async function importClipPath(sourcePath: string, mode: "copy" | "move") {
+    const res = await api.importClipPath(
+      team,
+      tournament,
+      date,
+      match,
+      sourcePath,
+      mode
+    );
+    setData(res.match);
+    return res.imported;
   }
   async function reorderClips(ids: string[]) {
     setData(await api.reorderClips(team, tournament, date, match, ids));
   }
   async function deleteClip(id: string) {
     setData(await api.deleteClip(team, tournament, date, match, id));
-  }
-  async function rescan() {
-    setData(await api.rescanMatch(team, tournament, date, match));
   }
   async function createEvent(body: Parameters<typeof api.createEvent>[4]) {
     // Capture the existing event ids BEFORE the call so we can identify
@@ -225,9 +246,9 @@ export function MatchEditorPage() {
         <ClipManager
           clips={data.clips}
           onUpload={uploadClip}
+          onImportPath={importClipPath}
           onReorder={reorderClips}
           onDelete={deleteClip}
-          onRescan={rescan}
         />
       </Modal>
 

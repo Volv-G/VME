@@ -186,43 +186,128 @@ export const api = {
       method: "DELETE",
     });
   },
-  async rescanMatch(
-    team: string,
-    tournament: string,
-    date: string,
-    match: string
-  ): Promise<MatchDto> {
-    return fetchJson<MatchDto>(
-      `${matchBase(team, tournament, date, match)}/rescan`,
-      { method: "POST" }
-    );
-  },
 
   // ---- Clips ------------------------------------------------------------
+  /** Upload a clip file using the chunked / resumable protocol.
+   *
+   *  Why chunked: IIS/ARR use signed int32 byte counters internally and
+   *  silently stall single requests larger than ~2 GiB even when
+   *  maxAllowedContentLength is raised. Full-length match clips are
+   *  routinely 2-3 GiB, so they have to be split into smaller PUTs.
+   *  Each chunk request is well under the barrier and any one chunk
+   *  failing can be retried (or the whole upload resumed by querying
+   *  the session's `received` and slicing from there).
+   *
+   *  Protocol (matches backend `app/api/clips.py`):
+   *    1. POST .../clips/uploads        -> {session_id, received: 0}
+   *    2. PUT  .../clips/uploads/{sid}/chunk?offset=N   (repeat)
+   *    3. POST .../clips/uploads/{sid}/finalize         -> MatchDto
+   *  Cancel via DELETE .../clips/uploads/{sid}.
+   *
+   *  `signal` lets the caller abort mid-upload (we also DELETE the
+   *  server session so the .part file is cleaned up). Progress is
+   *  reported per chunk (~50 events for a 3 GiB clip at 32 MiB chunks)
+   *  which is plenty smooth for a progress bar.
+   */
   async uploadClip(
     team: string,
     tournament: string,
     date: string,
     match: string,
     file: File,
-    onProgress?: (pct: number) => void
+    onProgress?: (pct: number) => void,
+    signal?: AbortSignal
   ): Promise<MatchDto> {
-    const url = `${BASE}${matchBase(team, tournament, date, match)}/clips`;
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", url);
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && onProgress) onProgress((100 * e.loaded) / e.total);
-      };
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
-        else reject(new Error(xhr.responseText || xhr.statusText));
-      };
-      xhr.onerror = () => reject(new Error("Upload failed"));
-      const fd = new FormData();
-      fd.append("file", file);
-      xhr.send(fd);
+    const CHUNK_SIZE = 32 * 1024 * 1024; // 32 MiB - well under the 2 GiB IIS cap
+    const base = `${BASE}${matchBase(team, tournament, date, match)}/clips/uploads`;
+
+    // --- 1. open session
+    const startRes = await fetch(base, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: file.name, total_size: file.size }),
+      signal,
     });
+    if (!startRes.ok) {
+      throw new Error(`session create failed: ${startRes.status} ${await startRes.text()}`);
+    }
+    const session = (await startRes.json()) as {
+      session_id: string;
+      received: number;
+    };
+    const sid = session.session_id;
+
+    // Wrap the rest so we DELETE the session on abort / failure to free
+    // the server-side .part file. Avoids accumulating orphan tempfiles
+    // when uploads are repeatedly cancelled.
+    const cleanup = () => {
+      // Best-effort; ignore failures (session might already be gone).
+      fetch(`${base}/${sid}`, { method: "DELETE" }).catch(() => {});
+    };
+    const onAbort = () => cleanup();
+    signal?.addEventListener("abort", onAbort);
+
+    try {
+      // --- 2. upload chunks sequentially
+      let received = session.received;
+      while (received < file.size) {
+        const end = Math.min(received + CHUNK_SIZE, file.size);
+        const chunk = file.slice(received, end);
+        const putRes = await fetch(`${base}/${sid}/chunk?offset=${received}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: chunk,
+          signal,
+        });
+        if (!putRes.ok) {
+          throw new Error(`chunk upload failed: ${putRes.status} ${await putRes.text()}`);
+        }
+        const state = (await putRes.json()) as { received: number };
+        received = state.received;
+        if (onProgress) onProgress((100 * received) / file.size);
+      }
+
+      // --- 3. finalize -> server probes, transcodes if needed, returns MatchDto
+      const finRes = await fetch(`${base}/${sid}/finalize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal,
+      });
+      if (!finRes.ok) {
+        throw new Error(`finalize failed: ${finRes.status} ${await finRes.text()}`);
+      }
+      return (await finRes.json()) as MatchDto;
+    } catch (err) {
+      // If the failure wasn't an abort, still try to clean up the
+      // server session so it doesn't sit there until the TTL fires.
+      if (!signal?.aborted) cleanup();
+      throw err;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
+  },
+
+  /** Server-side import: instruct the backend to copy/move a file or a
+   *  directory of files from a local path on the server into the match
+   *  folder. Skips HTTP body transfer entirely - best option when the
+   *  browser and the server are on the same machine and the user knows
+   *  where the source clips live on disk.
+   */
+  async importClipPath(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    sourcePath: string,
+    mode: "copy" | "move" = "copy"
+  ): Promise<{ imported: string[]; match: MatchDto }> {
+    return fetchJson(
+      `${matchBase(team, tournament, date, match)}/clips/import-path`,
+      {
+        method: "POST",
+        body: JSON.stringify({ source_path: sourcePath, mode }),
+      }
+    );
   },
   async reorderClips(
     team: string,

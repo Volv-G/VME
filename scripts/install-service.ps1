@@ -59,6 +59,17 @@ $behindProxy = ($secrets["VME_BEHIND_PROXY"] -eq "1")
 $backendPort = if ($secrets["VME_BACKEND_PORT"]) { [int]$secrets["VME_BACKEND_PORT"] } else { 8000 }
 $backendHost = if ($secrets["VME_BACKEND_HOST"]) { $secrets["VME_BACKEND_HOST"] } else { "127.0.0.1" }
 
+# Echo the resolved data dir up front so misconfiguration (e.g. forgot
+# to set VME_DATA_DIR -> service silently uses PROJECT_ROOT) is
+# visible at install time rather than weeks later when files don't
+# show up where you expect. Matches app/config.py's resolution rules.
+$resolvedDataDir = if ($secrets["VME_DATA_DIR"]) {
+    $secrets["VME_DATA_DIR"]
+} else {
+    "(unset - service will use PROJECT_ROOT subfolders for media/logs/certs)"
+}
+Write-Host "Data dir : $resolvedDataDir" -ForegroundColor Cyan
+
 if ($behindProxy) {
     Write-Host "Installing in proxy mode (uvicorn on $backendHost`:$backendPort, IIS in front)." -ForegroundColor Cyan
 } else {
@@ -88,10 +99,28 @@ if (-not (Test-Path $nssmExe)) {
 }
 
 # ---- Tear down previous install ----------------------------------------------
+# `_common.ps1` sets $ErrorActionPreference='Stop', which promotes any
+# stderr write from a native command (e.g. nssm's "The service has not
+# been started" message when we try to stop an already-stopped one) into
+# a terminating error and aborts the script. We're explicitly OK with
+# both stop and remove failing here - the goal is just "make sure the
+# service isn't installed before we install a fresh one" - so we wrap
+# the two calls and only escalate if the service is STILL there
+# afterward.
 if (Get-Service $serviceName -ErrorAction SilentlyContinue) {
     Write-Host "Stopping existing service..." -ForegroundColor Yellow
-    & $nssmExe stop $serviceName 2>$null | Out-Null
-    & $nssmExe remove $serviceName confirm | Out-Null
+    $oldEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $nssmExe stop $serviceName 2>&1 | Out-Null
+        & $nssmExe remove $serviceName confirm 2>&1 | Out-Null
+    } finally {
+        $ErrorActionPreference = $oldEAP
+    }
+    if (Get-Service $serviceName -ErrorAction SilentlyContinue) {
+        Write-Error "Failed to remove existing '$serviceName' service. Stop it manually and re-run."
+        exit 1
+    }
 }
 
 Write-Host "Installing service '$serviceName'..." -ForegroundColor Cyan
@@ -139,7 +168,26 @@ foreach ($key in @("VME_USERNAME", "VME_PASSWORD_HASH", "VME_AUTH_REQUIRED",
                    "VME_CERT_FILE", "VME_KEY_FILE",
                    "VME_HTTP_PORT", "VME_HTTPS_PORT", "VME_BIND_HOST",
                    "VME_PUBLIC_HOST", "VME_BEHIND_PROXY",
-                   "VME_BACKEND_HOST", "VME_BACKEND_PORT", "VME_URL_PREFIX")) {
+                   "VME_BACKEND_HOST", "VME_BACKEND_PORT", "VME_URL_PREFIX",
+                   # Data-dir overrides. Without these in the service
+                   # env, the service falls back to PROJECT_ROOT (see
+                   # app/config.py) - which silently splits state
+                   # between the dev shell's chosen dir and the
+                   # service's process dir. Allowlisting them here
+                   # keeps the running service in sync with whatever
+                   # the dev tooling uses.
+                   "VME_DATA_DIR", "VME_MEDIA_ROOT", "VME_LOG_ROOT", "VME_CERT_DIR",
+                   # Tool overrides. `imageio_ffmpeg` ships ffmpeg only;
+                   # the editor still needs a real ffprobe for clip
+                   # probing (fps + frame count) and a real ffmpeg for
+                   # transcoding uploads to the project fps. Without
+                   # these the service falls back to `shutil.which`
+                   # against the SERVICE PATH (not the dev shell's
+                   # PATH), which is usually empty -> probes return
+                   # None -> clips silently get 30 fps / 0 frames and
+                   # the timeline appears empty after a rescan. See
+                   # app/library/ffmpeg_tools.py for the resolver.
+                   "VME_FFPROBE", "VME_FFMPEG")) {
     if ($secrets.ContainsKey($key) -and $secrets[$key]) {
         $envPairs += "$key=$($secrets[$key])"
     }

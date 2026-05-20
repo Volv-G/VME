@@ -13,17 +13,16 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .ffmpeg_tools import ffmpeg_path
+
 logger = logging.getLogger(__name__)
 
 
 def _ffmpeg_path() -> str:
-    """Return path to ffmpeg.
-
-    Same convention as `probe._ffprobe_path`: expect it on PATH. The user
-    already has ffprobe working, so ffmpeg from the same package will be
-    available too.
-    """
-    return "ffmpeg"
+    """Return path to ffmpeg. Delegates to the shared resolver in
+    `app.library.ffmpeg_tools` so probe + transcode share the same
+    discovery logic and the same VME_FFMPEG override."""
+    return ffmpeg_path()
 
 
 def transcode_to_fps(src: Path, target_fps: float) -> bool:
