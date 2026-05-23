@@ -58,6 +58,13 @@ class FullRenderInfo:
     # has been recorded for this file. None when no upload exists.
     youtube_video_id: str | None = None
     youtube_uploaded_at: float | None = None
+    # The privacyStatus YouTube actually applied to the upload. Read
+    # from the sidecar (the upload job records both requested and
+    # actual; we surface the actual one because that's what the video
+    # is set to right now). Lets the UI flag downgrades caused by
+    # Google Cloud Console "Testing" mode.
+    youtube_privacy_status: str | None = None
+    youtube_requested_privacy_status: str | None = None
 
 
 @dataclass
@@ -314,6 +321,14 @@ def list_team_full_renders(team: str) -> list[FullRenderInfo]:
                             ),
                             youtube_uploaded_at=(
                                 sidecar.get("uploaded_at") if sidecar else None
+                            ),
+                            youtube_privacy_status=(
+                                sidecar.get("privacy_status") if sidecar else None
+                            ),
+                            youtube_requested_privacy_status=(
+                                sidecar.get("requested_privacy_status")
+                                if sidecar
+                                else None
                             ),
                         )
                     )

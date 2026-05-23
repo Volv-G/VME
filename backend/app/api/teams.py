@@ -119,6 +119,8 @@ def list_full_renders(team: str) -> list[FullRenderOut]:
             match_index=r.match_index,
             youtube_video_id=r.youtube_video_id,
             youtube_uploaded_at=r.youtube_uploaded_at,
+            youtube_privacy_status=r.youtube_privacy_status,
+            youtube_requested_privacy_status=r.youtube_requested_privacy_status,
         )
         for r in scanner.list_team_full_renders(team)
     ]

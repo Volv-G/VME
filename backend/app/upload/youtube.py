@@ -185,6 +185,12 @@ def _build_service():
 class UploadResult:
     video_id: str
     video_url: str  # https://youtu.be/<id>
+    # The privacyStatus YouTube actually applied to the upload, read
+    # back from the videos.insert response. Will differ from the
+    # requested value when Google silently downgrades the upload (see
+    # `upload_video` for the OAuth test-mode caveat).
+    actual_privacy_status: str = ""
+    requested_privacy_status: str = ""
 
 
 def upload_video(
@@ -289,6 +295,37 @@ def upload_video(
     video_id = (response or {}).get("id")
     if not video_id:
         raise RuntimeError(f"YouTube did not return a video id: {response!r}")
+
+    # YouTube silently downgrades `privacyStatus` to `private` when the
+    # OAuth client is in Google Cloud Console's "Testing" publishing
+    # status, OR when the channel hasn't completed phone verification.
+    # The API does NOT return an error in either case - the upload
+    # succeeds and the video just sits as private. Read back the actual
+    # value so we can log a loud warning and store the truth in the
+    # sidecar; users were otherwise discovering this hours later when
+    # they checked the channel.
+    actual_privacy = (
+        ((response or {}).get("status") or {}).get("privacyStatus")
+        or privacy_status
+    )
+    if actual_privacy != privacy_status:
+        logger.warning(
+            "YouTube downgraded privacyStatus %r -> %r for video %s. "
+            "This usually means the OAuth client is in 'Testing' mode "
+            "(Google Cloud Console -> OAuth consent screen -> Publishing "
+            "status: In production) OR the YouTube channel isn't "
+            "phone-verified. Until one of those is fixed, every upload "
+            "will land as 'private'.",
+            privacy_status,
+            actual_privacy,
+            video_id,
+        )
+    else:
+        logger.info(
+            "YouTube upload %s succeeded with privacyStatus=%r",
+            video_id,
+            actual_privacy,
+        )
     # Final progress tick - the last chunk's response sometimes skips a
     # progress callback because `status` was None on completion.
     if progress_cb is not None:
@@ -323,4 +360,6 @@ def upload_video(
     return UploadResult(
         video_id=video_id,
         video_url=f"https://youtu.be/{video_id}",
+        actual_privacy_status=actual_privacy,
+        requested_privacy_status=privacy_status,
     )

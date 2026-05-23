@@ -110,7 +110,11 @@ def _common_match_vars(
     """
     idx, _ = paths.parse_match_folder(match)
     return {
-        "date": paths.safe_segment(date) if date else "no-date",
+        # Reformat to YYYY.MM.DD - folder slugs use `-` separators on
+        # disk but the rendered output / YouTube titles read better
+        # with dots. `format_date_for_template` falls back to the
+        # original segment when the input isn't a recognizable date.
+        "date": paths.format_date_for_template(date),
         "opponent": (
             paths.safe_segment(match_obj.opponent)
             if match_obj.opponent

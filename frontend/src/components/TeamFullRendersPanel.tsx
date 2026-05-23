@@ -151,19 +151,71 @@ export function TeamFullRendersPanel({ team }: Props) {
                   </div>
                 </div>
                 {uploaded ? (
-                  <a
-                    href={ytUrl!}
-                    target="_blank"
-                    rel="noreferrer"
-                    title={
-                      r.youtube_uploaded_at
-                        ? `Uploaded ${formatAge(r.youtube_uploaded_at)}`
-                        : "Uploaded"
-                    }
-                    style={{ color: "#3aa55d", whiteSpace: "nowrap" }}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-end",
+                      gap: 2,
+                      whiteSpace: "nowrap",
+                    }}
                   >
-                    ▶ on YouTube
-                  </a>
+                    <a
+                      href={ytUrl!}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={
+                        r.youtube_uploaded_at
+                          ? `Uploaded ${formatAge(r.youtube_uploaded_at)}`
+                          : "Uploaded"
+                      }
+                      style={{ color: "#3aa55d" }}
+                    >
+                      ▶ on YouTube
+                    </a>
+                    {/* Show the privacy status as a small badge. When
+                        YouTube downgraded the upload (requested !=
+                        actual) the badge turns warning-colored and the
+                        tooltip explains the OAuth-Testing-mode cause -
+                        without this users discover hours later that
+                        their "public" upload is actually private. */}
+                    {r.youtube_privacy_status && (() => {
+                      const downgraded =
+                        !!r.youtube_requested_privacy_status &&
+                        r.youtube_requested_privacy_status !==
+                          r.youtube_privacy_status;
+                      return (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            padding: "1px 6px",
+                            borderRadius: 3,
+                            border: "1px solid",
+                            borderColor: downgraded
+                              ? "var(--warn, #d29922)"
+                              : "var(--border)",
+                            color: downgraded
+                              ? "var(--warn, #d29922)"
+                              : "var(--text-dim)",
+                            background: downgraded
+                              ? "rgba(210, 153, 34, 0.10)"
+                              : "transparent",
+                          }}
+                          title={
+                            downgraded
+                              ? `YouTube forced privacy=${r.youtube_privacy_status} ` +
+                                `(you requested ${r.youtube_requested_privacy_status}). ` +
+                                `Usually means the OAuth client is in Google Cloud Console's ` +
+                                `Testing mode - switch to Production to allow public/unlisted uploads.`
+                              : `Privacy: ${r.youtube_privacy_status}`
+                          }
+                        >
+                          {downgraded ? "⚠ " : ""}
+                          {r.youtube_privacy_status}
+                        </span>
+                      );
+                    })()}
+                  </div>
                 ) : (
                   <button
                     onClick={() => upload(r)}

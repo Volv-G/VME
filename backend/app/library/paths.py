@@ -24,6 +24,7 @@ multiple matches against the same opponent on different days don't collide.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 
 from ..config import MEDIA_ROOT
@@ -41,6 +42,46 @@ def safe_segment(name: str) -> str:
     cleaned = _INVALID_FS_CHARS.sub("_", name).strip(" .")
     cleaned = re.sub(r"\s+", "_", cleaned)
     return cleaned or "unnamed"
+
+
+# Date inputs we accept when reformatting `{date}` for filenames /
+# titles. Folders are conventionally written as `YYYY-MM-DD` (ISO), but
+# the library is lenient about typos and legacy uses, so we accept a
+# few common alternates.
+_DATE_INPUT_FORMATS = (
+    "%Y-%m-%d",     # canonical folder slug, e.g. 2026-05-17
+    "%Y.%m.%d",     # already-dotted form (idempotent reformat)
+    "%Y_%m_%d",     # underscored
+    "%Y/%m/%d",     # forward-slash
+    "%d-%m-%Y",     # day-first variants - rarer but harmless to accept
+    "%d.%m.%Y",
+    "%m/%d/%Y",     # US-style
+)
+
+
+def format_date_for_template(date: str) -> str:
+    """Reformat a date string to `YYYY.MM.DD` for use in filenames /
+    titles.
+
+    Match folders live on disk as `YYYY-MM-DD` (the canonical ISO
+    slug) but the rendered output - and YouTube titles - read better
+    with `YYYY.MM.DD`. This helper is the single place that conversion
+    happens, so render_naming and upload templates stay aligned.
+
+    Falls back to the original sanitized segment when the input doesn't
+    match any known date format (e.g. a hand-edited folder name like
+    `friday-night`). Better to render the original string than to fail
+    a whole render with a parse error.
+    """
+    if not date:
+        return "no-date"
+    for fmt in _DATE_INPUT_FORMATS:
+        try:
+            parsed = datetime.strptime(date, fmt)
+        except ValueError:
+            continue
+        return parsed.strftime("%Y.%m.%d")
+    return safe_segment(date)
 
 
 # Match folders are named `<NN>_<Opponent>` where NN is the 1-based order

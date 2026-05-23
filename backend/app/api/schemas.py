@@ -105,6 +105,13 @@ class FullRenderOut(BaseModel):
     match_index: Optional[int] = None
     youtube_video_id: Optional[str] = None
     youtube_uploaded_at: Optional[float] = None
+    # `youtube_privacy_status` is what the video is set to *right now*
+    # on YouTube (read back from the upload response and persisted in
+    # the sidecar). May differ from `youtube_requested_privacy_status`
+    # when Google silently downgraded the upload - the UI uses the
+    # mismatch to flag the row.
+    youtube_privacy_status: Optional[str] = None
+    youtube_requested_privacy_status: Optional[str] = None
 
 
 class UploadYouTubeRequestIn(BaseModel):

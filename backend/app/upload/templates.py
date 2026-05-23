@@ -2,7 +2,11 @@
 
 Variables (all strings, never None) made available to `str.format(...)`:
 
-  {date}              - the match date string (folder slug, e.g. "2026-05-17")
+  {date}              - the match date in `YYYY.MM.DD` form (e.g.
+                        "2026.05.17"). Folders live on disk as ISO
+                        (`YYYY-MM-DD`) but the rendered title looks
+                        cleaner with dots; the conversion happens in
+                        `paths.format_date_for_template`.
   {team}              - home team display name
   {opponent}          - opponent display name
   {tournament_abbr}   - short tournament name (sidecar or folder fallback)
@@ -76,7 +80,7 @@ def build_vars(
     abbr = tournament_info.resolve_abbreviation(tournament_slug_pretty)
     full = tournament_info.resolve_full_name(tournament_slug_pretty)
     return TemplateVars(
-        date=date,
+        date=paths.format_date_for_template(date),
         team=(roster.team_name or _slug_to_display(team)),
         opponent=(match_obj.opponent or _slug_to_display(match)),
         tournament_abbr=abbr,

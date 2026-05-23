@@ -439,7 +439,12 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
 
     # Persist the upload record alongside the file. Subsequent listings
     # (team dashboard, render panel) pick this up via
-    # `scanner.load_youtube_sidecar`.
+    # `scanner.load_youtube_sidecar`. We record BOTH the privacy we
+    # requested AND what YouTube actually applied - they can diverge
+    # when the OAuth app is in Testing mode (see upload_video for the
+    # full explanation), and showing the requested value would lie to
+    # the user about the video's actual state.
+    actual_privacy = result.actual_privacy_status or privacy_status
     scanner.save_youtube_sidecar(
         file_path,
         {
@@ -447,13 +452,25 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
             "video_url": result.video_url,
             "uploaded_at": time.time(),
             "title": title,
-            "privacy_status": privacy_status,
+            "privacy_status": actual_privacy,
+            "requested_privacy_status": privacy_status,
             "playlist_id": playlist_id,
         },
     )
     # Surface the YouTube URL via `output_filename` so existing job-row
     # UI renders a clickable link (it already treats output_filename
-    # as a download-link target).
+    # as a download-link target). When YouTube downgraded the privacy
+    # we also stash a hint on the job's `message` so the user sees the
+    # mismatch in the queue UI without having to dig into the log file.
+    if actual_privacy != privacy_status:
+        JOBS.update(
+            job.id,
+            message=(
+                f"Uploaded, but YouTube forced privacy={actual_privacy!r} "
+                f"(requested {privacy_status!r}). OAuth app likely in "
+                "Testing mode."
+            ),
+        )
     JOBS.mark_done(job.id, result.video_url)
 
 

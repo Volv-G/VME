@@ -194,6 +194,12 @@ export interface FullRenderDto {
   match_index: number | null;
   youtube_video_id?: string | null;
   youtube_uploaded_at?: number | null;
+  /** privacyStatus YouTube actually applied (read back from the upload
+   *  response). When this differs from `youtube_requested_privacy_status`
+   *  the upload was silently downgraded - most often because the OAuth
+   *  client is in Google Cloud Console's "Testing" publishing state. */
+  youtube_privacy_status?: string | null;
+  youtube_requested_privacy_status?: string | null;
 }
 
 /** Whether the backend can upload to YouTube right now.

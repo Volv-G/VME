@@ -110,7 +110,19 @@ class DigEvent(StatPlayerEvent):
 @register_event
 @dataclass
 class HighlightEvent(StatPlayerEvent):
-    """A highlight moment for a player (no score change)."""
+    """A highlight moment for a player (no score change).
+
+    Deliberately suppresses the popup: a `highlight` exists purely to
+    mark a frame for batch extraction (the `highlights/` render flavor
+    in `render/batch.py`) and shouldn't add visual noise to the full
+    render. Every other PlayerEvent inherits the default popup from
+    `PlayerEvent.overlay_effect`; this one explicitly overrides it to
+    return None.
+    """
 
     type_name: ClassVar[str] = "highlight"
     action_label: ClassVar[str] = "Highlight"
+
+    @property
+    def overlay_effect(self) -> Optional[OverlayEffect]:
+        return None
