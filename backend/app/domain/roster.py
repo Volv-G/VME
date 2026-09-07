@@ -177,6 +177,12 @@ class Roster:
     players: list[Player] = field(default_factory=list)
     team_name: Optional[str] = None
     team_color: Optional[str] = None
+    # Team logo filename, RELATIVE to the roster's own directory: the
+    # team folder for a team roster, the match folder for the opponent
+    # roster embedded in match.json. Relative so the media tree stays
+    # movable (see `paths.team_logo_file` / `paths.opponent_logo_file`).
+    # None = no logo uploaded.
+    team_logo_path: Optional[str] = None
     # Team-level YouTube upload defaults. Always present (defaults applied
     # when the roster.json has no `youtube` block) so call sites can read
     # `roster.youtube.privacy_status` etc. without None-checking.
@@ -227,6 +233,7 @@ class Roster:
         out: dict[str, Any] = {
             "team_name": self.team_name,
             "team_color": self.team_color,
+            "team_logo_path": self.team_logo_path,
         }
         if include_admin:
             out["youtube"] = self.youtube.to_dict()
@@ -242,6 +249,7 @@ class Roster:
             return cls(
                 team_name=data.get("team_name"),
                 team_color=data.get("team_color"),
+                team_logo_path=data.get("team_logo_path"),
                 youtube=YouTubeConfig.from_dict(data.get("youtube")),
                 naming=NamingConfig.from_dict(data.get("naming")),
                 players=[Player.from_dict(p) for p in data.get("players", [])],

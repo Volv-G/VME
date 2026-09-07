@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from ..config import MEDIA_ROOT
 
@@ -142,6 +143,63 @@ def tournament_json_path(team: str, tournament: str) -> Path:
 
 def renders_dir(team: str, tournament: str, date: str, match: str) -> Path:
     return match_dir(team, tournament, date, match) / "renders"
+
+
+# Team logos are stored beside the data they belong to: a team's own
+# logo in its team folder, the opponent's inside the match folder (the
+# opponent roster lives in that match's match.json and may differ from
+# match to match). Stems are fixed; only the extension varies, so an
+# upload replaces any previous logo instead of piling up files.
+TEAM_LOGO_STEM = "logo"
+OPPONENT_LOGO_STEM = "opponent_logo"
+# Formats accepted for logo uploads. PNG/WebP keep transparency, which
+# matters for overlaying a logo on a thumbnail.
+LOGO_EXTENSIONS = {".png", ".webp", ".jpg", ".jpeg", ".gif", ".bmp"}
+
+
+# Player photos live in one folder per team, named by jersey number, so
+# a rename of the player doesn't orphan the file and two players can't
+# collide. Referenced from roster.json as `players/<NN>.<ext>`, relative
+# to the team folder (same convention as team logos).
+PLAYER_PHOTO_SUBDIR = "players"
+
+
+def player_photo_dir(team: str) -> Path:
+    return team_dir(team) / PLAYER_PHOTO_SUBDIR
+
+
+def player_photo_stem(number: int) -> str:
+    return f"{number:02d}"
+
+
+def player_photo_file(team: str, filename: str) -> Path:
+    """Absolute path of a player photo from its stored relative name."""
+    return team_dir(team) / Path(filename.replace("\\", "/"))
+
+
+def team_logo_file(team: str, filename: str) -> Path:
+    """Absolute path of a team-roster logo from its stored relative name."""
+    return team_dir(team) / Path(filename).name
+
+
+def opponent_logo_file(
+    team: str, tournament: str, date: str, match: str, filename: str
+) -> Path:
+    """Absolute path of a match's opponent logo from its relative name."""
+    return match_dir(team, tournament, date, match) / Path(filename).name
+
+
+def find_logo(directory: Path, stem: str) -> Optional[Path]:
+    """Existing `<stem>.<ext>` logo in `directory`, if any.
+
+    Used to clean up a previous upload whose extension differs from the
+    incoming one (logo.png -> logo.webp would otherwise leave both).
+    """
+    for ext in LOGO_EXTENSIONS:
+        candidate = directory / f"{stem}{ext}"
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def youtube_sidecar_path(render_path: Path) -> Path:

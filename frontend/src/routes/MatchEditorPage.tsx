@@ -233,6 +233,11 @@ export function MatchEditorPage() {
             onCreate={createEvent}
             onAutoCuts={runAutoCuts}
             onTeamColorChange={setTeamColor}
+            onRosterChanged={load}
+            team={team}
+            tournament={tournament}
+            date={date}
+            match={match}
           />
         </div>
 

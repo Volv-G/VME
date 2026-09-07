@@ -8,6 +8,8 @@ import { stateAtPlayhead } from "./state";
 import { useHotkeyAction } from "../../hotkeys";
 import { eventIcon } from "../eventStyle";
 import { ColorPicker } from "../ColorPicker";
+import { LogoPicker } from "../LogoPicker";
+import { api } from "../../api/client";
 
 type CreateBody = {
   type: string;
@@ -26,6 +28,15 @@ interface Props {
   /** Persist a new team color (team roster for home, match's embedded
    *  opponent roster for away). Wired to the swatch in each team card. */
   onTeamColorChange?: (which: "home" | "opponent", hex: string) => Promise<void>;
+  /** Reload the match after a logo upload/removal so the roster DTOs
+   *  (and therefore the "has a logo" state) reflect what's on disk. */
+  onRosterChanged?: () => Promise<void>;
+  /** Match coordinates - the logo endpoints are path-scoped (team logo
+   *  vs. this match's opponent logo). */
+  team: string;
+  tournament: string;
+  date: string;
+  match: string;
 }
 
 interface ActionDef {
@@ -122,7 +133,15 @@ export function ControlsPanel({
   onCreate,
   onAutoCuts,
   onTeamColorChange,
+  onRosterChanged,
+  team,
+  tournament,
+  date,
+  match,
 }: Props) {
+  // Logos are uploaded immediately (files, not form state); bumping this
+  // version busts the browser cache for the fixed logo filename.
+  const [logoVersion, setLogoVersion] = useState<number>(() => Date.now());
   const live = stateAtPlayhead(data.events, currentFrame);
   const homeName = data.home_roster.team_name || data.team;
   const opponentName = data.opponent_roster.team_name || data.opponent || "Away";
@@ -323,6 +342,25 @@ export function ControlsPanel({
                 : undefined
             }
           />
+          <LogoPicker
+            size={18}
+            label={homeName}
+            url={
+              data.home_roster.team_logo_path
+                ? api.teamLogoUrl(team, logoVersion)
+                : null
+            }
+            onUpload={async (file) => {
+              await api.uploadTeamLogo(team, file);
+              setLogoVersion(Date.now());
+              await onRosterChanged?.();
+            }}
+            onRemove={async () => {
+              await api.deleteTeamLogo(team);
+              setLogoVersion(Date.now());
+              await onRosterChanged?.();
+            }}
+          />
           <strong className="team-name">{homeName}</strong>
           <button
             className="first-serve-btn"
@@ -404,6 +442,37 @@ export function ControlsPanel({
                 ? (hex) => void onTeamColorChange("opponent", hex)
                 : undefined
             }
+          />
+          <LogoPicker
+            size={18}
+            label={opponentName}
+            url={
+              data.opponent_roster.team_logo_path
+                ? api.opponentLogoUrl(
+                    team,
+                    tournament,
+                    date,
+                    match,
+                    logoVersion
+                  )
+                : null
+            }
+            onUpload={async (file) => {
+              await api.uploadOpponentLogo(
+                team,
+                tournament,
+                date,
+                match,
+                file
+              );
+              setLogoVersion(Date.now());
+              await onRosterChanged?.();
+            }}
+            onRemove={async () => {
+              await api.deleteOpponentLogo(team, tournament, date, match);
+              setLogoVersion(Date.now());
+              await onRosterChanged?.();
+            }}
           />
           <strong className="team-name">{opponentName}</strong>
           <button

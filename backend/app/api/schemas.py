@@ -49,6 +49,10 @@ class NamingConfigOut(BaseModel):
 class RosterOut(BaseModel):
     team_name: Optional[str] = None
     team_color: Optional[str] = None
+    # Logo filename relative to the roster's own folder (team dir for a
+    # team roster, match dir for an opponent roster). Managed by the
+    # /logo endpoints; omitted on input means "leave as-is".
+    team_logo_path: Optional[str] = None
     youtube: Optional[YouTubeConfigOut] = None
     naming: Optional[NamingConfigOut] = None
     players: list[PlayerOut] = Field(default_factory=list)
@@ -111,6 +115,8 @@ class FullRenderOut(BaseModel):
     match_index: Optional[int] = None
     # "full" (top-level match render) or "reel" (one player's plays).
     kind: str = "full"
+    # True when a `<file>.thumbnail.jpg` sidecar exists next to the render.
+    has_thumbnail: bool = False
     # Display label of the player a reel belongs to ("#8 Kate G").
     player_label: str = ""
     youtube_video_id: Optional[str] = None

@@ -12,7 +12,16 @@ from fastapi.staticfiles import StaticFiles
 
 from .auth import BasicAuthMiddleware, configure_from_env
 from .config import DATA_DIR, LOG_ROOT, MEDIA_ROOT, STATIC_ROOT
-from .api import clips, events, matches, media, renders, teams, tournaments
+from .api import (
+    clips,
+    events,
+    logos,
+    matches,
+    media,
+    renders,
+    teams,
+    tournaments,
+)
 from .jobs import persistence as jobs_persistence
 from .jobs.dispatcher import DISPATCHER
 
@@ -86,6 +95,7 @@ api.include_router(matches.router)
 api.include_router(clips.router)
 api.include_router(events.router)
 api.include_router(media.router)
+api.include_router(logos.router)
 api.include_router(renders.router)
 app.mount("/api", api)
 

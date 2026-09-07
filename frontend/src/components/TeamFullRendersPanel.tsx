@@ -40,6 +40,10 @@ export function TeamFullRendersPanel({ team }: Props) {
   const [status, setStatus] = useState<YouTubeStatusDto | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Per-row cache-buster: the thumbnail URL is stable, so a regenerated
+  // image only shows up if we change the query string.
+  const [thumbVersion, setThumbVersion] = useState<Record<string, number>>({});
+  const [note, setNote] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -105,6 +109,33 @@ export function TeamFullRendersPanel({ team }: Props) {
     }
   }
 
+  /** Rebuild the thumbnail from the current colors / logos / names, and
+   *  (for an already-uploaded render) replace the live one on YouTube.
+   *  The server reports YouTube's verdict separately from generation, so
+   *  a refused push still leaves a fresh local image. */
+  async function regenerateThumbnail(r: FullRenderDto) {
+    const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
+    setErr(null);
+    setNote(null);
+    setBusyId(id);
+    try {
+      const res = await api.regenerateThumbnail(
+        team,
+        r.tournament,
+        r.date,
+        r.match,
+        r.filename
+      );
+      setThumbVersion((v) => ({ ...v, [id]: Date.now() }));
+      setNote(res.message);
+      await reload();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function upload(r: FullRenderDto) {
     if (!status?.configured) return;
     const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
@@ -156,6 +187,21 @@ export function TeamFullRendersPanel({ team }: Props) {
       </div>
 
       {err && <div className="error" style={{ marginBottom: 8 }}>{err}</div>}
+      {note && (
+        <div
+          className="info"
+          style={{ marginBottom: 8, display: "flex", gap: 8 }}
+        >
+          <span style={{ flex: 1 }}>{note}</span>
+          <button
+            onClick={() => setNote(null)}
+            style={{ padding: "0 6px", fontSize: 11 }}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {renders.length === 0 ? (
         <p className="muted" style={{ margin: 0 }}>
@@ -186,6 +232,41 @@ export function TeamFullRendersPanel({ team }: Props) {
                 className="list-row"
                 style={{ alignItems: "center" }}
               >
+                {r.has_thumbnail && (
+                  <a
+                    href={api.renderThumbnailUrl(
+                      team,
+                      r.tournament,
+                      r.date,
+                      r.match,
+                      r.filename,
+                      thumbVersion[id]
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Generated YouTube thumbnail - click to view full size"
+                    style={{ flex: "0 0 auto", lineHeight: 0 }}
+                  >
+                    <img
+                      src={api.renderThumbnailUrl(
+                        team,
+                        r.tournament,
+                        r.date,
+                        r.match,
+                        r.filename,
+                        thumbVersion[id]
+                      )}
+                      alt=""
+                      width={64}
+                      height={36}
+                      style={{
+                        borderRadius: 3,
+                        border: "1px solid var(--border)",
+                        objectFit: "cover",
+                      }}
+                    />
+                  </a>
+                )}
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div
                     style={{
@@ -256,6 +337,18 @@ export function TeamFullRendersPanel({ team }: Props) {
                         ▶ on YouTube
                       </a>
                       <button
+                        onClick={() => regenerateThumbnail(r)}
+                        disabled={busyId === id}
+                        title={
+                          "Regenerate the thumbnail from the current team " +
+                          "colors, logos and names, and replace it on " +
+                          "YouTube too."
+                        }
+                        style={{ padding: "1px 6px", fontSize: 11 }}
+                      >
+                        {busyId === id ? "…" : "🖼"}
+                      </button>
+                      <button
                         onClick={() => forgetUpload(r)}
                         disabled={busyId === id}
                         title={
@@ -312,6 +405,18 @@ export function TeamFullRendersPanel({ team }: Props) {
                     })()}
                   </div>
                 ) : (
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <button
+                    onClick={() => regenerateThumbnail(r)}
+                    disabled={busyId === id}
+                    title={
+                      "Generate the YouTube thumbnail for this render from " +
+                      "the current team colors, logos and names."
+                    }
+                    style={{ padding: "2px 8px" }}
+                  >
+                    {busyId === id ? "…" : "🖼"}
+                  </button>
                   <button
                     onClick={() => upload(r)}
                     disabled={!status?.configured || busyId === id}
@@ -324,6 +429,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                   >
                     {busyId === id ? "Enqueueing…" : "Upload to YouTube"}
                   </button>
+                  </div>
                 )}
               </div>
             );

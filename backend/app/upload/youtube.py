@@ -274,6 +274,54 @@ def _build_service():
     return build("youtube", "v3", credentials=creds, cache_discovery=False)
 
 
+def set_thumbnail(video_id: str, image_path: Path) -> None:
+    """Attach a custom thumbnail to `video_id` (`thumbnails.set`).
+
+    Costs 50 quota units, and requires the channel to be verified - an
+    unverified channel gets HTTP 403 with reason
+    `forbidden`/`uploadLimitExceeded`, which we translate into a message
+    the user can act on instead of a raw API dump.
+
+    Also used to REPLACE an existing thumbnail: the API has no separate
+    update call, `set` overwrites whatever is there.
+
+    Raises RuntimeError on failure so callers can decide whether that's
+    fatal (the regenerate endpoint reports it) or not (an upload job
+    just warns).
+    """
+    from googleapiclient.errors import HttpError  # type: ignore
+    from googleapiclient.http import MediaFileUpload  # type: ignore
+
+    if not image_path.is_file():
+        raise RuntimeError(f"Thumbnail not found: {image_path}")
+    size = image_path.stat().st_size
+    if size > 2 * 1024 * 1024:
+        raise RuntimeError(
+            f"Thumbnail is {size / 1024 / 1024:.1f} MB; YouTube's limit is 2 MB"
+        )
+
+    youtube = _build_service()
+    mimetype = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
+    try:
+        youtube.thumbnails().set(
+            videoId=video_id,
+            media_body=MediaFileUpload(str(image_path), mimetype=mimetype),
+        ).execute()
+    except HttpError as exc:
+        status = getattr(exc.resp, "status", 0)
+        if status == 403:
+            raise RuntimeError(
+                "YouTube refused the custom thumbnail (403). Custom "
+                "thumbnails require a verified channel - verify at "
+                "youtube.com/verify, then try again."
+            ) from exc
+        if status == 404:
+            raise RuntimeError(
+                f"Video {video_id} not found - was it deleted on YouTube?"
+            ) from exc
+        raise RuntimeError(f"YouTube API error setting thumbnail: {exc}") from exc
+
+
 def video_exists(video_id: str) -> Optional[bool]:
     """Does `video_id` still exist on the authorized channel?
 

@@ -138,7 +138,7 @@ export function TeamDashboardPage() {
 
       <TeamNamingSettings team={team} roster={roster} onSaved={setRoster} />
 
-      {roster && <RosterEditor value={roster} onSave={saveRoster} defaultName={displayName(team)} />}
+      {roster && <RosterEditor value={roster} onSave={saveRoster} defaultName={displayName(team)} team={team} />}
 
       <Modal
         open={creating}

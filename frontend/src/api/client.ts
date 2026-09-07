@@ -147,6 +147,47 @@ export const api = {
    *  upload button. By default the server verifies the video is really
    *  gone (1 quota unit) and refuses if it still exists; `force` skips
    *  that check. */
+  // ---- Render thumbnails -------------------------------------------------
+  //
+  // `cacheBust` is required after a regenerate: the URL is stable, so
+  // without it the browser keeps showing the previous image.
+  renderThumbnailUrl(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    filename: string,
+    cacheBust?: number | string
+  ): string {
+    const q = cacheBust ? `?v=${encodeURIComponent(String(cacheBust))}` : "";
+    return (
+      `${BASE}${matchBase(team, tournament, date, match)}/renders/` +
+      `${encPath(filename)}/thumbnail${q}`
+    );
+  },
+  /** Rebuild the thumbnail; when `push` and the render is uploaded, the
+   *  live YouTube thumbnail is replaced too. */
+  async regenerateThumbnail(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    filename: string,
+    push = true
+  ): Promise<{
+    generated: boolean;
+    pushed: boolean;
+    message: string;
+    video_id?: string;
+    size_bytes?: number;
+  }> {
+    return fetchJson(
+      `${matchBase(team, tournament, date, match)}/renders/` +
+        `${encPath(filename)}/thumbnail?push=${push ? "true" : "false"}`,
+      { method: "POST" }
+    );
+  },
+
   async forgetYouTubeUpload(
     team: string,
     tournament: string,
@@ -158,6 +199,91 @@ export const api = {
     return fetchJson(
       `${matchBase(team, tournament, date, match)}/uploads/youtube/` +
         `${encPath(filename)}?verify=${force ? "false" : "true"}`,
+      { method: "DELETE" }
+    );
+  },
+
+  // ---- Team / opponent logos --------------------------------------------
+  //
+  // Logos are plain files served by the backend, so the UI just points
+  // an <img> at these URLs. `cacheBust` matters because the filename is
+  // fixed (`logo.png`): without it the browser keeps showing the old
+  // image after a replacement upload.
+  teamLogoUrl(team: string, cacheBust?: number | string): string {
+    const q = cacheBust ? `?v=${encodeURIComponent(String(cacheBust))}` : "";
+    return `${BASE}/teams/${enc(team)}/logo${q}`;
+  },
+  opponentLogoUrl(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    cacheBust?: number | string
+  ): string {
+    const q = cacheBust ? `?v=${encodeURIComponent(String(cacheBust))}` : "";
+    return `${BASE}${matchBase(team, tournament, date, match)}/opponent-logo${q}`;
+  },
+  async uploadTeamLogo(team: string, file: File): Promise<{ team_logo_path: string }> {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${BASE}/teams/${enc(team)}/logo`, {
+      method: "PUT",
+      body: form,
+    });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    return res.json();
+  },
+  async deleteTeamLogo(team: string): Promise<{ deleted: boolean }> {
+    return fetchJson(`/teams/${enc(team)}/logo`, { method: "DELETE" });
+  },
+  playerPhotoUrl(team: string, number: number, cacheBust?: number | string): string {
+    const q = cacheBust ? `?v=${encodeURIComponent(String(cacheBust))}` : "";
+    return `${BASE}/teams/${enc(team)}/players/${number}/photo${q}`;
+  },
+  async uploadPlayerPhoto(
+    team: string,
+    number: number,
+    file: File
+  ): Promise<{ profile_pic_path: string }> {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${BASE}/teams/${enc(team)}/players/${number}/photo`, {
+      method: "PUT",
+      body: form,
+    });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    return res.json();
+  },
+  async deletePlayerPhoto(team: string, number: number): Promise<{ deleted: boolean }> {
+    return fetchJson(`/teams/${enc(team)}/players/${number}/photo`, {
+      method: "DELETE",
+    });
+  },
+
+  async uploadOpponentLogo(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    file: File
+  ): Promise<{ team_logo_path: string }> {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(
+      `${BASE}${matchBase(team, tournament, date, match)}/opponent-logo`,
+      { method: "PUT", body: form }
+    );
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    return res.json();
+  },
+  async deleteOpponentLogo(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string
+  ): Promise<{ deleted: boolean }> {
+    return fetchJson(
+      `${matchBase(team, tournament, date, match)}/opponent-logo`,
       { method: "DELETE" }
     );
   },

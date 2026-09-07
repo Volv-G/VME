@@ -98,6 +98,12 @@ def patch_match(
         m.opponent_roster = Roster(
             team_name=body.opponent_roster.team_name,
             team_color=body.opponent_roster.team_color,
+            # The logo is owned by the /opponent-logo endpoints; a client
+            # that omits it here must not wipe an uploaded file.
+            team_logo_path=(
+                body.opponent_roster.team_logo_path
+                or m.opponent_roster.team_logo_path
+            ),
             players=[Player.from_dict(p.model_dump()) for p in body.opponent_roster.players],
         )
     save_match(team, tournament, date, match, m)

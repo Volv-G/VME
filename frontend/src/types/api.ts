@@ -38,6 +38,10 @@ export interface NamingConfigDto {
 export interface RosterDto {
   team_name?: string | null;
   team_color?: string | null;
+  /** Logo filename relative to the roster's own folder (team dir, or the
+   *  match dir for an opponent roster). Managed by the /logo endpoints -
+   *  omit it in a PUT/PATCH to leave the uploaded file untouched. */
+  team_logo_path?: string | null;
   /** Team-level YouTube upload defaults. Optional on input - the server
    *  preserves any previously-saved settings when omitted. */
   youtube?: YouTubeConfigDto | null;
@@ -205,6 +209,8 @@ export interface FullRenderDto {
   kind?: "full" | "reel";
   /** For reels: the player the reel belongs to, e.g. "#8 Kate G". */
   player_label?: string;
+  /** A generated `<file>.thumbnail.jpg` exists next to the render. */
+  has_thumbnail?: boolean;
   youtube_video_id?: string | null;
   youtube_uploaded_at?: number | null;
   /** privacyStatus YouTube actually applied (read back from the upload

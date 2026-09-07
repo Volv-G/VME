@@ -44,6 +44,7 @@ def _serialize_roster(r) -> RosterOut:
     return RosterOut(
         team_name=r.team_name,
         team_color=r.team_color,
+        team_logo_path=r.team_logo_path,
         players=[PlayerOut(**p.to_dict()) for p in r.players],
     )
 

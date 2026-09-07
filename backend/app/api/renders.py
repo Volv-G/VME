@@ -29,7 +29,8 @@ from ..upload.templates import (
     render_template,
     template_uses_chapters,
 )
-from ..jobs.render_job import read_chapter_sidecar
+from ..jobs.render_job import generate_thumbnail, read_chapter_sidecar
+from ..render.thumbnail import thumbnail_path
 from .helpers import load_match_or_404
 from .schemas import RenderFileOut, RenderRequestIn, UploadYouTubeRequestIn
 
@@ -405,6 +406,87 @@ def list_renders(
         )
     out.sort(key=lambda r: r.created_at, reverse=True)
     return out
+
+
+@router.get(
+    "/teams/{team}/tournaments/{tournament}/dates/{date}/matches/{match}"
+    "/renders/{filename:path}/thumbnail"
+)
+def get_render_thumbnail(
+    team: str, tournament: str, date: str, match: str, filename: str
+) -> FileResponse:
+    """The generated thumbnail for a render, for previewing in the UI."""
+    renders = paths.renders_dir(team, tournament, date, match)
+    target = _safe_render_path(renders, filename)
+    thumb = thumbnail_path(target)
+    if not thumb.is_file():
+        raise HTTPException(404, "No thumbnail for this render")
+    return FileResponse(thumb, media_type="image/jpeg", filename=thumb.name)
+
+
+@router.post(
+    "/teams/{team}/tournaments/{tournament}/dates/{date}/matches/{match}"
+    "/renders/{filename:path}/thumbnail"
+)
+def regenerate_render_thumbnail(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    filename: str,
+    push: bool = True,
+) -> dict:
+    """Rebuild a render's thumbnail, and push it to YouTube if uploaded.
+
+    The point of regenerating is that thumbnails bake in things the user
+    keeps tuning - team colors, logos, the opponent's name. Rebuilding
+    alone would leave the *published* video showing the old image, so by
+    default (`push=true`) an already-uploaded render also gets
+    `thumbnails.set` called, which overwrites the live thumbnail.
+
+    Pushing is reported, never fatal: a channel that isn't verified for
+    custom thumbnails still gets a freshly generated local image, and
+    the response says why YouTube declined.
+    """
+    renders = paths.renders_dir(team, tournament, date, match)
+    target = _safe_render_path(renders, filename)
+    if not target.is_file():
+        raise HTTPException(404, f"Render file not found: {filename}")
+
+    thumb = generate_thumbnail(team, tournament, date, match, target)
+    if thumb is None:
+        raise HTTPException(500, "Thumbnail generation failed; see the log")
+
+    result: dict = {
+        "filename": filename,
+        "generated": True,
+        "size_bytes": thumb.stat().st_size,
+        "pushed": False,
+        "message": "Thumbnail regenerated.",
+    }
+
+    sidecar = scanner.load_youtube_sidecar(target) or {}
+    video_id = sidecar.get("video_id")
+    if not push or not video_id:
+        if video_id:
+            result["message"] = "Thumbnail regenerated (not pushed to YouTube)."
+        return result
+
+    status = youtube_uploader.get_status()
+    if not status.configured:
+        result["message"] = (
+            f"Thumbnail regenerated, but YouTube is not configured: {status.reason}"
+        )
+        return result
+    try:
+        youtube_uploader.set_thumbnail(video_id, thumb)
+        result["pushed"] = True
+        result["video_id"] = video_id
+        result["message"] = "Thumbnail regenerated and updated on YouTube."
+    except Exception as exc:
+        result["video_id"] = video_id
+        result["message"] = f"Thumbnail regenerated, but YouTube refused it: {exc}"
+    return result
 
 
 @router.get(

@@ -78,6 +78,9 @@ class FullRenderInfo:
     # For reels: the player the reel belongs to, formatted for display
     # ("#8 Kate G"). Empty for full renders.
     player_label: str = ""
+    # Whether a generated `<file>.thumbnail.jpg` sidecar exists, so the
+    # UI knows to show a preview instead of an empty box.
+    has_thumbnail: bool = False
 
 
 @dataclass
@@ -347,6 +350,7 @@ def _build_render_info(
         ),
         kind=kind,
         player_label=player_label,
+        has_thumbnail=path.with_suffix(path.suffix + ".thumbnail.jpg").is_file(),
     )
 
 

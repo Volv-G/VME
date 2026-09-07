@@ -25,6 +25,7 @@ from ..render.overlays.scoreboard import TeamBranding
 from ..render.reels import build_chapters, reels_from_match
 from ..render.renderer import MatchRenderer, RenderCancelled, RenderProgress
 from ..render.settings import apply_container_extension
+from ..render.thumbnail import ThumbnailSpec, thumbnail_path, write_thumbnail
 from .manager import JOBS, RenderJob
 
 # Upload module is imported lazily inside `_run_upload` so the queue
@@ -36,6 +37,211 @@ logger = logging.getLogger(__name__)
 
 # Default half-window used for previews when the client doesn't override it.
 DEFAULT_PREVIEW_SECONDS_AROUND = 30.0
+
+
+def _team_branding(job: RenderJob, m, home_roster) -> tuple[TeamBranding, TeamBranding]:
+    """Scoreboard branding for a job (see `_branding`)."""
+    return _branding(job.team, job.tournament, job.date, job.match, m, home_roster)
+
+
+def _branding(
+    team: str, tournament: str, date: str, match: str, m, home_roster
+) -> tuple[TeamBranding, TeamBranding]:
+    """Scoreboard branding for both sides: name, color and logo file.
+
+    Logos are stored as a filename relative to the roster's own folder -
+    the team folder for our roster, the match folder for the opponent's
+    (each match has its own opponent). Resolved to absolute paths here so
+    the overlay never has to know the media layout. A recorded-but-missing
+    file resolves to None and simply renders without a logo.
+    """
+    home_logo = _resolve_logo(
+        paths.team_dir(team),
+        home_roster.team_logo_path,
+        paths.TEAM_LOGO_STEM,
+    )
+    away_logo = _resolve_logo(
+        paths.match_dir(team, tournament, date, match),
+        m.opponent_roster.team_logo_path,
+        paths.OPPONENT_LOGO_STEM,
+    )
+    home = TeamBranding(
+        name=home_roster.team_name or team,
+        color=home_roster.team_color or "#2d8a4e",
+        logo_path=home_logo,
+    )
+    away = TeamBranding(
+        name=m.opponent_roster.team_name or m.opponent or "Away",
+        color=m.opponent_roster.team_color or "#8a2d2d",
+        logo_path=away_logo,
+    )
+    return home, away
+
+
+def _resolve_logo(
+    directory: Path, filename: Optional[str], stem: str
+) -> Optional[str]:
+    """Absolute path of a stored logo, or None.
+
+    Falls back to scanning for `<stem>.<ext>` so a logo dropped into the
+    folder by hand (or a roster written before the field existed) is
+    still picked up.
+    """
+    if filename:
+        candidate = directory / Path(filename).name
+        if candidate.is_file():
+            return str(candidate)
+    found = paths.find_logo(directory, stem)
+    return str(found) if found is not None else None
+
+
+
+# ---------------------------------------------------------------------------
+# Thumbnails
+# ---------------------------------------------------------------------------
+
+
+def generate_thumbnail(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    render_path: Path,
+    *,
+    m=None,
+    home_roster=None,
+) -> Optional[Path]:
+    """Write `<render>.thumbnail.jpg` for an existing render file.
+
+    Single source of truth for thumbnails: called right after a render
+    finishes AND by the "regenerate" endpoint, so a regenerated image is
+    identical to what the render would have produced (modulo colors /
+    logos the user changed in between - which is the whole point of
+    being able to regenerate).
+
+    The subject line and score are inferred from the render's location:
+    a file under `reels/<team>/<player>/` is one player's highlight reel
+    and gets their name instead of the match result.
+
+    Returns the sidecar path, or None if anything went wrong - thumbnail
+    failures never fail a render.
+    """
+    try:
+        if m is None:
+            m = scanner.load_or_create_match(team, tournament, date, match)
+        if home_roster is None:
+            home_roster = scanner.load_team_roster(team)
+        home, away = _branding(team, tournament, date, match, m, home_roster)
+
+        renders_root = paths.renders_dir(team, tournament, date, match)
+        try:
+            rel_parts = render_path.relative_to(renders_root).parts
+        except ValueError:
+            rel_parts = (render_path.name,)
+
+        subject = ""
+        home_image = home.logo_path
+        home_badge = ""
+        is_photo = False
+        if len(rel_parts) > 2 and rel_parts[0] == "reels":
+            jersey, player_name = paths.parse_player_folder(rel_parts[2])
+            label = f"#{jersey} {player_name}".strip() if jersey is not None else player_name
+            subject = f"{label}  ·  Highlights" if label else "Highlights"
+            # A reel is about the player, not the club: their photo takes
+            # the home crest's place, and failing that a jersey-number
+            # badge - so twelve reels from one match are still tellable
+            # apart at thumbnail size.
+            home_image = _resolve_player_photo(team, home_roster, jersey)
+            is_photo = home_image is not None
+            if home_image is None and jersey is not None:
+                home_badge = f"#{jersey}"
+
+        spec = ThumbnailSpec(
+            home_name=home.name,
+            away_name=away.name,
+            home_color=home.color,
+            away_color=away.color,
+            home_logo=home_image,
+            away_logo=away.logo_path,
+            home_badge=home_badge,
+            home_is_photo=is_photo,
+            caption=_thumbnail_caption(team, tournament, date, match, m, home_roster),
+            subject=subject,
+            backdrop=_grab_backdrop(render_path),
+        )
+        return write_thumbnail(render_path, spec)
+    except Exception:
+        logger.warning(
+            "thumbnail generation failed for %s", render_path, exc_info=True
+        )
+        return None
+
+
+def _resolve_player_photo(team: str, roster, jersey: Optional[int]) -> Optional[str]:
+    """Absolute path of a player's photo, or None.
+
+    Falls back to scanning `players/<NN>.<ext>` so a photo dropped in by
+    hand is picked up even when the roster entry wasn't updated.
+    """
+    if jersey is None:
+        return None
+    player = roster.find_by_number(jersey)
+    if player is not None and player.profile_pic_path:
+        candidate = paths.player_photo_file(team, player.profile_pic_path)
+        if candidate.is_file():
+            return str(candidate)
+    found = paths.find_logo(
+        paths.player_photo_dir(team), paths.player_photo_stem(jersey)
+    )
+    return str(found) if found is not None else None
+
+
+def _thumbnail_caption(team, tournament, date, match, m, roster) -> str:
+    """Top strip: date, tournament abbreviation, match number.
+
+    Reuses the upload template variables so the thumbnail says exactly
+    what the video title says (same date format, same abbreviation).
+    """
+    try:
+        from ..upload.templates import build_vars
+
+        v = build_vars(
+            team=team,
+            tournament=tournament,
+            date=date,
+            match=match,
+            match_obj=m,
+            roster=roster,
+            tournament_info=scanner.load_tournament_info(team, tournament),
+        )
+        bits = [v.date, v.tournament_abbr]
+        if v.match_index and v.match_index != "?":
+            bits.append(f"Match {v.match_index}")
+        return "  ·  ".join(b for b in bits if b)
+    except Exception:
+        logger.debug("could not build thumbnail caption", exc_info=True)
+        return paths.format_date_for_template(date)
+
+
+def _grab_backdrop(render_path: Path):
+    """One representative frame from the render, as an RGB array.
+
+    Taken at 42% of the duration - far enough in to be actual play (a
+    match render opens on warmups / an empty court) without being the
+    post-match handshake. Returns None on any failure; the thumbnail
+    then uses a flat background.
+    """
+    try:
+        from moviepy import VideoFileClip
+
+        with VideoFileClip(str(render_path)) as clip:
+            t = max(0.0, min(clip.duration * 0.42, clip.duration - 0.1))
+            return clip.get_frame(t)
+    except Exception:
+        logger.warning(
+            "could not read a backdrop frame from %s", render_path, exc_info=True
+        )
+        return None
 
 
 def run_render(job: RenderJob) -> None:
@@ -81,14 +287,7 @@ def run_render(job: RenderJob) -> None:
         return
 
     home_roster = scanner.load_team_roster(job.team)
-    home = TeamBranding(
-        name=home_roster.team_name or job.team,
-        color=home_roster.team_color or "#2d8a4e",
-    )
-    away = TeamBranding(
-        name=m.opponent_roster.team_name or m.opponent or "Away",
-        color=m.opponent_roster.team_color or "#8a2d2d",
-    )
+    home, away = _team_branding(job, m, home_roster)
 
     # Resolve a source frame range when a playhead_frame was supplied.
     source_frame_range: Optional[tuple[int, int]] = None
@@ -230,6 +429,22 @@ def run_render(job: RenderJob) -> None:
             )
         raise
 
+    # Thumbnail last, and only for shareable output: previews are
+    # scratch. Generation reads one frame back off the finished file, so
+    # it has to happen after the encode, and it's best-effort - the
+    # render is already done and successful either way.
+    if job.kind != "preview":
+        JOBS.update(job.id, phase="thumbnail", message="building thumbnail")
+        generate_thumbnail(
+            job.team,
+            job.tournament,
+            job.date,
+            job.match,
+            output_path,
+            m=m,
+            home_roster=home_roster,
+        )
+
     # `output_filename` may be a relative subpath (e.g. `pre/foo.mp4`)
     # when the template puts the file in a subfolder. We keep it relative
     # to the renders root because the download endpoint resolves
@@ -256,14 +471,7 @@ def _run_batch(
     recursive `/renders` listing.
     """
     home_roster = scanner.load_team_roster(job.team)
-    home = TeamBranding(
-        name=home_roster.team_name or job.team,
-        color=home_roster.team_color or "#2d8a4e",
-    )
-    away = TeamBranding(
-        name=m.opponent_roster.team_name or m.opponent or "Away",
-        color=m.opponent_roster.team_color or "#8a2d2d",
-    )
+    home, away = _team_branding(job, m, home_roster)
 
     # Detect spans up front so we know `total` for progress reporting and
     # can fail fast if there's nothing to render. We thread the team's
@@ -426,14 +634,7 @@ def _run_player_reels(
     of forcing 11 separate uploads.
     """
     home_roster = scanner.load_team_roster(job.team)
-    home = TeamBranding(
-        name=home_roster.team_name or job.team,
-        color=home_roster.team_color or "#2d8a4e",
-    )
-    away = TeamBranding(
-        name=m.opponent_roster.team_name or m.opponent or "Away",
-        color=m.opponent_roster.team_color or "#8a2d2d",
-    )
+    home, away = _team_branding(job, m, home_roster)
 
     tournament_info = scanner.load_tournament_info(job.team, job.tournament)
     reels = reels_from_match(
@@ -535,6 +736,15 @@ def _run_player_reels(
                 raise
 
             _write_chapter_sidecar(r, spec, output_path, fps)
+            generate_thumbnail(
+                job.team,
+                job.tournament,
+                job.date,
+                job.match,
+                output_path,
+                m=m,
+                home_roster=home_roster,
+            )
 
             done_before_current[0] += spec.total_frames
             current_total[0] = i
@@ -663,6 +873,12 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
         cancel_check=cancel_check,
     )
 
+    # Attach the thumbnail, if one was generated for this render. Done
+    # after the insert because it needs the video id, and best-effort
+    # because custom thumbnails require a verified channel - a 403 here
+    # must not fail an upload that otherwise succeeded.
+    _attach_thumbnail(job, file_path, result.video_id)
+
     # Persist the upload record alongside the file. Subsequent listings
     # (team dashboard, render panel) pick this up via
     # `scanner.load_youtube_sidecar`. We record BOTH the privacy we
@@ -698,6 +914,35 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
             ),
         )
     JOBS.mark_done(job.id, result.video_url)
+
+
+def _attach_thumbnail(job: Optional[RenderJob], file_path: Path, video_id: str) -> bool:
+    """Best-effort `thumbnails.set` for a render's sidecar image.
+
+    Returns True when YouTube accepted it. Failures are logged, surfaced
+    on the job message when there is one, and otherwise swallowed: the
+    common cause is an unverified channel, which the user can fix later
+    and re-push with the regenerate endpoint.
+    """
+    thumb = thumbnail_path(file_path)
+    if not thumb.is_file():
+        return False
+    from ..upload.youtube import set_thumbnail
+
+    try:
+        set_thumbnail(video_id, thumb)
+        logger.info("attached thumbnail %s to video %s", thumb.name, video_id)
+        return True
+    except Exception as exc:
+        logger.warning(
+            "could not set thumbnail for video %s: %s", video_id, exc
+        )
+        if job is not None:
+            JOBS.update(
+                job.id,
+                message=f"Uploaded; thumbnail rejected ({exc})",
+            )
+        return False
 
 
 def read_chapter_sidecar(file_path: Path) -> str:
