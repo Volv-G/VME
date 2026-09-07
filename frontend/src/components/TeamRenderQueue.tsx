@@ -10,7 +10,7 @@ interface Props {
 
 // Poll cadence: same as the match-panel polling so the two views stay in
 // sync without per-job SSE here.
-const POLL_MS = 5000;
+const POLL_MS = 2000;
 
 /**
  * Team-scoped render queue with start/stop control.
