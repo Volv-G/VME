@@ -79,9 +79,10 @@ interface Props {
 const DEFAULT_PREVIEW_SECONDS = 30;
 
 // How often to poll the team-wide jobs list while this panel is open.
-// 2s is responsive enough for a status indicator without flooding the
-// backend - the per-job SSE handles the smooth progress bar.
-const JOBS_POLL_MS = 2000;
+// 5s is responsive enough for a status indicator without flooding the
+// backend - the per-job SSE handles the smooth progress bar, so this
+// poll only has to catch jobs appearing, finishing or failing.
+const JOBS_POLL_MS = 5000;
 
 export function RenderPanel({
   team,
