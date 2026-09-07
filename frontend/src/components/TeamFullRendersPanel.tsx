@@ -46,6 +46,13 @@ export function TeamFullRendersPanel({ team }: Props) {
   // Regenerate result. `ok` is false when YouTube declined the push -
   // that is a failure, not a footnote, so it must not be styled as one.
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
+  // Which match date is on screen. A single match day produces one full
+  // render plus a reel per player, so a season's worth of rows is
+  // unusable as one list - and the natural unit to work through is a
+  // day: render it, thumbnail it, upload it, move on. Stored as the date
+  // itself rather than an index so polling (which replaces the array)
+  // can't silently slide the user onto a different day.
+  const [activeDate, setActiveDate] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -159,6 +166,23 @@ export function TeamFullRendersPanel({ team }: Props) {
     }
   }
 
+  // Dates newest-first. `renders` already arrives in that order, so
+  // first-seen order is the right order and no sort is needed.
+  const dates: string[] = [];
+  const countByDate = new Map<string, number>();
+  for (const r of renders) {
+    if (!countByDate.has(r.date)) dates.push(r.date);
+    countByDate.set(r.date, (countByDate.get(r.date) ?? 0) + 1);
+  }
+  // Fall back to the newest date when nothing is chosen yet, or when the
+  // chosen day no longer has renders (deleted on disk).
+  const currentDate =
+    activeDate && countByDate.has(activeDate) ? activeDate : dates[0] ?? null;
+  const dateIndex = currentDate ? dates.indexOf(currentDate) : -1;
+  const visible = currentDate
+    ? renders.filter((r) => r.date === currentDate)
+    : [];
+
   // Build a per-row download URL the same way the per-match panel does:
   // segment-encoded so nested filenames survive FastAPI's `{path}`
   // param. Reels live at `reels/<team>/<player>/<file>`, so the slashes
@@ -175,7 +199,10 @@ export function TeamFullRendersPanel({ team }: Props) {
   return (
     <div className="card">
       <div className="card-header">
-        <h2>Full renders ({renders.length})</h2>
+        <h2>
+          Full renders ({visible.length}
+          {dates.length > 1 ? ` of ${renders.length}` : ""})
+        </h2>
         {status && (
           <span
             className="row-meta"
@@ -206,6 +233,50 @@ export function TeamFullRendersPanel({ team }: Props) {
         </div>
       )}
 
+      {dates.length > 1 && currentDate && (
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            marginBottom: 8,
+          }}
+        >
+          <button
+            onClick={() => setActiveDate(dates[dateIndex - 1])}
+            disabled={dateIndex <= 0}
+            title="Newer match day"
+            style={{ padding: "2px 8px" }}
+          >
+            ‹
+          </button>
+          {/* A dropdown as well as arrows: stepping through a season one
+              day at a time to reach a specific match would be tedious. */}
+          <select
+            value={currentDate}
+            onChange={(e) => setActiveDate(e.target.value)}
+            style={{ flex: 1, minWidth: 0 }}
+          >
+            {dates.map((d) => (
+              <option key={d} value={d}>
+                {d} ({countByDate.get(d)})
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={() => setActiveDate(dates[dateIndex + 1])}
+            disabled={dateIndex < 0 || dateIndex >= dates.length - 1}
+            title="Older match day"
+            style={{ padding: "2px 8px" }}
+          >
+            ›
+          </button>
+          <span className="row-meta" style={{ whiteSpace: "nowrap" }}>
+            day {dateIndex + 1} / {dates.length}
+          </span>
+        </div>
+      )}
+
       {renders.length === 0 ? (
         <p className="muted" style={{ margin: 0 }}>
           No renders yet. Run a full render or player reels from a match
@@ -213,7 +284,7 @@ export function TeamFullRendersPanel({ team }: Props) {
         </p>
       ) : (
         <div className="list">
-          {renders.map((r) => {
+          {visible.map((r) => {
             const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
             const uploaded = !!r.youtube_video_id;
             const ytUrl = uploaded
@@ -306,7 +377,11 @@ export function TeamFullRendersPanel({ team }: Props) {
                       flexWrap: "wrap",
                     }}
                   >
-                    <strong style={{ fontSize: 13 }}>{r.date}</strong>
+                    {/* Redundant once the pager is showing the date;
+                        without a pager it's the only place it appears. */}
+                    {dates.length <= 1 && (
+                      <strong style={{ fontSize: 13 }}>{r.date}</strong>
+                    )}
                     {isReel && (
                       <>
                         <span
