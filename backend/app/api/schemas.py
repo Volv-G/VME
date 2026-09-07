@@ -26,6 +26,11 @@ class YouTubeConfigOut(BaseModel):
     playlist_id: Optional[str] = None
     title_template: Optional[str] = None
     description_template: Optional[str] = None
+    # Player-reel uploads use their own templates; these additionally
+    # accept {player}, {player_number}, {player_name}, {clip_count} and
+    # {chapters}.
+    reel_title_template: Optional[str] = None
+    reel_description_template: Optional[str] = None
 
 
 class NamingConfigOut(BaseModel):
@@ -38,6 +43,7 @@ class NamingConfigOut(BaseModel):
     full_render_template: Optional[str] = None
     highlight_template: Optional[str] = None
     focused_template: Optional[str] = None
+    reel_template: Optional[str] = None
 
 
 class RosterOut(BaseModel):
@@ -87,7 +93,7 @@ class MatchSummaryOut(BaseModel):
 
 
 class FullRenderOut(BaseModel):
-    """A full-match render listed on the team dashboard.
+    """A shareable render listed on the team dashboard.
 
     Carries the location (team/tournament/date/match/filename) needed to
     download / upload, plus the YouTube upload state if a sidecar exists
@@ -103,6 +109,10 @@ class FullRenderOut(BaseModel):
     created_at: float
     opponent: str = ""
     match_index: Optional[int] = None
+    # "full" (top-level match render) or "reel" (one player's plays).
+    kind: str = "full"
+    # Display label of the player a reel belongs to ("#8 Kate G").
+    player_label: str = ""
     youtube_video_id: Optional[str] = None
     youtube_uploaded_at: Optional[float] = None
     # `youtube_privacy_status` is what the video is set to *right now*
@@ -330,7 +340,9 @@ class RenderRequestIn(BaseModel):
 
     label: Optional[str] = None
     # Render kind. Defaults to "full"; clients can request "highlights"
-    # or "focused_highlights" for batch jobs (one mp4 per detected span).
+    # or "focused_highlights" for batch jobs (one file per detected span),
+    # or "player_reels" for one file per player (all of their plays
+    # concatenated, with a chapter sidecar).
     kind: Optional[str] = None
     # Source/global frame around which to render a preview window. None for full render.
     playhead_frame: Optional[int] = None

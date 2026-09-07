@@ -176,6 +176,34 @@ def focused_dir(team: str, tournament: str, date: str, match: str) -> Path:
     return renders_dir(team, tournament, date, match) / "focused"
 
 
+# MoviePy writes its intermediate audio track next to the output as
+# `<basename>TEMP_MPY_wvf_snd.<ext>` (Clip._TEMP_FILES_PREFIX) and deletes
+# it when the write finishes. While a render is in flight - or after one
+# is cancelled/crashes - the file is present and looks like a real render
+# to any directory listing, so every listing filters it out by name.
+MOVIEPY_TEMP_MARKER = "TEMP_MPY_"
+
+
+def is_render_scratch(name: str) -> bool:
+    """True for encoder scratch files that must never be listed/uploaded."""
+    return MOVIEPY_TEMP_MARKER in name
+
+
+def parse_player_folder(folder_name: str) -> tuple[int | None, str]:
+    """Inverse of `player_folder_name`: `08_Kate_G` -> `(8, "Kate G")`.
+
+    Returns `(None, folder_name)` when the segment doesn't start with a
+    jersey number. Underscores become spaces, which round-trips the
+    common case; names that contained a literal underscore before
+    sanitization aren't recoverable and aren't worth guessing at.
+    """
+    m = re.match(r"^(\d{1,3})(?:_(.*))?$", folder_name)
+    if not m:
+        return None, folder_name
+    name = (m.group(2) or "").replace("_", " ").strip()
+    return int(m.group(1)), name
+
+
 def player_folder_name(jersey: int, display_name: str | None) -> str:
     """Build a per-player folder name: `<NN>_<name>` (or just `NN`).
 

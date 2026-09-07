@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AutoCutsResultDto, ClipDto, MatchDto } from "../../types/api";
 import { LineupGrid } from "./LineupGrid";
 import { RosterPicker } from "./RosterPicker";
@@ -7,6 +7,7 @@ import { ScoreFixDialog, MessageDialog } from "./InlineDialogs";
 import { stateAtPlayhead } from "./state";
 import { useHotkeyAction } from "../../hotkeys";
 import { eventIcon } from "../eventStyle";
+import { ColorPicker } from "../ColorPicker";
 
 type CreateBody = {
   type: string;
@@ -22,6 +23,9 @@ interface Props {
   onAutoCuts: (opts: {
     hasIntroClip?: boolean;
   }) => Promise<AutoCutsResultDto>;
+  /** Persist a new team color (team roster for home, match's embedded
+   *  opponent roster for away). Wired to the swatch in each team card. */
+  onTeamColorChange?: (which: "home" | "opponent", hex: string) => Promise<void>;
 }
 
 interface ActionDef {
@@ -112,7 +116,13 @@ function resolveClipFromGlobal(
   return { clipId: last.id, localFrame: last.frame_count - 1 };
 }
 
-export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Props) {
+export function ControlsPanel({
+  data,
+  currentFrame,
+  onCreate,
+  onAutoCuts,
+  onTeamColorChange,
+}: Props) {
   const live = stateAtPlayhead(data.events, currentFrame);
   const homeName = data.home_roster.team_name || data.team;
   const opponentName = data.opponent_roster.team_name || data.opponent || "Away";
@@ -304,9 +314,14 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
       {/* Home team card */}
       <div className="team-card" style={data.home_roster.team_color ? { borderColor: data.home_roster.team_color } : undefined}>
         <div className="team-card-header">
-          <span
-            className="team-swatch"
-            style={{ background: data.home_roster.team_color || "#2d8a4e" }}
+          <TeamSwatch
+            color={data.home_roster.team_color || "#2d8a4e"}
+            teamName={homeName}
+            onChange={
+              onTeamColorChange
+                ? (hex) => void onTeamColorChange("home", hex)
+                : undefined
+            }
           />
           <strong className="team-name">{homeName}</strong>
           <button
@@ -381,9 +396,14 @@ export function ControlsPanel({ data, currentFrame, onCreate, onAutoCuts }: Prop
         style={data.opponent_roster.team_color ? { borderColor: data.opponent_roster.team_color } : undefined}
       >
         <div className="team-card-header">
-          <span
-            className="team-swatch"
-            style={{ background: data.opponent_roster.team_color || "#8a2d2d" }}
+          <TeamSwatch
+            color={data.opponent_roster.team_color || "#8a2d2d"}
+            teamName={opponentName}
+            onChange={
+              onTeamColorChange
+                ? (hex) => void onTeamColorChange("opponent", hex)
+                : undefined
+            }
           />
           <strong className="team-name">{opponentName}</strong>
           <button
@@ -517,5 +537,56 @@ function ActionButton({
       </span>
       <span className="action-label">{action.label}</span>
     </button>
+  );
+}
+
+/**
+ * The little color chip in a team-card header. Read-only `<span>` when no
+ * `onChange` is supplied; otherwise it becomes the trigger for the shared
+ * `ColorPicker` popover (same dialog the roster editor uses).
+ *
+ * The picker fires `onChange` continuously while the user drags across the
+ * saturation square, so persistence is debounced and the swatch renders
+ * from local state for instant feedback. `color` re-syncs the local value
+ * whenever the server round-trip lands (or another edit path changes it).
+ */
+function TeamSwatch({
+  color,
+  teamName,
+  onChange,
+}: {
+  color: string;
+  teamName: string;
+  onChange?: (hex: string) => void;
+}) {
+  const [local, setLocal] = useState(color);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => { setLocal(color); }, [color]);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  if (!onChange) {
+    return <span className="team-swatch" style={{ background: color }} />;
+  }
+
+  return (
+    <ColorPicker
+      value={local}
+      swatchClassName="team-swatch"
+      title={`Change ${teamName} color`}
+      onChange={(hex) => {
+        setLocal(hex);
+        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+        timerRef.current = window.setTimeout(() => {
+          timerRef.current = null;
+          onChange(hex);
+        }, 300);
+      }}
+    />
   );
 }

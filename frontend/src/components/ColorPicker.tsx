@@ -4,6 +4,17 @@ import { HexColorPicker } from "react-colorful";
 interface Props {
   value: string;
   onChange: (hex: string) => void;
+  /** Class applied to the trigger swatch. Lets callers reuse an existing
+   *  visual (e.g. `team-swatch`) instead of the default 36x28 chip. */
+  swatchClassName?: string;
+  /** Extra inline styles merged over the default swatch styling. The
+   *  background is always the current color. */
+  swatchStyle?: React.CSSProperties;
+  /** Tooltip / aria hint for the trigger. Defaults to "Pick color". */
+  title?: string;
+  /** Anchor the popover to the right edge of the swatch instead of the
+   *  left - avoids overflowing when the swatch sits near a panel edge. */
+  align?: "left" | "right";
 }
 
 interface EyeDropperResult {
@@ -34,7 +45,14 @@ function rgbToHex(r: number, g: number, b: number): string {
   );
 }
 
-export function ColorPicker({ value, onChange }: Props) {
+export function ColorPicker({
+  value,
+  onChange,
+  swatchClassName,
+  swatchStyle,
+  title = "Pick color",
+  align = "left",
+}: Props) {
   const [open, setOpen] = useState(false);
   const [hex, setHex] = useState(value);
   const [error, setError] = useState<string | null>(null);
@@ -147,17 +165,26 @@ export function ColorPicker({ value, onChange }: Props) {
         <button
           ref={swatchRef}
           type="button"
+          className={swatchClassName}
           onClick={() => setOpen((v) => !v)}
-          title="Pick color"
+          title={title}
           style={{
-            width: 36,
-            height: 28,
-            padding: 0,
+            // A caller-supplied class owns the geometry (e.g. the 14px
+            // `.team-swatch`); inline styles would win over the class, so
+            // the default chip sizing is only applied when there is none.
+            ...(swatchClassName
+              ? { padding: 0 }
+              : {
+                  width: 36,
+                  height: 28,
+                  padding: 0,
+                  border: "1px solid var(--border)",
+                  borderRadius: 4,
+                  boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.2)",
+                }),
+            ...swatchStyle,
             background: hex,
-            border: "1px solid var(--border)",
-            borderRadius: 4,
             cursor: "pointer",
-            boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.2)",
           }}
           aria-label={`Color ${hex}`}
         />
@@ -168,7 +195,7 @@ export function ColorPicker({ value, onChange }: Props) {
               position: "absolute",
               zIndex: 1000,
               top: "calc(100% + 6px)",
-              left: 0,
+              ...(align === "right" ? { right: 0 } : { left: 0 }),
               background: "var(--bg-elev)",
               border: "1px solid var(--border)",
               borderRadius: 8,

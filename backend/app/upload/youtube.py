@@ -18,7 +18,9 @@ out the upload button without crashing the rest of the app.
 
 from __future__ import annotations
 
+import json
 import logging
+import mimetypes
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +58,60 @@ def client_secrets_path() -> Path:
 
 def token_path() -> Path:
     return _config_dir() / "youtube_token.json"
+
+
+def auth_error_path() -> Path:
+    """Marker file recording the last unrecoverable auth failure.
+
+    `get_status()` deliberately makes no network calls (it's polled on
+    every page load), so a revoked/expired refresh token would otherwise
+    keep showing "ready" until the user tried an upload and got a raw
+    `invalid_grant` tuple. `_build_service()` drops this marker when a
+    refresh fails for good and removes it as soon as auth works again,
+    which gives the UI something truthful to display for free.
+    """
+    return _config_dir() / "youtube_auth_error.json"
+
+
+REAUTHORIZE_HINT = (
+    "Re-run `python -m scripts.yt_authorize` from backend/ "
+    "(or scripts/yt-authorize.ps1) to re-authorize."
+)
+
+
+def _record_auth_error(message: str) -> None:
+    try:
+        auth_error_path().write_text(
+            json.dumps({"error": message, "at": time.time()}, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        logger.debug("could not persist auth error marker", exc_info=True)
+
+
+def _clear_auth_error() -> None:
+    try:
+        auth_error_path().unlink(missing_ok=True)
+    except OSError:
+        logger.debug("could not clear auth error marker", exc_info=True)
+
+
+def _stale_auth_error() -> Optional[str]:
+    """Last auth error, unless the token file has been rewritten since.
+
+    Comparing mtimes means a successful `yt_authorize` run clears the
+    warning without the script having to know about this marker.
+    """
+    marker = auth_error_path()
+    if not marker.is_file():
+        return None
+    tok = token_path()
+    try:
+        if tok.is_file() and tok.stat().st_mtime > marker.stat().st_mtime:
+            return None
+        return str(json.loads(marker.read_text(encoding="utf-8")).get("error") or "")
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 @dataclass
@@ -131,6 +187,15 @@ def get_status() -> ConfigStatus:
             has_token=False,
             library_installed=True,
         )
+    stale = _stale_auth_error()
+    if stale:
+        return ConfigStatus(
+            configured=False,
+            reason=stale,
+            has_client_secret=True,
+            has_token=True,
+            library_installed=True,
+        )
     return ConfigStatus(
         configured=True,
         reason="Ready.",
@@ -150,6 +215,7 @@ def _build_service():
     as a user-facing failure message.
     """
     try:
+        from google.auth.exceptions import RefreshError
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
         from googleapiclient.discovery import build
@@ -167,18 +233,66 @@ def _build_service():
     creds = Credentials.from_authorized_user_file(str(tok), SCOPES)
     if not creds.valid:
         if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except RefreshError as exc:
+                # `invalid_grant` is by far the most common failure and
+                # its raw form (("invalid_grant: Bad Request", {...}))
+                # tells the user nothing. The refresh token is gone for
+                # good in every one of these cases - only re-consent
+                # fixes it - so record it and explain why.
+                detail = str(exc)
+                if "invalid_grant" in detail:
+                    msg = (
+                        "YouTube authorization has expired or been revoked "
+                        f"(invalid_grant; token issued {_token_issued_hint(tok)}). "
+                        "Google expires refresh tokens after 7 days while the "
+                        "OAuth consent screen is in 'Testing' publishing status, "
+                        "and also drops them if access was revoked or the "
+                        "client secret was rotated. " + REAUTHORIZE_HINT
+                    )
+                else:
+                    msg = (
+                        f"Could not refresh YouTube credentials: {detail}. "
+                        + REAUTHORIZE_HINT
+                    )
+                _record_auth_error(msg)
+                raise RuntimeError(msg) from exc
             # Persist the rotated access token so subsequent uploads
             # don't need a fresh network round-trip.
             tok.write_text(creds.to_json(), encoding="utf-8")
         else:
-            raise RuntimeError(
-                "Saved YouTube credentials are invalid and cannot be "
-                "refreshed. Re-run `python -m scripts.yt_authorize`."
+            msg = (
+                "Saved YouTube credentials are invalid and carry no refresh "
+                "token. " + REAUTHORIZE_HINT
             )
+            _record_auth_error(msg)
+            raise RuntimeError(msg)
+    _clear_auth_error()
     # `cache_discovery=False` silences a noisy file-cache warning under
     # newer google-api-python-client versions.
     return build("youtube", "v3", credentials=creds, cache_discovery=False)
+
+
+def video_exists(video_id: str) -> Optional[bool]:
+    """Does `video_id` still exist on the authorized channel?
+
+    Returns True / False, or None when the question can't be answered
+    (uploads not configured, auth expired, network error) so callers can
+    tell "definitely gone" from "couldn't check".
+
+    `videos.list` costs 1 quota unit, i.e. it is effectively free next to
+    the 10,000/day pool - safe to call from a UI action.
+    """
+    if not video_id:
+        return None
+    try:
+        youtube = _build_service()
+        resp = youtube.videos().list(part="id", id=video_id).execute()
+    except Exception as exc:
+        logger.warning("could not verify YouTube video %s: %s", video_id, exc)
+        return None
+    return bool(resp.get("items"))
 
 
 @dataclass
@@ -191,6 +305,15 @@ class UploadResult:
     # `upload_video` for the OAuth test-mode caveat).
     actual_privacy_status: str = ""
     requested_privacy_status: str = ""
+
+
+def _token_issued_hint(tok: Path) -> str:
+    """Human-readable age of the token file, for the expiry message."""
+    try:
+        age_days = (time.time() - tok.stat().st_mtime) / 86400.0
+        return f"{age_days:.0f} days ago"
+    except OSError:
+        return "at an unknown time"
 
 
 def upload_video(
@@ -247,9 +370,16 @@ def upload_video(
         },
     }
 
+    # Derive the MIME type from the extension: the render container is
+    # configurable now (HandBrake preset -> mp4 / mkv / mov), and
+    # hardcoding video/mp4 mislabels a .mov/.mkv upload.
+    mimetype = mimetypes.guess_type(file_path.name)[0] or "video/*"
+    if not mimetype.startswith("video/"):
+        mimetype = "video/*"
+
     media = MediaFileUpload(
         str(file_path),
-        mimetype="video/mp4",
+        mimetype=mimetype,
         chunksize=chunk_size_mb * 1024 * 1024,
         resumable=True,
     )

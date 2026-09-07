@@ -7,6 +7,8 @@ from typing import ClassVar, Optional
 
 from ..effects import (
     BallServedEffect,
+    OverlayEffect,
+    PlayerPopupEffect,
     ReplayMarkerEffect,
     RosterEffect,
     ServeTeamSetEffect,
@@ -38,9 +40,38 @@ class BallServedEvent(MatchEvent):
 
     type_name: ClassVar[str] = "ball_served"
 
+    # Title of the popup rendered when the ball is served.
+    popup_label: ClassVar[str] = "Serving"
+
     @property
     def roster_effect(self) -> Optional[RosterEffect]:
         return BallServedEffect()
+
+    def overlay_effect_for_state(
+        self, state: Optional[GameState]
+    ) -> Optional[OverlayEffect]:
+        """"Serving" popup naming whoever is at position 1.
+
+        A serve carries no team/jersey of its own - the server is the
+        player standing at position 1 of the serving team - so this is
+        resolved from the state snapshot instead of from event fields
+        (mirrors what the event list shows in the UI).
+
+        Returns None when the state can't identify a server (no
+        `first_serve` logged yet, or an unknown lineup - the opponent's
+        rotation isn't tracked). A popup reading "Serving #None" would be
+        worse than no popup.
+        """
+        if state is None or state.serving_team is None:
+            return None
+        jersey = state.get_player_at_position(state.serving_team, 1)
+        if not jersey:
+            return None
+        return PlayerPopupEffect(
+            text=type(self).popup_label,
+            player_number=jersey,
+            team=state.serving_team,
+        )
 
     def validate(self, state_before: GameState, all_events) -> list[ValidationError]:
         ref = max(

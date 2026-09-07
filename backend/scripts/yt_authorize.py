@@ -19,19 +19,28 @@ What this script does:
   4. Saves the resulting access + refresh tokens to
      `<DATA_DIR>/youtube_token.json`.
 
-After this finishes the backend can upload videos without ever
-re-prompting (the refresh token has no expiry as long as the OAuth
-client stays in "Testing" mode with you as a Test User, OR is fully
-verified). If you ever rotate the client secret or revoke the token
-from your Google account, just re-run the script.
+After this finishes the backend can upload videos unattended - but
+mind Google's refresh-token expiry rules:
+
+  * OAuth consent screen in "Testing" publishing status: the refresh
+    token **expires after 7 days**, after which uploads fail with
+    `invalid_grant: Bad Request` and this script must be re-run.
+  * Consent screen set to "In production" (no verification needed for
+    a personal/unverified app used by its owner): the refresh token
+    lasts indefinitely until revoked.
+
+Rotating the client secret or revoking access in your Google account
+also invalidates the token - re-run the script in that case too.
 
 Prerequisites in Google Cloud Console:
   - Create a project (or pick an existing one).
   - Enable the "YouTube Data API v3".
   - On the "OAuth consent screen" page: set User type=External, fill
-    in the bare minimum metadata, add yourself as a Test User. (You
-    do NOT need to publish or submit for verification - test users
-    can use the app indefinitely.)
+    in the bare minimum metadata, add yourself as a Test User, and
+    then set Publishing status to "In production". Publishing does
+    NOT require Google verification for your own account, and it is
+    what keeps the refresh token from expiring every 7 days. (It also
+    stops YouTube from silently downgrading uploads to `private`.)
   - On "Credentials": create an OAuth 2.0 Client ID, application
     type "Desktop app". Download the JSON; either move it to the
     data dir manually or pass its path to this script.

@@ -27,6 +27,15 @@ interface Props {
 // is what they'd get if they leave a template field empty.
 const DEFAULT_TITLE = "{date}. {tournament_abbr}. M{match_index}. {opponent}";
 const DEFAULT_DESC = "{date}. {tournament_full}. Match {match_index}. {opponent}";
+// Player reels get their own pair: one video per player, so the
+// match-level title would be identical for all of them.
+// Date first, then player: YouTube (and any file listing) sorts
+// alphabetically, so leading with the date groups a match's reels
+// together and keeps chronological order across matches.
+const DEFAULT_REEL_TITLE =
+  "{date} - {player} - {tournament_abbr}. M{match_index}. {opponent}";
+const DEFAULT_REEL_DESC =
+  "{date}. {tournament_full}. Match {match_index}. {opponent}\n\n{chapters}";
 
 export function TeamYouTubeSettings({ team, roster, onSaved }: Props) {
   const [status, setStatus] = useState<YouTubeStatusDto | null>(null);
@@ -36,6 +45,8 @@ export function TeamYouTubeSettings({ team, roster, onSaved }: Props) {
   const [playlistId, setPlaylistId] = useState<string>("");
   const [titleTpl, setTitleTpl] = useState<string>("");
   const [descTpl, setDescTpl] = useState<string>("");
+  const [reelTitleTpl, setReelTitleTpl] = useState<string>("");
+  const [reelDescTpl, setReelDescTpl] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -44,14 +55,27 @@ export function TeamYouTubeSettings({ team, roster, onSaved }: Props) {
     void api.youtubeStatus().then(setStatus).catch(() => setStatus(null));
   }, []);
 
-  // Hydrate form whenever the parent fetches a new roster.
+  // Hydrate form whenever the parent fetches a new roster. Template
+  // fields are PRE-FILLED with the default when nothing is saved, so
+  // the user edits from a working template instead of an empty box.
   useEffect(() => {
     const yt = roster?.youtube ?? null;
     setPrivacy(((yt?.privacy_status as never) ?? "unlisted") || "unlisted");
     setPlaylistId(yt?.playlist_id ?? "");
-    setTitleTpl(yt?.title_template ?? "");
-    setDescTpl(yt?.description_template ?? "");
+    setTitleTpl(yt?.title_template || DEFAULT_TITLE);
+    setDescTpl(yt?.description_template || DEFAULT_DESC);
+    setReelTitleTpl(yt?.reel_title_template || DEFAULT_REEL_TITLE);
+    setReelDescTpl(yt?.reel_description_template || DEFAULT_REEL_DESC);
   }, [roster]);
+
+  // A field left at (or emptied back to) the default is persisted as
+  // null. That keeps roster.json free of redundant copies AND means a
+  // future change to the default propagates to teams that never
+  // customized - which pre-filling the box would otherwise prevent.
+  function normalize(value: string, fallback: string): string | null {
+    const v = value.trim();
+    return !v || v === fallback ? null : v;
+  }
 
   async function save() {
     if (!roster) return;
@@ -66,8 +90,13 @@ export function TeamYouTubeSettings({ team, roster, onSaved }: Props) {
           // Empty string -> null so the backend can fall back to its
           // default template. Same for playlist.
           playlist_id: playlistId.trim() || null,
-          title_template: titleTpl.trim() || null,
-          description_template: descTpl.trim() || null,
+          title_template: normalize(titleTpl, DEFAULT_TITLE),
+          description_template: normalize(descTpl, DEFAULT_DESC),
+          reel_title_template: normalize(reelTitleTpl, DEFAULT_REEL_TITLE),
+          reel_description_template: normalize(
+            reelDescTpl,
+            DEFAULT_REEL_DESC
+          ),
         } satisfies YouTubeConfigDto,
       };
       const saved = await api.putRoster(team, next);
@@ -80,13 +109,20 @@ export function TeamYouTubeSettings({ team, roster, onSaved }: Props) {
     }
   }
 
+  // Compare NORMALIZED values so a pre-filled default doesn't read as
+  // an unsaved change the moment the card mounts.
   const dirty =
     roster &&
     (privacy !== (roster.youtube?.privacy_status ?? "unlisted") ||
       (playlistId.trim() || null) !== (roster.youtube?.playlist_id ?? null) ||
-      (titleTpl.trim() || null) !== (roster.youtube?.title_template ?? null) ||
-      (descTpl.trim() || null) !==
-        (roster.youtube?.description_template ?? null));
+      normalize(titleTpl, DEFAULT_TITLE) !==
+        (roster.youtube?.title_template ?? null) ||
+      normalize(descTpl, DEFAULT_DESC) !==
+        (roster.youtube?.description_template ?? null) ||
+      normalize(reelTitleTpl, DEFAULT_REEL_TITLE) !==
+        (roster.youtube?.reel_title_template ?? null) ||
+      normalize(reelDescTpl, DEFAULT_REEL_DESC) !==
+        (roster.youtube?.reel_description_template ?? null));
 
   // The status indicator below reports SERVER-SIDE readiness (the
   // google-* libs are installed, an OAuth client_secret file exists,
@@ -198,6 +234,44 @@ export function TeamYouTubeSettings({ team, roster, onSaved }: Props) {
         <code>{"{tournament_full}"}</code> <code>{"{match_index}"}</code>.
         Leave a template empty to use the default.
       </p>
+
+      {/* Player reels upload one video per player, so they need their
+          own title (otherwise all 12 reels from a match share a name)
+          and their own description (the place the chapter list goes). */}
+      <div
+        style={{
+          marginTop: 14,
+          paddingTop: 10,
+          borderTop: "1px solid var(--border)",
+        }}
+      >
+        <strong style={{ fontSize: 12 }}>Player reels</strong>
+        <label style={{ marginTop: 8 }}>
+          Reel title template
+          <input
+            value={reelTitleTpl}
+            onChange={(e) => setReelTitleTpl(e.target.value)}
+            placeholder={DEFAULT_REEL_TITLE}
+          />
+        </label>
+        <label style={{ marginTop: 8 }}>
+          Reel description template
+          <textarea
+            value={reelDescTpl}
+            onChange={(e) => setReelDescTpl(e.target.value)}
+            rows={4}
+            placeholder={DEFAULT_REEL_DESC}
+          />
+        </label>
+        <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+          Same variables plus <code>{"{player}"}</code> (&quot;#8 Kate
+          G&quot;) <code>{"{player_number}"}</code>{" "}
+          <code>{"{player_name}"}</code> <code>{"{clip_count}"}</code>{" "}
+          <code>{"{chapters}"}</code>. Put <code>{"{chapters}"}</code>{" "}
+          where you want the per-play timestamp list; if you omit it, the
+          list is appended at the end.
+        </p>
+      </div>
 
       {err && <div className="error" style={{ marginTop: 8 }}>{err}</div>}
       {info && <div className="muted" style={{ marginTop: 8 }}>{info}</div>}

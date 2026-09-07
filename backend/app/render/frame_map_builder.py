@@ -25,6 +25,7 @@ from typing import Optional
 
 from ..domain.effects import (
     MessagePopupEffect,
+    OverlayEffect,
     PlayerPopupEffect,
     ScoreboardVisibilityEffect,
     TimelineEffect,
@@ -386,7 +387,10 @@ def apply_overlay_state(
     indexed.sort(key=lambda p: p[0])
 
     scoreboard_visible = False
-    active_popups: list[tuple[int, MatchEvent]] = []  # (start_idx, event)
+    # (start_idx, resolved overlay effect). The EFFECT is stored rather
+    # than the event so state-dependent popups are resolved once, at the
+    # frame the event fires, instead of being recomputed per frame.
+    active_popups: list[tuple[int, OverlayEffect]] = []
 
     n = len(fmap)
     j = 0
@@ -395,22 +399,26 @@ def apply_overlay_state(
         while j < len(indexed) and indexed[j][0] == i:
             _, ev = indexed[j]
             j += 1
-            ovr = ev.overlay_effect
+            # `overlay_effect_for_state` lets an event build its popup from
+            # the state snapshot instead of its own fields - needed for
+            # "Serving", where the server is whoever stands at position 1
+            # of the serving team. Defaults to the stateless
+            # `overlay_effect` for every other event type.
+            ovr = ev.overlay_effect_for_state(ev.state)
             if isinstance(ovr, ScoreboardVisibilityEffect):
                 scoreboard_visible = ovr.visible
             elif isinstance(ovr, (PlayerPopupEffect, MessagePopupEffect)):
-                active_popups.append((i, ev))
+                active_popups.append((i, ovr))
 
         fmap[i].scoreboard_visible = scoreboard_visible
 
         # Emit active popups, dropping any that have aged out.
-        still_active: list[tuple[int, MatchEvent]] = []
-        for start_idx, ev in active_popups:
+        still_active: list[tuple[int, OverlayEffect]] = []
+        for start_idx, ovr in active_popups:
             age = i - start_idx
             if age >= popup_frames:
                 continue
-            still_active.append((start_idx, ev))
-            ovr = ev.overlay_effect
+            still_active.append((start_idx, ovr))
             if isinstance(ovr, PlayerPopupEffect):
                 fmap[i].messages.append(
                     ActiveMessage(

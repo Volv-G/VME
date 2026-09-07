@@ -22,7 +22,9 @@ from ..render.batch import (
     highlights_from_match,
 )
 from ..render.overlays.scoreboard import TeamBranding
+from ..render.reels import build_chapters, reels_from_match
 from ..render.renderer import MatchRenderer, RenderCancelled, RenderProgress
+from ..render.settings import apply_container_extension
 from .manager import JOBS, RenderJob
 
 # Upload module is imported lazily inside `_run_upload` so the queue
@@ -47,7 +49,11 @@ def run_render(job: RenderJob) -> None:
     Dispatch on `job.kind`:
       - "full" / "preview" -> single-output path via MatchRenderer.
       - "highlights" / "focused_highlights" -> batch path producing one
-        mp4 per detected span (see `app/render/batch.py`).
+        file per detected span (see `app/render/batch.py`).
+      - "player_reels" -> one file per PLAYER, all of their plays
+        concatenated, plus a chapter sidecar (see `app/render/reels.py`).
+        Deliberately separate from "highlights": both can be run on the
+        same match and neither replaces the other.
     """
     JOBS.mark_started(job.id)
 
@@ -68,6 +74,10 @@ def run_render(job: RenderJob) -> None:
 
     if job.kind in ("highlights", "focused_highlights"):
         _run_batch(job, m, cancel_check)
+        return
+
+    if job.kind == "player_reels":
+        _run_player_reels(job, m, cancel_check)
         return
 
     home_roster = scanner.load_team_roster(job.team)
@@ -153,6 +163,13 @@ def run_render(job: RenderJob) -> None:
             parts[-1] = f"preview_{leaf}"
             output_filename = "/".join(parts)
 
+    # Naming templates spell out an extension (legacy default: .mp4) but
+    # the actual container comes from render_settings.json (default:
+    # QuickTime/.mov for DNxHR), so normalize it here - the renderer does
+    # the same to the real path and this keeps the recorded filename,
+    # download link and file on disk in sync.
+    output_filename = apply_container_extension(output_filename)
+
     output_path = renders / output_filename
     # Templates may carry forward slashes (subfolders) - ensure the
     # destination directory exists before the renderer tries to write.
@@ -165,6 +182,18 @@ def run_render(job: RenderJob) -> None:
 
     def on_progress(p: RenderProgress) -> None:
         now = time.time()
+        if p.phase == "audio":
+            # MoviePy writes the whole audio track before the first video
+            # frame; leave the percent bar alone (it tracks video frames)
+            # and just say what's happening so the job doesn't look hung.
+            if now - last_emit[0] > 0.4:
+                JOBS.update(
+                    job.id,
+                    phase="audio",
+                    message=f"writing audio track {p.percent:.0f}%",
+                )
+                last_emit[0] = now
+            return
         if p.percent - last_pct[0] >= 0.5 or now - last_emit[0] > 0.4:
             JOBS.update(
                 job.id,
@@ -294,6 +323,18 @@ def _run_batch(
         # onto the batch total. Throttle SSE updates the same way the
         # single-render path does to avoid spamming the manager.
         now = time.time()
+        if p.phase == "audio":
+            if now - last_emit[0] > 0.4:
+                JOBS.update(
+                    job.id,
+                    phase="audio",
+                    message=(
+                        f"[{current_total[0] + 1}/{len(clips)}] "
+                        f"writing audio track {p.percent:.0f}%"
+                    ),
+                )
+                last_emit[0] = now
+            return
         overall = (done_before_current[0] + p.frames_done) / max(1, total_frames) * 100.0
         if overall - last_pct[0] >= 0.5 or now - last_emit[0] > 0.4:
             JOBS.update(
@@ -323,7 +364,8 @@ def _run_batch(
             if cancel_check():
                 raise RenderCancelled("Render cancelled by user")
 
-            output_path = renders_root / bc.relative_path
+            relative_path = apply_container_extension(bc.relative_path)
+            output_path = renders_root / relative_path
             output_path.parent.mkdir(parents=True, exist_ok=True)
             # Brief status update so the UI shows which clip is starting
             # even before the first per-frame progress tick arrives.
@@ -355,11 +397,189 @@ def _run_batch(
             done_before_current[0] += max(0, bc.end_frame - bc.start_frame)
             current_total[0] = i
             if first_output is None:
-                first_output = bc.relative_path
+                first_output = relative_path
 
     # `output_filename` is used by the UI as a download link target; with
     # nested subfolders the relative_path is the right thing to record.
     JOBS.mark_done(job.id, first_output or "")
+
+
+# ---------------------------------------------------------------------------
+# Player reels
+# ---------------------------------------------------------------------------
+
+
+def _run_player_reels(
+    job: RenderJob,
+    m,  # Match
+    cancel_check,  # Callable[[], bool]
+) -> None:
+    """Render one reel per player: all of that player's plays in one file.
+
+    Each reel is a single encode of several source ranges concatenated
+    (`MatchRenderer.render(source_frame_ranges=...)`), so chapter offsets
+    are exact and there's no intermediate concat step.
+
+    Alongside every reel we write a `<reel>.chapters.txt` sidecar holding
+    the timestamp list. The YouTube upload path appends it to the video
+    description, which is what makes a 12-minute reel navigable instead
+    of forcing 11 separate uploads.
+    """
+    home_roster = scanner.load_team_roster(job.team)
+    home = TeamBranding(
+        name=home_roster.team_name or job.team,
+        color=home_roster.team_color or "#2d8a4e",
+    )
+    away = TeamBranding(
+        name=m.opponent_roster.team_name or m.opponent or "Away",
+        color=m.opponent_roster.team_color or "#8a2d2d",
+    )
+
+    tournament_info = scanner.load_tournament_info(job.team, job.tournament)
+    reels = reels_from_match(
+        m,
+        home_roster,
+        home_roster.team_name or job.team,
+        team=job.team,
+        tournament=job.tournament,
+        date=job.date,
+        match_name=job.match,
+        tournament_info=tournament_info,
+        naming_config=home_roster.naming,
+    )
+    if not reels:
+        JOBS.update(job.id, message="No player events found in this match")
+        JOBS.mark_done(job.id, "")
+        return
+
+    media_dir = paths.match_dir(job.team, job.tournament, job.date, job.match)
+    renders_root = paths.renders_dir(
+        job.team, job.tournament, job.date, job.match
+    )
+    renders_root.mkdir(parents=True, exist_ok=True)
+
+    fps = m.clips[0].fps if m.clips and m.clips[0].fps > 0 else (m.fps or 30.0)
+    total_frames = sum(r.total_frames for r in reels)
+    done_before_current = [0]
+    current_total = [0]
+    last_pct = [0.0]
+    last_emit = [time.time()]
+
+    def on_progress(p: RenderProgress) -> None:
+        now = time.time()
+        if p.phase == "audio":
+            if now - last_emit[0] > 0.4:
+                JOBS.update(
+                    job.id,
+                    phase="audio",
+                    message=(
+                        f"[{current_total[0] + 1}/{len(reels)}] "
+                        f"writing audio track {p.percent:.0f}%"
+                    ),
+                )
+                last_emit[0] = now
+            return
+        overall = (
+            (done_before_current[0] + p.frames_done)
+            / max(1, total_frames)
+            * 100.0
+        )
+        if overall - last_pct[0] >= 0.5 or now - last_emit[0] > 0.4:
+            JOBS.update(
+                job.id,
+                percent=overall,
+                phase=p.phase,
+                message=(
+                    f"{done_before_current[0] + p.frames_done}/{total_frames} "
+                    f"frames ({current_total[0]} reel(s) done of {len(reels)})"
+                ),
+            )
+            last_pct[0] = overall
+            last_emit[0] = now
+
+    first_output: Optional[str] = None
+
+    with MatchRenderer(
+        m,
+        media_dir,
+        home=home,
+        away=away,
+        home_roster=home_roster,
+        away_roster=m.opponent_roster,
+    ) as r:
+        for i, spec in enumerate(reels, start=1):
+            if cancel_check():
+                raise RenderCancelled("Render cancelled by user")
+
+            relative_path = apply_container_extension(spec.relative_path)
+            output_path = renders_root / relative_path
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            JOBS.update(
+                job.id,
+                message=f"[{i}/{len(reels)}] {spec.label}",
+            )
+            try:
+                r.render(
+                    output_path,
+                    progress=on_progress,
+                    source_frame_ranges=spec.source_ranges(),
+                    cancel_check=cancel_check,
+                )
+            except RenderCancelled:
+                try:
+                    output_path.unlink(missing_ok=True)
+                except Exception:
+                    logger.warning(
+                        "failed to remove partial reel output: %s", output_path
+                    )
+                raise
+
+            _write_chapter_sidecar(r, spec, output_path, fps)
+
+            done_before_current[0] += spec.total_frames
+            current_total[0] = i
+            if first_output is None:
+                first_output = relative_path
+
+    JOBS.mark_done(job.id, first_output or "")
+
+
+def _write_chapter_sidecar(renderer, spec, output_path: Path, fps: float) -> None:
+    """Write `<reel>.chapters.txt` next to a rendered reel.
+
+    Offsets come from the renderer so they match the file exactly (a
+    segment that fell entirely inside a cut region isn't in the output
+    and must not shift every later timestamp).
+
+    The list is written even when YouTube won't honor it as chapters
+    (fewer than 3 plays, or a play shorter than the 10 s minimum):
+    bare timestamps in a description are still auto-linked into seekable
+    links, so they remain useful. The reason is recorded as a comment
+    line so the user can see why the chapter bar is missing.
+    """
+    try:
+        spans = renderer.segment_offsets(spec.source_ranges())
+        chapters = build_chapters(spans, spec.segments, fps)
+        if not chapters.lines:
+            return
+        body = chapters.as_text()
+        if not chapters.valid:
+            body += (
+                "\n\n# NOTE: YouTube will not show a chapter bar for this "
+                f"reel ({chapters.reason}); the timestamps above still work "
+                "as clickable links in the description."
+            )
+            logger.info(
+                "reel %s: chapters not YouTube-valid (%s)",
+                output_path.name,
+                chapters.reason,
+            )
+        output_path.with_suffix(output_path.suffix + ".chapters.txt").write_text(
+            body + "\n", encoding="utf-8"
+        )
+    except Exception:
+        # A missing chapter file must never fail an otherwise good render.
+        logger.warning("could not write chapter sidecar for %s", output_path, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +617,12 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
     file_path = renders / filename
     if not file_path.is_file():
         raise RuntimeError(f"Render file not found: {file_path}")
+
+    # NOTE: chapters are NOT merged here. The enqueue endpoint expands
+    # the reel description template - which can position `{chapters}`
+    # itself, or gets the block appended - so the persisted job already
+    # carries the final strings. See
+    # `api/renders.py::enqueue_youtube_upload`.
 
     # Lazy import: keeps the dispatcher healthy on machines without the
     # google-* deps installed.
@@ -472,6 +698,29 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
             ),
         )
     JOBS.mark_done(job.id, result.video_url)
+
+
+def read_chapter_sidecar(file_path: Path) -> str:
+    """Chapter/timestamp lines for a render, or "" when there are none.
+
+    Comment lines (the "why no chapter bar" operator note written by
+    `_write_chapter_sidecar`) are stripped - they're not for viewers.
+    Public because the upload-enqueue endpoint needs them to expand the
+    `{chapters}` placeholder.
+    """
+    sidecar = file_path.with_suffix(file_path.suffix + ".chapters.txt")
+    if not sidecar.is_file():
+        return ""
+    try:
+        lines = [
+            ln.rstrip()
+            for ln in sidecar.read_text(encoding="utf-8").splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")
+        ]
+    except OSError:
+        logger.warning("could not read chapter sidecar %s", sidecar, exc_info=True)
+        return ""
+    return "\n".join(lines)
 
 
 def _fmt_mb(n: int) -> str:

@@ -10,6 +10,10 @@ export interface YouTubeConfigDto {
   playlist_id?: string | null;
   title_template?: string | null;
   description_template?: string | null;
+  /** Player-reel upload templates. Extra placeholders: {player},
+   *  {player_number}, {player_name}, {clip_count}, {chapters}. */
+  reel_title_template?: string | null;
+  reel_description_template?: string | null;
 }
 
 /** Team-level render-output naming templates. Slashes in a template
@@ -27,6 +31,8 @@ export interface NamingConfigDto {
    *  `focused/{team}/{player}/
    *   {date}_vs_{opponent}_{start_timestamp}-{end_timestamp}.mp4` */
   focused_template?: string | null;
+  /** Player reels: one file per player (all of their plays). */
+  reel_template?: string | null;
 }
 
 export interface RosterDto {
@@ -136,12 +142,15 @@ export interface RenderJobDto {
    *  - "full"               whole match, one output
    *  - "preview"            window around `playhead_frame`, one output
    *  - "highlights"         one mp4 per highlight (rally bounds)
-   *  - "focused_highlights" one mp4 per FocusIn/FocusOut span */
+   *  - "focused_highlights" one mp4 per FocusIn/FocusOut span
+   *  - "player_reels"       one file per player, all of their plays
+   *                         concatenated, with a chapter sidecar */
   kind:
     | "full"
     | "preview"
     | "highlights"
     | "focused_highlights"
+    | "player_reels"
     | "youtube_upload";
   /** Render parameters captured at enqueue time. */
   playhead_frame: number | null;
@@ -192,6 +201,10 @@ export interface FullRenderDto {
   created_at: number;
   opponent: string;
   match_index: number | null;
+  /** "full" = top-level match render, "reel" = one player's reel. */
+  kind?: "full" | "reel";
+  /** For reels: the player the reel belongs to, e.g. "#8 Kate G". */
+  player_label?: string;
   youtube_video_id?: string | null;
   youtube_uploaded_at?: number | null;
   /** privacyStatus YouTube actually applied (read back from the upload

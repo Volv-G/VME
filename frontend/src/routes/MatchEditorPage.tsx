@@ -143,6 +143,35 @@ export function MatchEditorPage() {
     setData(await api.deleteEvent(team, tournament, date, match, id));
     if (selectedEventId === id) setSelectedEventId(null);
   }
+  /** Persist a team color edited from a team-card swatch.
+   *
+   * Home is a team-level property (roster.json, shared by every match),
+   * while the opponent roster is embedded in this match's match.json -
+   * hence the two different endpoints. Both send the full roster back
+   * because PATCH/PUT replace the object wholesale.
+   */
+  async function setTeamColor(which: "home" | "opponent", hex: string) {
+    if (!data) return;
+    try {
+      if (which === "home") {
+        const saved = await api.putRoster(team, {
+          ...data.home_roster,
+          team_color: hex,
+        });
+        setData((d) => (d ? { ...d, home_roster: saved } : d));
+      } else {
+        setData(
+          await api.patchMatch(team, tournament, date, match, {
+            opponent_roster: { ...data.opponent_roster, team_color: hex },
+          })
+        );
+      }
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function runAutoCuts(opts: { hasIntroClip?: boolean } = {}) {
     const r = await api.autoCuts(team, tournament, date, match, opts);
     setData(r.match);
@@ -203,6 +232,7 @@ export function MatchEditorPage() {
             currentFrame={currentFrame}
             onCreate={createEvent}
             onAutoCuts={runAutoCuts}
+            onTeamColorChange={setTeamColor}
           />
         </div>
 

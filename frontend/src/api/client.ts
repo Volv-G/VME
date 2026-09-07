@@ -140,6 +140,28 @@ export const api = {
     );
   },
 
+  /** Forget a render's YouTube upload record so it can be uploaded again.
+   *
+   *  Deleting a video on YouTube leaves the local `.youtube.json`
+   *  sidecar behind, which keeps the UI showing "on YouTube" with no
+   *  upload button. By default the server verifies the video is really
+   *  gone (1 quota unit) and refuses if it still exists; `force` skips
+   *  that check. */
+  async forgetYouTubeUpload(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    filename: string,
+    force = false
+  ): Promise<{ cleared: boolean; video_id?: string; reason?: string }> {
+    return fetchJson(
+      `${matchBase(team, tournament, date, match)}/uploads/youtube/` +
+        `${encPath(filename)}?verify=${force ? "false" : "true"}`,
+      { method: "DELETE" }
+    );
+  },
+
   // ---- Matches ----------------------------------------------------------
   async listMatches(team: string, tournament: string): Promise<MatchSummary[]> {
     return fetchJson<MatchSummary[]>(
@@ -404,7 +426,12 @@ export const api = {
     opts: {
       label?: string;
       /** Render kind. Defaults to "full" server-side. */
-      kind?: "full" | "preview" | "highlights" | "focused_highlights";
+      kind?:
+        | "full"
+        | "preview"
+        | "highlights"
+        | "focused_highlights"
+        | "player_reels";
       /** Source/global frame to center a preview around (omit for full render). */
       playheadFrame?: number;
       /** Half-window length in seconds for preview (defaults to 30 on the server). */

@@ -56,6 +56,55 @@ export function TeamFullRendersPanel({ team }: Props) {
     return () => clearInterval(t);
   }, [reload]);
 
+  /** Clear a stale "uploaded" marker so the row offers upload again.
+   *
+   *  The server verifies the video is really gone from YouTube first and
+   *  answers 409 if it isn't; we relay that and offer to force, which
+   *  covers the case where verification itself failed (expired auth,
+   *  offline). */
+  async function forgetUpload(r: FullRenderDto) {
+    const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
+    setErr(null);
+    setBusyId(id);
+    try {
+      await api.forgetYouTubeUpload(
+        team,
+        r.tournament,
+        r.date,
+        r.match,
+        r.filename
+      );
+      await reload();
+    } catch (e) {
+      const msg = String(e);
+      if (
+        msg.includes("still exists") &&
+        confirm(
+          `${msg}\n\nClear the record anyway? The video on YouTube is not ` +
+            `touched - you'd end up with a duplicate if you re-upload.`
+        )
+      ) {
+        try {
+          await api.forgetYouTubeUpload(
+            team,
+            r.tournament,
+            r.date,
+            r.match,
+            r.filename,
+            true
+          );
+          await reload();
+        } catch (e2) {
+          setErr(String(e2));
+        }
+      } else {
+        setErr(msg);
+      }
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function upload(r: FullRenderDto) {
     if (!status?.configured) return;
     const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
@@ -77,13 +126,16 @@ export function TeamFullRendersPanel({ team }: Props) {
   }
 
   // Build a per-row download URL the same way the per-match panel does:
-  // segment-encoded so nested filenames survive FastAPI's path param.
+  // segment-encoded so nested filenames survive FastAPI's `{path}`
+  // param. Reels live at `reels/<team>/<player>/<file>`, so the slashes
+  // MUST stay slashes - encodeURIComponent on the whole path would turn
+  // them into %2F and the route wouldn't match.
   function downloadUrl(r: FullRenderDto): string {
     const base =
       `${import.meta.env.BASE_URL.replace(/\/$/, "")}/api/teams/` +
       `${encodeURIComponent(team)}/tournaments/${encodeURIComponent(r.tournament)}` +
       `/dates/${encodeURIComponent(r.date)}/matches/${encodeURIComponent(r.match)}/renders/`;
-    return base + encodeURIComponent(r.filename);
+    return base + r.filename.split("/").map(encodeURIComponent).join("/");
   }
 
   return (
@@ -107,7 +159,8 @@ export function TeamFullRendersPanel({ team }: Props) {
 
       {renders.length === 0 ? (
         <p className="muted" style={{ margin: 0 }}>
-          No full-match renders yet. Run a render from a match page.
+          No renders yet. Run a full render or player reels from a match
+          page.
         </p>
       ) : (
         <div className="list">
@@ -122,6 +175,11 @@ export function TeamFullRendersPanel({ team }: Props) {
             const matchLabel = r.match_index
               ? `M${r.match_index}. ${displayName(r.opponent || r.match)}`
               : displayName(r.opponent || r.match);
+            const isReel = r.kind === "reel";
+            // Reels are one row per player: lead with the player so a
+            // dozen rows from the same match stay distinguishable, and
+            // show the leaf filename rather than the nested path.
+            const leaf = r.filename.split("/").pop() || r.filename;
             return (
               <div
                 key={id}
@@ -138,14 +196,35 @@ export function TeamFullRendersPanel({ team }: Props) {
                     }}
                   >
                     <strong style={{ fontSize: 13 }}>{r.date}</strong>
+                    {isReel && (
+                      <>
+                        <span
+                          style={{
+                            fontSize: 10,
+                            padding: "1px 6px",
+                            borderRadius: 3,
+                            border: "1px solid var(--border)",
+                            color: "var(--text-dim)",
+                          }}
+                          title="Player reel: every play by this player, with chapters"
+                        >
+                          reel
+                        </span>
+                        {r.player_label && (
+                          <strong style={{ fontSize: 13 }}>
+                            {r.player_label}
+                          </strong>
+                        )}
+                      </>
+                    )}
                     <span>{matchLabel}</span>
                     <span className="muted" style={{ fontSize: 11 }}>
                       {displayName(r.tournament)}
                     </span>
                   </div>
                   <div className="row-meta" style={{ marginTop: 2 }}>
-                    <a href={downloadUrl(r)} download>
-                      {r.filename}
+                    <a href={downloadUrl(r)} download title={r.filename}>
+                      {leaf}
                     </a>{" "}
                     · {formatBytes(r.size_bytes)} · {formatAge(r.created_at)}
                   </div>
@@ -160,19 +239,35 @@ export function TeamFullRendersPanel({ team }: Props) {
                       whiteSpace: "nowrap",
                     }}
                   >
-                    <a
-                      href={ytUrl!}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={
-                        r.youtube_uploaded_at
-                          ? `Uploaded ${formatAge(r.youtube_uploaded_at)}`
-                          : "Uploaded"
-                      }
-                      style={{ color: "#3aa55d" }}
+                    <div
+                      style={{ display: "flex", gap: 8, alignItems: "center" }}
                     >
-                      ▶ on YouTube
-                    </a>
+                      <a
+                        href={ytUrl!}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={
+                          r.youtube_uploaded_at
+                            ? `Uploaded ${formatAge(r.youtube_uploaded_at)}`
+                            : "Uploaded"
+                        }
+                        style={{ color: "#3aa55d" }}
+                      >
+                        ▶ on YouTube
+                      </a>
+                      <button
+                        onClick={() => forgetUpload(r)}
+                        disabled={busyId === id}
+                        title={
+                          "Forget this upload record so the render can be " +
+                          "uploaded again (use after deleting the video on " +
+                          "YouTube). The video itself is not deleted."
+                        }
+                        style={{ padding: "1px 6px", fontSize: 11 }}
+                      >
+                        {busyId === id ? "…" : "↺"}
+                      </button>
+                    </div>
                     {/* Show the privacy status as a small badge. When
                         YouTube downgraded the upload (requested !=
                         actual) the badge turns warning-colored and the

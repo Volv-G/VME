@@ -100,9 +100,10 @@ def put_roster(team: str, roster: RosterOut) -> RosterOut:
 
 @router.get("/{team}/full-renders", response_model=list[FullRenderOut])
 def list_full_renders(team: str) -> list[FullRenderOut]:
-    """All full-match renders for `team`, across every tournament / date.
+    """All shareable renders for `team`, across every tournament / date.
 
-    Used by the team dashboard's "Full renders" panel. Each entry
+    Used by the team dashboard's "Full renders" panel: top-level match
+    renders plus one row per player reel (`kind="reel"`). Each entry
     carries the location info needed to construct download/upload URLs
     plus the YouTube state read from the per-render sidecar.
     """
@@ -117,6 +118,8 @@ def list_full_renders(team: str) -> list[FullRenderOut]:
             created_at=r.created_at,
             opponent=r.opponent,
             match_index=r.match_index,
+            kind=r.kind,
+            player_label=r.player_label,
             youtube_video_id=r.youtube_video_id,
             youtube_uploaded_at=r.youtube_uploaded_at,
             youtube_privacy_status=r.youtube_privacy_status,

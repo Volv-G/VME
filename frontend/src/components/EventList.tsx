@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { EventDto, RosterDto } from "../types/api";
 import { EMPTY_STATE } from "./Controls/state";
 import { analyzeCuts } from "./cutAnalysis";
@@ -39,8 +46,9 @@ export function EventList({
 
   const ctx = { homeRoster, opponentRoster, homeName, opponentName, fps };
   // Two independent orphan-detection passes - merged here so the same
-  // red badge / `.orphan` class flags both unpaired cuts AND unannotated
-  // focus spans. Membership in either set is enough to highlight.
+  // red badge / `.orphan` class flags unpaired cuts AND unpaired focus
+  // spans (both are dropped at render time). Membership in either set is
+  // enough to highlight.
   const { orphanIds: cutOrphans } = analyzeCuts(events);
   const { orphanIds: focusOrphans } = analyzeFocus(events);
   const orphanIds = useMemo(
@@ -61,9 +69,58 @@ export function EventList({
     [events, homeRoster, opponentRoster, homeName, opponentName, fps]
   );
 
-  const matchCount = lowerQuery
-    ? summaries.filter((s) => s.toLowerCase().includes(lowerQuery)).length
-    : 0;
+  // Indices (into `events`) of every row matching the query, in list
+  // order. Drives both the counter and the prev/next navigation.
+  const matchIndices = useMemo(() => {
+    if (!lowerQuery) return [];
+    const out: number[] = [];
+    summaries.forEach((s, i) => {
+      if (s.toLowerCase().includes(lowerQuery)) out.push(i);
+    });
+    return out;
+  }, [summaries, lowerQuery]);
+  const matchCount = matchIndices.length;
+
+  // Which match the prev/next buttons are parked on. -1 = "not started",
+  // so the first Next lands on match 1 rather than skipping to 2.
+  const [cursor, setCursor] = useState(-1);
+  useEffect(() => { setCursor(-1); }, [lowerQuery]);
+
+  // Rows are looked up through the container by `data-event-id` rather
+  // than per-row ref callbacks: navigation must be able to scroll to a
+  // match that is ALREADY the selected row (selection wouldn't change, so
+  // the selection effect below wouldn't fire), and a query is cheaper
+  // than re-attaching a ref on every row on every render.
+  const listRef = useRef<HTMLDivElement | null>(null);
+  // Id that navigation already scrolled to, so the selection effect below
+  // doesn't immediately re-scroll it with a different alignment.
+  const navScrolledIdRef = useRef<number | null>(null);
+
+  const goToMatch = useCallback(
+    (delta: number) => {
+      if (matchCount === 0) return;
+      // From the "not started" state, Next opens on the first hit and
+      // Prev on the last one; afterwards both wrap around.
+      const next =
+        cursor < 0
+          ? delta > 0
+            ? 0
+            : matchCount - 1
+          : (cursor + delta + matchCount) % matchCount;
+      setCursor(next);
+      const ev = events[matchIndices[next]];
+      if (!ev) return;
+      navScrolledIdRef.current = ev.id;
+      onSelect(ev.id);
+      if (ev.global_frame !== null) onSeek(ev.global_frame);
+      // Center the row: unlike the `nearest` scroll used for selection,
+      // stepping through hits reads better when the target lands mid-list.
+      listRef.current
+        ?.querySelector(`[data-event-id="${ev.id}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    },
+    [cursor, events, matchCount, matchIndices, onSeek, onSelect]
+  );
 
   // Auto-scroll the selected row into view whenever the selection
   // changes. Used when an event is added or clicked elsewhere (e.g. the
@@ -74,24 +131,67 @@ export function EventList({
   const selectedRowRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (selectedId == null) return;
+    if (navScrolledIdRef.current === selectedId) {
+      // Search navigation already centered this row - don't fight it.
+      navScrolledIdRef.current = null;
+      return;
+    }
+    navScrolledIdRef.current = null;
     const el = selectedRowRef.current;
     if (el)
       el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [selectedId]);
 
   return (
-    <div>
+    <div ref={listRef}>
       <div className="event-search">
         <input
           type="search"
           placeholder="Search events…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter / Shift+Enter step through hits (browser-find muscle
+            // memory); Escape clears without leaving the field.
+            if (e.key === "Enter") {
+              e.preventDefault();
+              goToMatch(e.shiftKey ? -1 : 1);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              setQuery("");
+            }
+          }}
         />
         {trimmed && (
-          <span className="event-search-count">
-            {matchCount} match{matchCount === 1 ? "" : "es"}
-          </span>
+          <>
+            <span className="event-search-count">
+              {matchCount === 0
+                ? "no matches"
+                : cursor < 0
+                  ? `${matchCount} match${matchCount === 1 ? "" : "es"}`
+                  : `${cursor + 1} / ${matchCount}`}
+            </span>
+            <div className="event-search-nav">
+              <button
+                type="button"
+                onClick={() => goToMatch(-1)}
+                disabled={matchCount === 0}
+                title="Previous match (Shift+Enter)"
+                aria-label="Previous match"
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                onClick={() => goToMatch(1)}
+                disabled={matchCount === 0}
+                title="Next match (Enter)"
+                aria-label="Next match"
+              >
+                ↓
+              </button>
+            </div>
+          </>
         )}
       </div>
 
@@ -110,12 +210,13 @@ export function EventList({
             : ev.type === "cut_end"
             ? "Cut End without a preceding Cut Start"
             : ev.type === "focus_in"
-            ? "FocusIn with no matching player event in the rally - this focus will be skipped at render time"
+            ? "Focus In without a matching Focus Out - this focus will be skipped at render time"
             : "Orphan event";
         const title = isOrphan ? `${summary} - ${orphanReason}` : summary;
         return (
           <div
             key={ev.id}
+            data-event-id={ev.id}
             ref={ev.id === selectedId ? selectedRowRef : undefined}
             className={
               "event-row" +

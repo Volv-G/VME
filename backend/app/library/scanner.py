@@ -34,21 +34,29 @@ class TournamentSummary:
 
 @dataclass
 class FullRenderInfo:
-    """One full-match render visible at the team-dashboard level.
+    """One shareable render visible at the team-dashboard level.
 
-    "Full" here means "a render at the top level of a match's `renders/`
-    directory" - we deliberately skip the nested `highlights/` and
-    `focused/` subtrees because those are batch outputs and the team
-    page would drown in them. Preview renders also live at the top
-    level, so we filter those out by filename prefix - preview filenames
-    start with `preview_` (see render_job.py's label_segment).
+    Two kinds qualify (see `kind`):
+
+    * `"full"` - a render at the top level of a match's `renders/`
+      directory. Preview renders also live there, so they're filtered
+      out by their `preview_` filename prefix (see render_job.py).
+    * `"reel"` - a player reel from `renders/reels/<team>/<player>/`.
+      One file per player, so the list stays short and each is worth
+      uploading on its own.
+
+    The nested `highlights/` and `focused/` subtrees are deliberately
+    excluded: those are per-play batch outputs (dozens per match) and
+    the team page would drown in them - reels exist precisely so that
+    material can be shared as one video per player.
     """
 
     team: str
     tournament: str
     date: str
     match: str
-    # Leaf filename inside the match's renders/ dir.
+    # Path inside the match's renders/ dir. A leaf filename for full
+    # renders; a relative path (`reels/<team>/<player>/<file>`) for reels.
     filename: str
     size_bytes: int
     created_at: float
@@ -65,6 +73,11 @@ class FullRenderInfo:
     # Google Cloud Console "Testing" mode.
     youtube_privacy_status: str | None = None
     youtube_requested_privacy_status: str | None = None
+    # "full" or "reel". Drives how the row is labelled in the UI.
+    kind: str = "full"
+    # For reels: the player the reel belongs to, formatted for display
+    # ("#8 Kate G"). Empty for full renders.
+    player_label: str = ""
 
 
 @dataclass
@@ -236,33 +249,114 @@ def save_youtube_sidecar(render_path: Path, info: dict) -> None:
         json.dump(info, f, indent=2)
 
 
+def delete_youtube_sidecar(render_path: Path) -> bool:
+    """Drop a render's upload record. True if a sidecar was removed.
+
+    Used when the video no longer exists on YouTube (deleted from the
+    channel) - the sidecar is the only thing marking the file as
+    uploaded, so removing it makes the render eligible for upload again.
+    """
+    p = paths.youtube_sidecar_path(render_path)
+    try:
+        if not p.is_file():
+            return False
+        p.unlink()
+        return True
+    except OSError:
+        logger.warning("could not delete YouTube sidecar %s", p, exc_info=True)
+        return False
+
+
 def _is_full_render(render_filename: str) -> bool:
     """True iff `render_filename` represents a full-match render.
 
     Filtering rules (kept here so list_team_full_renders and the upload
     endpoint agree on what's eligible):
-      - Must be a top-level .mp4 inside the renders/ dir (no slashes:
-        anything in `highlights/` or `focused/` is excluded).
+      - Must be a top-level video file inside the renders/ dir (no
+        slashes: anything in `highlights/` or `focused/` is excluded).
+        The extension depends on the configured render container
+        (.mov for the DNxHR default, .mp4 for legacy renders).
       - Preview outputs are excluded by their `preview_` filename prefix
         (see render_job.py: previews use label='preview' which becomes
         the segment).
     """
     if "/" in render_filename or "\\" in render_filename:
         return False
-    if not render_filename.lower().endswith(".mp4"):
-        return False
     leaf = render_filename.lower()
-    if leaf.startswith("preview_") or leaf == "preview.mp4":
+    if Path(leaf).suffix not in VIDEO_EXTENSIONS:
+        return False
+    if leaf.startswith("preview_") or Path(leaf).stem == "preview":
+        return False
+    # Encoder scratch (MoviePy's temp audio track) exists only while a
+    # render is in flight, but a listing taken mid-render would show it
+    # as a real output - and it would even be uploadable.
+    if paths.is_render_scratch(render_filename):
         return False
     return True
 
 
-def list_team_full_renders(team: str) -> list[FullRenderInfo]:
-    """Enumerate all full-match renders under a team, across tournaments.
+REELS_SUBDIR = "reels"
 
-    Walks `<team>/<tournament>/<date>/<match>/renders/` for each match
-    folder and picks up top-level mp4s only. Each entry includes the
-    YouTube upload state if a `.youtube.json` sidecar is present.
+
+def _reel_player_label(rel_parts: list[str]) -> str:
+    """`['reels','Eastlake','08_Kate_G','x.mp4']` -> `'#8 Kate G'`."""
+    if len(rel_parts) < 3:
+        return ""
+    jersey, name = paths.parse_player_folder(rel_parts[2])
+    if jersey is None:
+        return rel_parts[2].replace("_", " ")
+    return f"#{jersey} {name}".strip()
+
+
+def _build_render_info(
+    *,
+    path: Path,
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    relative: str,
+    opponent: str,
+    match_index: int | None,
+    kind: str,
+    player_label: str = "",
+) -> FullRenderInfo | None:
+    """One dashboard row for `path`, or None if it vanished mid-scan."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    sidecar = load_youtube_sidecar(path)
+    return FullRenderInfo(
+        team=team,
+        tournament=tournament,
+        date=date,
+        match=match,
+        filename=relative,
+        size_bytes=stat.st_size,
+        created_at=stat.st_mtime,
+        opponent=opponent,
+        match_index=match_index,
+        youtube_video_id=sidecar.get("video_id") if sidecar else None,
+        youtube_uploaded_at=sidecar.get("uploaded_at") if sidecar else None,
+        youtube_privacy_status=(
+            sidecar.get("privacy_status") if sidecar else None
+        ),
+        youtube_requested_privacy_status=(
+            sidecar.get("requested_privacy_status") if sidecar else None
+        ),
+        kind=kind,
+        player_label=player_label,
+    )
+
+
+def list_team_full_renders(team: str) -> list[FullRenderInfo]:
+    """Enumerate a team's shareable renders across all tournaments.
+
+    Walks `<team>/<tournament>/<date>/<match>/renders/` and picks up
+    top-level renders plus everything under `reels/` (one file per
+    player). Each entry includes the YouTube upload state if a
+    `.youtube.json` sidecar is present.
 
     Sorted newest-first by file mtime so the team dashboard shows
     recent renders at the top without further client-side sorting.
@@ -295,43 +389,45 @@ def list_team_full_renders(team: str) -> list[FullRenderInfo]:
                         )
                     except Exception:
                         pass
+                common = dict(
+                    team=team,
+                    tournament=tournament_d.name,
+                    date=date_d.name,
+                    match=match_d.name,
+                    opponent=opponent,
+                    match_index=idx,
+                )
                 for p in renders.iterdir():
-                    if not p.is_file():
+                    if not p.is_file() or not _is_full_render(p.name):
                         continue
-                    if not _is_full_render(p.name):
-                        continue
-                    try:
-                        stat = p.stat()
-                    except OSError:
-                        continue
-                    sidecar = load_youtube_sidecar(p)
-                    out.append(
-                        FullRenderInfo(
-                            team=team,
-                            tournament=tournament_d.name,
-                            date=date_d.name,
-                            match=match_d.name,
-                            filename=p.name,
-                            size_bytes=stat.st_size,
-                            created_at=stat.st_mtime,
-                            opponent=opponent,
-                            match_index=idx,
-                            youtube_video_id=(
-                                sidecar.get("video_id") if sidecar else None
-                            ),
-                            youtube_uploaded_at=(
-                                sidecar.get("uploaded_at") if sidecar else None
-                            ),
-                            youtube_privacy_status=(
-                                sidecar.get("privacy_status") if sidecar else None
-                            ),
-                            youtube_requested_privacy_status=(
-                                sidecar.get("requested_privacy_status")
-                                if sidecar
-                                else None
-                            ),
-                        )
+                    info = _build_render_info(
+                        path=p, relative=p.name, kind="full", **common
                     )
+                    if info is not None:
+                        out.append(info)
+
+                # Player reels: one file per player, nested a few levels
+                # deep. `filename` keeps the path relative to renders/ -
+                # that's what the download / upload endpoints expect.
+                reels_root = renders / REELS_SUBDIR
+                if reels_root.is_dir():
+                    for p in sorted(reels_root.rglob("*")):
+                        if (
+                            not p.is_file()
+                            or p.suffix.lower() not in VIDEO_EXTENSIONS
+                            or paths.is_render_scratch(p.name)
+                        ):
+                            continue
+                        rel = p.relative_to(renders).as_posix()
+                        info = _build_render_info(
+                            path=p,
+                            relative=rel,
+                            kind="reel",
+                            player_label=_reel_player_label(rel.split("/")),
+                            **common,
+                        )
+                        if info is not None:
+                            out.append(info)
     out.sort(key=lambda r: r.created_at, reverse=True)
     return out
 

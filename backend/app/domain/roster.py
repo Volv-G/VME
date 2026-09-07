@@ -23,6 +23,22 @@ DEFAULT_YT_TITLE_TEMPLATE = (
 DEFAULT_YT_DESCRIPTION_TEMPLATE = (
     "{date}. {tournament_full}. Match {match_index}. {opponent}"
 )
+# Player-reel uploads get their own title/description because the
+# match-level ones would give all twelve reels from a match the same
+# name. Defaults reproduce exactly what the hardcoded reel path used to
+# produce ('#8 Kate G - <match title>' + description + chapter list), so
+# a team that never touches these sees no change.
+# Extra placeholders available here: {player}, {player_number},
+# {player_name}, {clip_count} and {chapters}.
+# Date first, then player: YouTube's own listings (and any file listing)
+# sort alphabetically, so leading with the date keeps a match's reels
+# grouped together and in chronological order across matches.
+DEFAULT_YT_REEL_TITLE_TEMPLATE = (
+    "{date} - {player} - {tournament_abbr}. M{match_index}. {opponent}"
+)
+DEFAULT_YT_REEL_DESCRIPTION_TEMPLATE = (
+    "{date}. {tournament_full}. Match {match_index}. {opponent}\n\n{chapters}"
+)
 
 # Default render-output naming. Replicates the previous hard-coded
 # behavior exactly so existing files keep their format unless the team
@@ -35,6 +51,12 @@ DEFAULT_HIGHLIGHT_TEMPLATE = (
 DEFAULT_FOCUSED_TEMPLATE = (
     "focused/{team}/{player}/{action}/"
     "{date}_vs_{opponent}_{start_timestamp}-{end_timestamp}.mp4"
+)
+# Player reels: ONE file per player holding all of their plays, meant for
+# sharing/uploading (see app/render/reels.py). Flat per-player folder -
+# there's exactly one reel per player per match, so no action subfolder.
+DEFAULT_REEL_TEMPLATE = (
+    "reels/{team}/{player}/{date}_vs_{opponent}_{player}_reel.mp4"
 )
 
 
@@ -55,12 +77,14 @@ class NamingConfig:
     full_render_template: str = DEFAULT_FULL_RENDER_TEMPLATE
     highlight_template: str = DEFAULT_HIGHLIGHT_TEMPLATE
     focused_template: str = DEFAULT_FOCUSED_TEMPLATE
+    reel_template: str = DEFAULT_REEL_TEMPLATE
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "full_render_template": self.full_render_template,
             "highlight_template": self.highlight_template,
             "focused_template": self.focused_template,
+            "reel_template": self.reel_template,
         }
 
     @classmethod
@@ -77,6 +101,7 @@ class NamingConfig:
             focused_template=(
                 data.get("focused_template") or DEFAULT_FOCUSED_TEMPLATE
             ),
+            reel_template=(data.get("reel_template") or DEFAULT_REEL_TEMPLATE),
         )
 
 
@@ -101,6 +126,9 @@ class YouTubeConfig:
     # Templates run through `str.format(**vars)` at upload-enqueue time.
     title_template: str = DEFAULT_YT_TITLE_TEMPLATE
     description_template: str = DEFAULT_YT_DESCRIPTION_TEMPLATE
+    # Same, but for player-reel uploads (one video per player).
+    reel_title_template: str = DEFAULT_YT_REEL_TITLE_TEMPLATE
+    reel_description_template: str = DEFAULT_YT_REEL_DESCRIPTION_TEMPLATE
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -108,6 +136,8 @@ class YouTubeConfig:
             "playlist_id": self.playlist_id,
             "title_template": self.title_template,
             "description_template": self.description_template,
+            "reel_title_template": self.reel_title_template,
+            "reel_description_template": self.reel_description_template,
         }
 
     @classmethod
@@ -123,6 +153,14 @@ class YouTubeConfig:
             description_template=(
                 data.get("description_template")
                 or DEFAULT_YT_DESCRIPTION_TEMPLATE
+            ),
+            reel_title_template=(
+                data.get("reel_title_template")
+                or DEFAULT_YT_REEL_TITLE_TEMPLATE
+            ),
+            reel_description_template=(
+                data.get("reel_description_template")
+                or DEFAULT_YT_REEL_DESCRIPTION_TEMPLATE
             ),
         )
 

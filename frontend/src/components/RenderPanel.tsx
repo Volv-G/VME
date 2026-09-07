@@ -1,21 +1,51 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { displayName } from "../util/names";
 import type {
   RenderFileDto,
   RenderJobDto,
   YouTubeStatusDto,
 } from "../types/api";
 
+// How long the "queued" confirmation stays up before fading itself out.
+// Long enough to read a two-line message, short enough not to linger
+// over the panel while the user queues several renders in a row.
+const QUEUED_NOTICE_MS = 9000;
+
 /** Is `filename` a top-level full render (not a highlight / focused
  *  subfolder output, not a preview)? Matches `_is_full_render` on the
  *  backend so the upload action only appears where the server will
  *  accept it. */
+const VIDEO_EXTENSIONS = [".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm"];
+
 function isFullRender(filename: string): boolean {
   if (filename.includes("/") || filename.includes("\\")) return false;
   const lower = filename.toLowerCase();
-  if (!lower.endsWith(".mp4")) return false;
-  if (lower.startsWith("preview_") || lower === "preview.mp4") return false;
+  // The render container is configurable on the backend (.mov for the
+  // DNxHR default, .mp4 for legacy renders), so accept any video ext.
+  if (!VIDEO_EXTENSIONS.some((ext) => lower.endsWith(ext))) return false;
+  const stem = lower.replace(/\.[^.]+$/, "");
+  if (lower.startsWith("preview_") || stem === "preview") return false;
   return true;
+}
+
+/** Is `filename` a player reel (`reels/<team>/<player>/...`)?
+ *  Reels are uploadable even though they live in a subfolder - one video
+ *  per player is exactly what they're for. Mirrors the backend check in
+ *  `api/renders.py::enqueue_youtube_upload`. */
+function isPlayerReel(filename: string): boolean {
+  const parts = filename.split(/[/\\]/).filter(Boolean);
+  if (parts.length < 2 || parts[0] !== "reels") return false;
+  const leaf = parts[parts.length - 1].toLowerCase();
+  return VIDEO_EXTENSIONS.some((ext) => leaf.endsWith(ext));
+}
+
+/** Everything the YouTube upload endpoint accepts: the full match render
+ *  or a player reel. Per-play highlight/focused clips are excluded on
+ *  purpose (dozens of uploads per match). */
+function isUploadable(filename: string): boolean {
+  return isFullRender(filename) || isPlayerReel(filename);
 }
 
 function formatBytes(n: number): string {
@@ -76,6 +106,10 @@ export function RenderPanel({
   // the queue finishes an upload.
   const [uploads, setUploads] = useState<Record<string, string>>({});
   const [uploadingName, setUploadingName] = useState<string | null>(null);
+  // Transient "job queued" confirmation. `queueActive` decides whether
+  // it explains how to START the queue or just says work is under way.
+  const [notice, setNotice] = useState<{ queueActive: boolean } | null>(null);
+  const noticeTimer = useRef<number | null>(null);
   // Jobs for THIS match only. Filtered client-side from the team list so
   // we share one polling loop with the queue widget on other pages.
   const [matchJobs, setMatchJobs] = useState<RenderJobDto[]>([]);
@@ -219,12 +253,28 @@ export function RenderPanel({
     []
   );
 
+  // Clear the pending notice timer on unmount so a closing modal can't
+  // set state on an unmounted component.
+  useEffect(
+    () => () => {
+      if (noticeTimer.current !== null) {
+        window.clearTimeout(noticeTimer.current);
+      }
+    },
+    []
+  );
+
   // ---- Actions ----------------------------------------------------------
 
   async function enqueue(
     label: string,
     opts: {
-      kind?: "full" | "preview" | "highlights" | "focused_highlights";
+      kind?:
+        | "full"
+        | "preview"
+        | "highlights"
+        | "focused_highlights"
+        | "player_reels";
       playheadFrame?: number;
       secondsAround?: number;
       immediate?: boolean;
@@ -237,9 +287,33 @@ export function RenderPanel({
         ...opts,
       });
       await reloadJobs();
+      // Immediate jobs (previews) start on their own; everything else
+      // waits for the dispatcher, which is easy to miss - a queued job
+      // just sits at "pending" with no explanation. Say so, and say
+      // where to start it. Queue state is fetched per enqueue (cheap)
+      // rather than polled, so the message reflects reality at that
+      // moment instead of guessing.
+      if (!opts.immediate) {
+        let active = false;
+        try {
+          active = (await api.getQueueState()).active;
+        } catch {
+          /* non-fatal: fall back to the "how to start it" wording */
+        }
+        showQueuedNotice(active);
+      }
     } catch (e) {
       setErr(String(e));
     }
+  }
+
+  function showQueuedNotice(queueActive: boolean) {
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+    setNotice({ queueActive });
+    noticeTimer.current = window.setTimeout(() => {
+      noticeTimer.current = null;
+      setNotice(null);
+    }, QUEUED_NOTICE_MS);
   }
 
   async function cancelJob(id: string) {
@@ -268,6 +342,47 @@ export function RenderPanel({
       await reloadUploads();
     } catch (e) {
       setErr(String(e));
+    }
+  }
+
+  /** Clear a stale upload record (video deleted on YouTube) so the row
+   *  offers "Upload" again. The server verifies the video is really gone
+   *  and 409s otherwise; we relay that and offer to force. */
+  async function forgetUpload(filename: string) {
+    setErr(null);
+    setUploadingName(filename);
+    try {
+      await api.forgetYouTubeUpload(team, tournament, date, match, filename);
+      await reloadUploads();
+    } catch (e) {
+      const msg = String(e);
+      if (
+        msg.includes("still exists") &&
+        confirm(
+          `${msg}
+
+Clear the record anyway? The video on YouTube is not ` +
+            `touched - you'd end up with a duplicate if you re-upload.`
+        )
+      ) {
+        try {
+          await api.forgetYouTubeUpload(
+            team,
+            tournament,
+            date,
+            match,
+            filename,
+            true
+          );
+          await reloadUploads();
+        } catch (e2) {
+          setErr(String(e2));
+        }
+      } else {
+        setErr(msg);
+      }
+    } finally {
+      setUploadingName(null);
     }
   }
 
@@ -369,11 +484,67 @@ export function RenderPanel({
         >
           Enqueue focused
         </button>
+        <button
+          disabled={!hasClips}
+          onClick={() => enqueue("reels", { kind: "player_reels" })}
+          title={
+            "Enqueue ONE video per player containing all of their plays, " +
+            "with a chapter list for sharing / YouTube upload. " +
+            "Separate from highlights - both can be run on the same match."
+          }
+        >
+          Enqueue player reels
+        </button>
       </div>
       <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
         Previews run immediately. Other renders are queued - start the queue
         from the team dashboard when ready.
       </p>
+
+      {notice && (
+        <div
+          role="status"
+          style={{
+            marginTop: 8,
+            padding: "8px 10px",
+            borderRadius: 6,
+            fontSize: 12,
+            lineHeight: 1.5,
+            border: "1px solid",
+            borderColor: notice.queueActive
+              ? "var(--border)"
+              : "var(--warn, #d29922)",
+            background: notice.queueActive
+              ? "var(--bg-elev-2)"
+              : "rgba(210, 153, 34, 0.10)",
+            display: "flex",
+            gap: 8,
+            alignItems: "baseline",
+          }}
+        >
+          <span style={{ flex: 1 }}>
+            {notice.queueActive ? (
+              <>Render queued - the queue is running, it will start shortly.</>
+            ) : (
+              <>
+                Render queued, but <strong>the queue is stopped</strong>. Start
+                it from the{" "}
+                <Link to={`/teams/${encodeURIComponent(team)}`}>
+                  {displayName(team)} home page
+                </Link>
+                .
+              </>
+            )}
+          </span>
+          <button
+            onClick={() => setNotice(null)}
+            title="Dismiss"
+            style={{ padding: "0 6px", fontSize: 11 }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {err && (
         <div className="error" style={{ marginTop: 8 }}>
@@ -430,6 +601,7 @@ export function RenderPanel({
             match={match}
             onDelete={removeRender}
             onUpload={uploadToYouTube}
+            onForgetUpload={forgetUpload}
             uploads={uploads}
             uploadingName={uploadingName}
             ytStatus={ytStatus}
@@ -449,8 +621,10 @@ interface RendersByDirProps {
   date: string;
   match: string;
   onDelete: (filename: string) => void;
-  /** Trigger a YouTube upload (full renders only). */
+  /** Trigger a YouTube upload (full renders + player reels). */
   onUpload: (filename: string) => void;
+  /** Clear a stale upload record so the row can be uploaded again. */
+  onForgetUpload: (filename: string) => void;
   /** Map of filename -> YouTube video id for already-uploaded renders. */
   uploads: Record<string, string>;
   /** Filename currently being enqueued (button disabled / spinner). */
@@ -467,6 +641,7 @@ function RendersByDir({
   match,
   onDelete,
   onUpload,
+  onForgetUpload,
   uploads,
   uploadingName,
   ytStatus,
@@ -506,7 +681,7 @@ function RendersByDir({
           )}
           {groups.get(dir)!.map((r) => {
             const leaf = r.filename.split("/").pop() || r.filename;
-            const canUpload = isFullRender(r.filename);
+            const canUpload = isUploadable(r.filename);
             const uploaded = uploads[r.filename];
             return (
               <div
@@ -542,15 +717,31 @@ function RendersByDir({
                 </div>
                 {canUpload &&
                   (uploaded ? (
-                    <a
-                      href={`https://youtu.be/${uploaded}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ color: "#3aa55d", whiteSpace: "nowrap" }}
-                      title="Open on YouTube"
+                    <span
+                      style={{ display: "flex", gap: 6, alignItems: "center" }}
                     >
-                      ▶ YouTube
-                    </a>
+                      <a
+                        href={`https://youtu.be/${uploaded}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: "#3aa55d", whiteSpace: "nowrap" }}
+                        title="Open on YouTube"
+                      >
+                        ▶ YouTube
+                      </a>
+                      <button
+                        onClick={() => onForgetUpload(r.filename)}
+                        disabled={uploadingName === r.filename}
+                        title={
+                          "Forget this upload record so the render can be " +
+                          "uploaded again (use after deleting the video on " +
+                          "YouTube). The video itself is not deleted."
+                        }
+                        style={{ padding: "1px 6px", fontSize: 11 }}
+                      >
+                        ↺
+                      </button>
+                    </span>
                   ) : (
                     <button
                       onClick={() => onUpload(r.filename)}

@@ -16,6 +16,21 @@ Variables (all strings, never None) made available to `str.format(...)`:
                         yourself in the template; user said never more
                         than 9 matches/day so padding is unnecessary)
 
+Player-reel uploads additionally get (see `with_reel`):
+
+  {player}            - "#8 Kate G" (number + name, as displayed)
+  {player_number}     - "8"
+  {player_name}       - "Kate G"
+  {clip_count}        - number of plays in the reel ("5"), derived from
+                        the chapter sidecar
+  {chapters}          - the timestamp/chapter block. When a description
+                        template omits it, the upload job appends the
+                        block at the end instead, so chapters are never
+                        silently lost.
+
+These are empty strings for non-reel uploads rather than missing, so a
+team can share one template between both if they want to.
+
 Missing variables in user templates raise a KeyError that bubbles up to
 the upload endpoint; that's the right behavior - we want a 400 on a
 broken template, not a silent upload with literal `{foo}` in the title.
@@ -23,7 +38,8 @@ broken template, not a silent upload with literal `{foo}` in the title.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Optional
 
 from ..domain.match import Match
 from ..domain.roster import Roster
@@ -41,6 +57,14 @@ class TemplateVars:
     tournament_abbr: str
     tournament_full: str
     match_index: str
+    # Reel-only extras. Empty strings for match uploads so a template
+    # that mentions them still formats (it just renders blanks) instead
+    # of raising KeyError.
+    player: str = ""
+    player_number: str = ""
+    player_name: str = ""
+    clip_count: str = ""
+    chapters: str = ""
 
     def as_dict(self) -> dict[str, str]:
         return {
@@ -50,7 +74,35 @@ class TemplateVars:
             "tournament_abbr": self.tournament_abbr,
             "tournament_full": self.tournament_full,
             "match_index": self.match_index,
+            "player": self.player,
+            "player_number": self.player_number,
+            "player_name": self.player_name,
+            "clip_count": self.clip_count,
+            "chapters": self.chapters,
         }
+
+    def with_reel(
+        self,
+        *,
+        jersey: Optional[int],
+        player_name: str,
+        clip_count: int,
+        chapters: str,
+    ) -> "TemplateVars":
+        """Copy with the player-reel placeholders filled in."""
+        player = ""
+        if jersey is not None:
+            player = f"#{jersey}" + (f" {player_name}" if player_name else "")
+        elif player_name:
+            player = player_name
+        return replace(
+            self,
+            player=player,
+            player_number=(str(jersey) if jersey is not None else ""),
+            player_name=player_name,
+            clip_count=str(clip_count) if clip_count else "",
+            chapters=chapters,
+        )
 
 
 def _slug_to_display(slug: str) -> str:
@@ -87,6 +139,20 @@ def build_vars(
         tournament_full=full,
         match_index=(str(idx) if idx is not None else "?"),
     )
+
+
+CHAPTERS_PLACEHOLDER = "{chapters}"
+
+
+def template_uses_chapters(template: str) -> bool:
+    """Whether a description template positions the chapter block itself.
+
+    When it doesn't, the upload job appends the block after the rendered
+    description - which is what the reel feature did before these
+    templates existed, and keeps chapters working for teams that write
+    their own description without thinking about them.
+    """
+    return CHAPTERS_PLACEHOLDER in (template or "")
 
 
 def render_template(template: str, vars_: TemplateVars) -> str:

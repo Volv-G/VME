@@ -69,6 +69,23 @@ class MatchEvent:
     def overlay_effect(self) -> Optional[OverlayEffect]:
         return None
 
+    def overlay_effect_for_state(
+        self, state: Optional[GameState]
+    ) -> Optional[OverlayEffect]:
+        """Overlay for events whose popup depends on game state.
+
+        Most popups are self-describing - a `KillEvent` knows its team and
+        jersey - and are returned by `overlay_effect`. A serve doesn't:
+        who is serving is only knowable from the state (serving team +
+        whoever stands at position 1). Rather than teach the frame-map
+        builder about specific event types, events can override this hook
+        and get the state snapshot handed to them.
+
+        `state` is the snapshot AFTER this event. Default implementation
+        falls back to the stateless `overlay_effect`.
+        """
+        return self.overlay_effect
+
     @property
     def score_effect(self) -> Optional[ScoreEffect]:
         return None

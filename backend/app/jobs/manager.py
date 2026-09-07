@@ -55,6 +55,10 @@ class RenderJob:
     #   - "preview"            -> window around `playhead_frame`, one output
     #   - "highlights"         -> one mp4 per HighlightEvent (rally bounds)
     #   - "focused_highlights" -> one mp4 per FocusIn/FocusOut pair
+    #   - "player_reels"       -> one file per player: every play of theirs
+    #                             concatenated + a `.chapters.txt` sidecar.
+    #                             Separate from "highlights", not a
+    #                             replacement - both can run on a match.
     #   - "youtube_upload"     -> upload an existing render file to YouTube
     #                             (not a render at all; reuses the queue's
     #                             FIFO + progress + SSE plumbing).

@@ -32,6 +32,7 @@ from typing import Optional
 from ..domain.match import Match
 from ..domain.roster import Roster
 from ..domain.team import Team
+from ..domain.roster import DEFAULT_REEL_TEMPLATE as _DEFAULT_REEL_TEMPLATE
 from ..library import paths
 
 
@@ -50,6 +51,9 @@ DEFAULT_FOCUSED_TEMPLATE = (
     "focused/{team}/{player}/{action}/"
     "{date}_vs_{opponent}_{start_timestamp}-{end_timestamp}.mp4"
 )
+# Re-exported from the domain layer so callers can keep importing every
+# default from this module (see `render_naming.DEFAULT_*` usages).
+DEFAULT_REEL_TEMPLATE = _DEFAULT_REEL_TEMPLATE
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +293,51 @@ def build_focused_vars(
     vars_["start_timestamp"] = start_timestamp
     vars_["end_timestamp"] = end_timestamp
     vars_["action"] = paths.safe_segment(action) if action else "focus"
+    return vars_
+
+
+def build_reel_vars(
+    *,
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    match_obj: Match,
+    home_team_name: str,
+    tournament_abbreviation: str,
+    tournament_full_name: str,
+    team_enum: Team,
+    jersey: int,
+    home_roster: Roster,
+    clip_count: int = 0,
+) -> dict[str, str]:
+    """Variables for one player reel's path template.
+
+    Same vocabulary as the highlight template minus `{action}` and
+    `{match_timestamp}` - a reel spans many actions and many timestamps,
+    so neither identifies the file. `{clip_count}` is offered instead
+    (e.g. `..._reel_11plays.mp4`).
+    """
+    vars_ = _common_match_vars(
+        team=team,
+        tournament=tournament,
+        date=date,
+        match=match,
+        match_obj=match_obj,
+        home_team_name=home_team_name,
+        tournament_abbreviation=tournament_abbreviation,
+        tournament_full_name=tournament_full_name,
+    )
+    vars_.update(
+        _player_vars(
+            team_enum=team_enum,
+            jersey=jersey,
+            home_roster=home_roster,
+            home_team_name=home_team_name,
+            match_obj=match_obj,
+        )
+    )
+    vars_["clip_count"] = str(int(clip_count))
     return vars_
 
 

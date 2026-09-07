@@ -21,9 +21,15 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from ..jobs.manager import JOBS, JobStatus
 from ..jobs.render_job import kick_off_immediate
+from ..config import VIDEO_EXTENSIONS
 from ..library import paths, scanner
 from ..upload import youtube as youtube_uploader
-from ..upload.templates import build_vars, render_template
+from ..upload.templates import (
+    build_vars,
+    render_template,
+    template_uses_chapters,
+)
+from ..jobs.render_job import read_chapter_sidecar
 from .helpers import load_match_or_404
 from .schemas import RenderFileOut, RenderRequestIn, UploadYouTubeRequestIn
 
@@ -62,7 +68,13 @@ def enqueue_render(
     # without a follow-up fetch per job.
     match_index, _ = paths.parse_match_folder(match)
     kind = body.kind or "full"
-    if kind not in {"full", "preview", "highlights", "focused_highlights"}:
+    if kind not in {
+        "full",
+        "preview",
+        "highlights",
+        "focused_highlights",
+        "player_reels",
+    }:
         raise HTTPException(400, f"Unknown render kind: {kind!r}")
     job = JOBS.enqueue(
         team=team,
@@ -112,25 +124,33 @@ def enqueue_youtube_upload(
     match: str,
     body: UploadYouTubeRequestIn,
 ) -> dict:
-    """Enqueue a YouTube upload of an existing full-match render.
+    """Enqueue a YouTube upload of an existing render.
 
-    Only top-level files inside the match's `renders/` directory are
-    uploadable (rejects highlights / focused outputs - those live in
-    subfolders). Templates from the team profile are expanded here, at
-    enqueue time, so the persisted job carries the resolved strings
-    (the team profile can change without affecting queued uploads).
+    Two things are uploadable:
+      * top-level files in the match's `renders/` dir - the full match;
+      * player reels (`reels/<team>/<player>/...`) - one video per
+        player, which is the whole point of that render kind.
+
+    Per-play outputs (`highlights/`, `focused/`) stay ineligible: dozens
+    of tiny uploads per match is exactly what reels exist to avoid, and
+    it would burn the `videos.insert` daily bucket for no benefit.
+
+    Templates from the team profile are expanded here, at enqueue time,
+    so the persisted job carries the resolved strings (the team profile
+    can change without affecting queued uploads).
     """
     s = youtube_uploader.get_status()
     if not s.configured:
         raise HTTPException(400, f"YouTube upload not configured: {s.reason}")
 
-    # Eligibility: file must be a top-level mp4 in renders/. Anything
-    # with a slash in `filename` is a batch output (highlights /
-    # focused) and not uploadable per the spec ("only for the full
-    # renders").
-    if "/" in body.filename or "\\" in body.filename:
+    rel = body.filename.replace("\\", "/")
+    parts = [p for p in rel.split("/") if p]
+    is_reel = len(parts) > 1 and parts[0] == "reels"
+    if len(parts) > 1 and not is_reel:
         raise HTTPException(
-            400, "Only top-level full renders can be uploaded."
+            400,
+            "Only full renders and player reels can be uploaded "
+            "(per-play highlight/focused clips are not).",
         )
     renders_root = paths.renders_dir(team, tournament, date, match)
     file_path = renders_root / body.filename
@@ -157,17 +177,48 @@ def enqueue_youtube_upload(
         roster=roster,
         tournament_info=tournament_info,
     )
+    # A reel is one player's video, so it uses its own templates - the
+    # match-level ones would give all twelve reels from a match the same
+    # title. The player comes from the path (`reels/<team>/<NN_Name>/...`)
+    # and the chapter block from the `<file>.chapters.txt` sidecar, both
+    # exposed to the template as placeholders.
+    title_template = roster.youtube.title_template
+    description_template = roster.youtube.description_template
+    if is_reel:
+        title_template = roster.youtube.reel_title_template
+        description_template = roster.youtube.reel_description_template
+        jersey, player_name = (
+            paths.parse_player_folder(parts[2]) if len(parts) >= 3 else (None, "")
+        )
+        chapters = read_chapter_sidecar(file_path)
+        vars_ = vars_.with_reel(
+            jersey=jersey,
+            player_name=player_name,
+            clip_count=len(chapters.splitlines()) if chapters else 0,
+            chapters=chapters,
+        )
+
     try:
         title = (
             body.title_override
             if body.title_override is not None
-            else render_template(roster.youtube.title_template, vars_)
+            else render_template(title_template, vars_)
         )
         description = (
             body.description_override
             if body.description_override is not None
-            else render_template(roster.youtube.description_template, vars_)
+            else render_template(description_template, vars_)
         )
+        # A description template that never mentions {chapters} still
+        # gets them - appended - so switching to a custom description
+        # can't silently drop per-play navigation.
+        if (
+            is_reel
+            and body.description_override is None
+            and vars_.chapters
+            and not template_uses_chapters(description_template)
+        ):
+            description = (description.rstrip() + "\n\n" + vars_.chapters).strip()
     except (KeyError, IndexError, ValueError) as exc:
         # KeyError = unknown placeholder; ValueError = malformed template.
         raise HTTPException(
@@ -330,8 +381,15 @@ def list_renders(
     # field carries the relative path from the renders root, which is
     # also what download/delete expect.
     out: list[RenderFileOut] = []
-    for p in renders.rglob("*.mp4"):
-        if not p.is_file():
+    # Any known video extension: the render container is configurable
+    # (render_settings.json / HandBrake preset), so outputs may be .mp4,
+    # .mkv, .mov (DNxHR master) etc.
+    for p in sorted(renders.rglob("*")):
+        if not p.is_file() or p.suffix.lower() not in VIDEO_EXTENSIONS:
+            continue
+        # Skip MoviePy's temp audio track, which is present next to the
+        # output for the duration of a render.
+        if paths.is_render_scratch(p.name):
             continue
         try:
             stat = p.stat()
@@ -365,6 +423,62 @@ def download_render(
         raise HTTPException(404, "Render file not found")
     # `name` is just the leaf for the Content-Disposition header.
     return FileResponse(target, media_type="video/mp4", filename=target.name)
+
+
+@router.delete(
+    "/teams/{team}/tournaments/{tournament}/dates/{date}/matches/{match}"
+    "/uploads/youtube/{filename:path}"
+)
+def forget_youtube_upload(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    filename: str,
+    verify: bool = True,
+) -> dict:
+    """Forget a render's YouTube upload record so it can be re-uploaded.
+
+    A successful upload writes a `<file>.youtube.json` sidecar, and the
+    UI uses it to replace the upload button with a link. Deleting the
+    video on YouTube leaves that sidecar behind, so the render looks
+    permanently "uploaded" - this endpoint clears the record.
+
+    With `verify=true` (the default) we first ask YouTube whether the
+    video still exists (`videos.list`, 1 quota unit) and REFUSE to clear
+    a record that's still live, so a stray click can't orphan a real
+    upload. Pass `verify=false` to force it.
+    """
+    renders = paths.renders_dir(team, tournament, date, match)
+    target = _safe_render_path(renders, filename)
+    if not target.is_file():
+        raise HTTPException(404, "Render file not found")
+
+    sidecar = scanner.load_youtube_sidecar(target)
+    if not sidecar:
+        return {"cleared": False, "reason": "no upload record"}
+
+    video_id = str(sidecar.get("video_id") or "")
+    if verify and video_id:
+        exists = youtube_uploader.video_exists(video_id)
+        if exists is True:
+            raise HTTPException(
+                409,
+                f"Video {video_id} still exists on YouTube. Delete it there "
+                "first, or clear the record with verify=false.",
+            )
+        # exists is None -> couldn't check (auth/network). Fall through:
+        # the user explicitly asked to clear, and a stale record is worse
+        # than a re-upload they can delete.
+
+    cleared = scanner.delete_youtube_sidecar(target)
+    logger.info(
+        "cleared YouTube upload record for %s (video_id=%s, verified=%s)",
+        filename,
+        video_id or "?",
+        verify,
+    )
+    return {"cleared": cleared, "video_id": video_id}
 
 
 @router.delete(

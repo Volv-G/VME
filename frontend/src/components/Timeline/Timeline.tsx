@@ -157,10 +157,14 @@ export function Timeline({
 
     const px = (frame: number) => (frame / totalFrames) * contentWidth;
 
-    // Visible window for tick culling (avoid drawing thousands of off-screen ticks).
-    const container = containerRef.current;
-    const visibleStart = container ? container.scrollLeft : 0;
-    const visibleEnd = visibleStart + viewWidth;
+    // NOTE: everything below is drawn for the FULL content width, not
+    // just the scrolled-into-view window. The canvas is capped at
+    // MAX_CANVAS_PX, which bounds the work (~180 major / ~2700 minor
+    // ticks worst case), and scroll-window culling used to leave the
+    // off-screen parts permanently blank: `scrollLeft` isn't a
+    // dependency of this effect, so panning never redrew them and
+    // events only appeared once some other dep (e.g. the playhead)
+    // changed.
 
     // Ruler: smart tick spacing.
     ctx.strokeStyle = "#2a313c";
@@ -174,10 +178,8 @@ export function Timeline({
 
     // Minor ticks (no label) - only when they aren't too crammed.
     if (minorPx >= 6) {
-      const startSec = Math.floor((visibleStart / pxPerSec) / minorSec) * minorSec;
       ctx.beginPath();
-      for (let s = startSec; s * pxPerSec <= visibleEnd; s += minorSec) {
-        if (s < 0) continue;
+      for (let s = 0; s <= totalSec; s += minorSec) {
         const f = s * fps;
         if (f > totalFrames) break;
         const x = px(f);
@@ -188,9 +190,7 @@ export function Timeline({
     }
 
     // Major ticks + labels.
-    const startSec = Math.floor((visibleStart / pxPerSec) / tickSec) * tickSec;
-    for (let s = startSec; s * pxPerSec <= visibleEnd + TICK_TARGET_PX; s += tickSec) {
-      if (s < 0) continue;
+    for (let s = 0; s <= totalSec; s += tickSec) {
       const f = s * fps;
       if (f > totalFrames) break;
       const x = px(f);
@@ -251,8 +251,6 @@ export function Timeline({
       const f = eventGlobalFrame(ev, clipMap);
       if (f === null) continue;
       const x = px(f);
-      // Off-screen culling.
-      if (x < visibleStart - 8 || x > visibleEnd + 8) continue;
       const isOrphan = orphanIds.has(ev.id);
       const color = isOrphan ? "#f85149" : (EVENT_COLORS[ev.type] || EVENT_COLORS.default);
       ctx.strokeStyle = color;
@@ -307,13 +305,6 @@ export function Timeline({
     const target = (pending.frame / totalFrames) * contentWidth - pending.cursorX;
     containerRef.current.scrollLeft = clamp(target, 0, contentWidth - viewWidth);
   }, [zoom, contentWidth, viewWidth, totalFrames]);
-
-  // Re-render the canvas on horizontal scroll so labels/events update for the
-  // visible window.
-  const [, setScrollTick] = useState(0);
-  function handleScroll() {
-    setScrollTick((n) => n + 1);
-  }
 
   // Wheel handling: vertical wheel = zoom, horizontal wheel (deltaX or
   // shift+wheel) = pan. We attach a native non-passive listener so we can
@@ -407,7 +398,6 @@ export function Timeline({
       <div
         ref={containerRef}
         className="timeline-scroll"
-        onScroll={handleScroll}
         style={{
           overflowX: "auto",
           overflowY: "hidden",

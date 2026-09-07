@@ -81,11 +81,21 @@ Write-Host "Running YouTube OAuth flow..." -ForegroundColor Cyan
 Write-Host "  python : $python"
 Write-Host "  data dir: $($env:VME_DATA_DIR)" -ForegroundColor DarkGray
 
-# `& $python` runs the interpreter inline so its exit code propagates
-# and stdout/stderr stream straight to this shell - important since the
-# OAuth flow prints the success message we want to see.
-& $python @pyArgs
-$exit = $LASTEXITCODE
+# `python -m scripts.yt_authorize` resolves `scripts` relative to the
+# CWD, so this MUST run from backend/ - from the repo root it would
+# find the repo's own scripts/ folder (PowerShell only, no Python
+# module) and fail with "No module named scripts.yt_authorize".
+Push-Location $backend
+try {
+    # `& $python` runs the interpreter inline so its exit code propagates
+    # and stdout/stderr stream straight to this shell - important since the
+    # OAuth flow prints the success message we want to see.
+    & $python @pyArgs
+    $exit = $LASTEXITCODE
+}
+finally {
+    Pop-Location
+}
 if ($exit -ne 0) {
     Write-Error "yt_authorize exited with code $exit"
     exit $exit

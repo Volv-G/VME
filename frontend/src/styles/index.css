@@ -280,6 +280,20 @@ label {
   color: var(--text-dim);
   font-size: 11px;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* Prev/next stepper for search hits. Compact square buttons so the
+   search row keeps its height even in a narrow events pane. */
+.event-search-nav {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.event-search-nav button {
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1.2;
+  border-radius: 4px;
 }
 
 .event-row {
