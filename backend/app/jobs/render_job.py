@@ -69,6 +69,7 @@ def _branding(
         name=home_roster.team_name or team,
         color=home_roster.team_color or "#2d8a4e",
         logo_path=home_logo,
+        player_photos=_player_photos(team, home_roster),
     )
     away = TeamBranding(
         name=m.opponent_roster.team_name or m.opponent or "Away",
@@ -175,6 +176,22 @@ def generate_thumbnail(
             "thumbnail generation failed for %s", render_path, exc_info=True
         )
         return None
+
+
+def _player_photos(team: str, roster) -> dict[int, str]:
+    """Jersey number -> absolute photo path, for players who have one.
+
+    Resolved once per render rather than per popup: the popup overlay
+    runs per frame and has no idea where the media tree lives.
+    """
+    out: dict[int, str] = {}
+    if roster is None:
+        return out
+    for player in roster.players:
+        found = _resolve_player_photo(team, roster, player.number)
+        if found:
+            out[player.number] = found
+    return out
 
 
 def _resolve_player_photo(team: str, roster, jersey: Optional[int]) -> Optional[str]:

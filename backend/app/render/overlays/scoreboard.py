@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
@@ -55,6 +55,12 @@ class TeamBranding:
     # circle so logos with an opaque rectangular background don't show
     # as a mismatched box on the colored bar.
     logo_path: Optional[str] = None
+    # Absolute paths to player photos, keyed by jersey number. Not used
+    # by the scoreboard itself - it rides along here because TeamBranding
+    # is the bundle of "how this team looks" that every overlay already
+    # receives, and the popup renderer needs it to draw a player's face
+    # next to their name.
+    player_photos: dict[int, str] = field(default_factory=dict)
 
 
 class ScoreboardOverlay:

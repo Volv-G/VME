@@ -11,6 +11,7 @@ visually distinct.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from typing import Optional
@@ -20,7 +21,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 from ...domain.roster import Roster
 from ..frame_map import ActiveMessage
-from .scoreboard import TeamBranding
+from .scoreboard import TeamBranding, _circle_mask, _fit_cover
+
+logger = logging.getLogger(__name__)
 
 OVERLAY_OPACITY = 0.9
 # Title and subtitle render at the same scale on purpose - the title is
@@ -42,6 +45,21 @@ TEXT_COLOR: tuple[int, int, int, int] = (255, 255, 255, 255)
 SLIDE_IN_FRAC = 0.1
 SLIDE_OUT_FRAC = 0.1
 
+# Player photo shown at the left of a player popup, as a circle - the
+# same treatment as the scoreboard crests and thumbnail discs, so the
+# whole broadcast package reads as one design.
+# Diameter is a multiple of the popup's text block: tall enough to be a
+# recognisable face, never taller than the box it sits in.
+AVATAR_SCALE = 1.9
+# Photos are shot standing, so a centered square crop lands on the
+# torso. Bias the window upward to catch the face.
+AVATAR_CROP_BIAS = 0.22
+AVATAR_RING = 2
+AVATAR_RING_COLOR: tuple[int, int, int, int] = (255, 255, 255, 235)
+
+# Distinct popups kept rendered. ~64 KB each at 1080p.
+BOX_CACHE_LIMIT = 256
+
 
 class MessageOverlayRenderer:
     """Renders a list of `ActiveMessage`s onto frames."""
@@ -59,33 +77,45 @@ class MessageOverlayRenderer:
         self._home_branding = home
         self._away_branding = away
         self._image_cache: dict[str, Image.Image] = {}
+        # Separate from `_image_cache` because a failed load caches None,
+        # and `.get()` couldn't tell that from "not tried yet" - which
+        # would retry a corrupt file on every single frame.
+        self._avatar_cache: dict[str, Optional[Image.Image]] = {}
+        # Built popups, keyed by everything that affects their pixels.
+        # A popup's content is fixed for its whole on-screen life - only
+        # its x position animates - so rebuilding it per frame was pure
+        # waste (~1 ms each at 1080p).
+        self._box_cache: dict[tuple, Image.Image] = {}
 
     def apply(self, frame: np.ndarray, messages: list[ActiveMessage]) -> np.ndarray:
         if not messages:
             return frame
         h, w = frame.shape[:2]
-        video = Image.fromarray(frame).convert("RGBA")
         margin = 20
         bottom_margin = 80
         y_offset = h - bottom_margin
+        out = frame if frame.flags.writeable else frame.copy()
 
         for msg in messages:
             title = self._resolve_team_placeholders(msg.text or "")
             subtitle = self._resolve_subtitle(msg)
             bg = self._resolve_bg(msg)
             box = self._build_box(
-                title, subtitle, h, msg.image_path, bg, title_scale=msg.title_scale
+                title,
+                subtitle,
+                h,
+                msg.image_path,
+                bg,
+                title_scale=msg.title_scale,
+                photo_path=self._photo_for(msg),
             )
             x_off = self._x_offset(msg.progress, box.width)
             x = w - box.width - margin + x_off
             y = y_offset - box.height
-
-            alpha = box.split()[3].point(lambda v: int(v * OVERLAY_OPACITY))
-            box.putalpha(alpha)
-            video.paste(box, (x, y), box)
             y_offset = y - 10
+            _composite(out, box, x, y)
 
-        return np.array(video.convert("RGB"))
+        return out
 
     # ------------------------------------------------------------------
 
@@ -148,6 +178,54 @@ class MessageOverlayRenderer:
             return _hex_to_rgba(branding.color)
         return BG_COLOR_DEFAULT
 
+    def _photo_for(self, msg: ActiveMessage) -> Optional[str]:
+        """The photo to show on this popup, or None.
+
+        Only for popups about one identified player: a substitution names
+        two people, and there is no honest way to pick whose face goes on
+        it, so those keep the text-only layout.
+        """
+        if msg.player_number is None or msg.player_out_number is not None:
+            return None
+        branding = self._branding_for(msg.team)
+        if branding is None:
+            return None
+        return branding.player_photos.get(msg.player_number)
+
+    def _avatar(self, path: str, diameter: int) -> Optional[Image.Image]:
+        """Circle-cropped player photo, cached per (path, size).
+
+        Always cover-cropped: a photo is not a logo, and fitting one
+        whole into a circle would leave a person floating in a box of
+        background. Cropping is what makes twelve different players
+        recognisable at popup size.
+        """
+        key = f"{path}:{diameter}"
+        if key in self._avatar_cache:
+            return self._avatar_cache[key]
+        try:
+            with Image.open(path) as src:
+                fitted = _fit_cover(
+                    src.convert("RGBA"), diameter, y_bias=AVATAR_CROP_BIAS
+                )
+        except Exception:
+            # A deleted or corrupt photo must not take down a render;
+            # the popup just falls back to text.
+            logger.warning("could not load player photo %s", path, exc_info=True)
+            self._avatar_cache[key] = None
+            return None
+        fitted.putalpha(_circle_mask(diameter))
+        if AVATAR_RING:
+            ring = Image.new("RGBA", (diameter, diameter), (0, 0, 0, 0))
+            ImageDraw.Draw(ring).ellipse(
+                [(0, 0), (diameter - 1, diameter - 1)],
+                outline=AVATAR_RING_COLOR,
+                width=AVATAR_RING,
+            )
+            fitted.alpha_composite(ring)
+        self._avatar_cache[key] = fitted
+        return fitted
+
     def _roster_for(self, team: Optional[str]) -> Optional[Roster]:
         if team == "home":
             return self._home_roster
@@ -170,6 +248,7 @@ class MessageOverlayRenderer:
         image_path: Optional[str],
         bg_color: tuple[int, int, int, int],
         title_scale: float = 1.0,
+        photo_path: Optional[str] = None,
     ) -> Image.Image:
         # `title_scale` clamped to a sane range so a typo in the effect
         # (e.g. 0.0) can't produce a zero-pixel font that crashes PIL.
@@ -210,6 +289,12 @@ class MessageOverlayRenderer:
         text_w = max(title_w, sub_w)
         text_h = title_h + (LINE_GAP + sub_h if sub_h else 0)
 
+        # The player's face, when we have one and the popup isn't already
+        # carrying an explicit image (an event-specific graphic wins - it
+        # was chosen deliberately, the photo is automatic).
+        if loaded_img is None and photo_path:
+            loaded_img = self._avatar(photo_path, int(text_h * AVATAR_SCALE))
+
         img_w = loaded_img.width if loaded_img else 0
         img_h = loaded_img.height if loaded_img else 0
 
@@ -222,6 +307,19 @@ class MessageOverlayRenderer:
 
         box_w = content_w + PADDING * 2
         box_h = content_h + PADDING * 2
+
+        cache_key = (
+            title,
+            subtitle,
+            bg_color,
+            photo_path,
+            loaded_img is not None,
+            box_w,
+            box_h,
+        )
+        cached = self._box_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
         img = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -255,6 +353,15 @@ class MessageOverlayRenderer:
                 fill=TEXT_COLOR,
             )
 
+        # Bake the popup's constant translucency in once, here, rather
+        # than per frame at paste time.
+        img.putalpha(img.split()[3].point(lambda v: int(v * OVERLAY_OPACITY)))
+        if len(self._box_cache) >= BOX_CACHE_LIMIT:
+            # A match has a bounded set of popups, but a renderer reused
+            # across many matches shouldn't grow without limit. Cheapest
+            # correct eviction: start over.
+            self._box_cache.clear()
+        self._box_cache[cache_key] = img
         return img
 
     def _x_offset(self, progress: float, width: int) -> int:
@@ -265,6 +372,25 @@ class MessageOverlayRenderer:
             return 0
         t = (progress - (1.0 - SLIDE_OUT_FRAC)) / SLIDE_OUT_FRAC
         return int(width * _ease_in(t))
+
+
+def _composite(frame: np.ndarray, box: Image.Image, x: int, y: int) -> None:
+    """Alpha-composite `box` onto `frame` in place, clipped to the frame.
+
+    Works on the destination rectangle only. Converting the whole 1080p
+    frame to RGBA and back cost ~8 ms per frame - an order of magnitude
+    more than drawing the popup itself - and a popup covers ~2% of the
+    picture.
+    """
+    h, w = frame.shape[:2]
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(w, x + box.width), min(h, y + box.height)
+    if x0 >= x1 or y0 >= y1:
+        return
+    src = box.crop((x0 - x, y0 - y, x1 - x, y1 - y))
+    region = Image.fromarray(frame[y0:y1, x0:x1]).convert("RGBA")
+    region.alpha_composite(src)
+    frame[y0:y1, x0:x1] = np.asarray(region.convert("RGB"))
 
 
 def _measure_text(draw: ImageDraw.ImageDraw, text: str, font) -> tuple[int, int]:
