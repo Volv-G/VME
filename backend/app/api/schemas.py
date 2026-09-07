@@ -117,6 +117,7 @@ class FullRenderOut(BaseModel):
     kind: str = "full"
     # True when a `<file>.thumbnail.jpg` sidecar exists next to the render.
     has_thumbnail: bool = False
+    thumbnail_synced: bool = False
     # Display label of the player a reel belongs to ("#8 Kate G").
     player_label: str = ""
     youtube_video_id: Optional[str] = None

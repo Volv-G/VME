@@ -151,6 +151,7 @@ def list_full_renders(team: str) -> list[FullRenderOut]:
             kind=r.kind,
             player_label=r.player_label,
             has_thumbnail=r.has_thumbnail,
+            thumbnail_synced=r.thumbnail_synced,
             youtube_video_id=r.youtube_video_id,
             youtube_uploaded_at=r.youtube_uploaded_at,
             youtube_privacy_status=r.youtube_privacy_status,

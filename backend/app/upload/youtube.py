@@ -319,6 +319,15 @@ def set_thumbnail(video_id: str, image_path: Path) -> None:
             raise RuntimeError(
                 f"Video {video_id} not found - was it deleted on YouTube?"
             ) from exc
+        if status == 429 or "uploadRateLimitExceeded" in str(exc):
+            # Separate, undocumented bucket from the upload quota, and it
+            # refills over hours. Nothing to fix - the local image is
+            # already correct, it just has to be pushed again later.
+            raise RuntimeError(
+                "YouTube is rate-limiting thumbnail uploads right now "
+                "(too many in a short window). The local thumbnail was "
+                "updated - push it again in a few hours."
+            ) from exc
         raise RuntimeError(f"YouTube API error setting thumbnail: {exc}") from exc
 
 

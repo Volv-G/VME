@@ -43,7 +43,9 @@ export function TeamFullRendersPanel({ team }: Props) {
   // Per-row cache-buster: the thumbnail URL is stable, so a regenerated
   // image only shows up if we change the query string.
   const [thumbVersion, setThumbVersion] = useState<Record<string, number>>({});
-  const [note, setNote] = useState<string | null>(null);
+  // Regenerate result. `ok` is false when YouTube declined the push -
+  // that is a failure, not a footnote, so it must not be styled as one.
+  const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -127,7 +129,8 @@ export function TeamFullRendersPanel({ team }: Props) {
         r.filename
       );
       setThumbVersion((v) => ({ ...v, [id]: Date.now() }));
-      setNote(res.message);
+      // Not pushing is only a success when there was nothing to push to.
+      setNote({ text: res.message, ok: res.pushed || !res.video_id });
       await reload();
     } catch (e) {
       setErr(String(e));
@@ -189,10 +192,10 @@ export function TeamFullRendersPanel({ team }: Props) {
       {err && <div className="error" style={{ marginBottom: 8 }}>{err}</div>}
       {note && (
         <div
-          className="info"
+          className={note.ok ? "info" : "error"}
           style={{ marginBottom: 8, display: "flex", gap: 8 }}
         >
-          <span style={{ flex: 1 }}>{note}</span>
+          <span style={{ flex: 1 }}>{note.text}</span>
           <button
             onClick={() => setNote(null)}
             style={{ padding: "0 6px", fontSize: 11 }}
@@ -232,7 +235,11 @@ export function TeamFullRendersPanel({ team }: Props) {
                 className="list-row"
                 style={{ alignItems: "center" }}
               >
-                {r.has_thumbnail && (
+                {/* Only show the image when it is what viewers see: for
+                    an uploaded video that means YouTube accepted it.
+                    Otherwise the row would advertise a thumbnail the
+                    published video doesn't have. */}
+                {r.has_thumbnail && (!uploaded || r.thumbnail_synced) && (
                   <a
                     href={api.renderThumbnailUrl(
                       team,
@@ -266,6 +273,29 @@ export function TeamFullRendersPanel({ team }: Props) {
                       }}
                     />
                   </a>
+                )}
+                {r.has_thumbnail && uploaded && !r.thumbnail_synced && (
+                  <span
+                    title={
+                      "A thumbnail was generated but YouTube has not " +
+                      "accepted it, so the video still shows its old " +
+                      "image. Use the thumbnail button to try again."
+                    }
+                    style={{
+                      flex: "0 0 auto",
+                      width: 64,
+                      height: 36,
+                      borderRadius: 3,
+                      border: "1px dashed var(--border)",
+                      color: "var(--text-dim)",
+                      fontSize: 14,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    ⚠
+                  </span>
                 )}
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div

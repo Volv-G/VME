@@ -211,6 +211,7 @@ export interface FullRenderDto {
   player_label?: string;
   /** A generated `<file>.thumbnail.jpg` exists next to the render. */
   has_thumbnail?: boolean;
+  thumbnail_synced?: boolean;
   youtube_video_id?: string | null;
   youtube_uploaded_at?: number | null;
   /** privacyStatus YouTube actually applied (read back from the upload

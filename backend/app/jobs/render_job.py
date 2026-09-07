@@ -855,6 +855,15 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
             last_pct[0] = pct
             last_emit[0] = now
 
+    # Make sure there IS a thumbnail to attach. Renders produced before
+    # thumbnails existed - or by a build where generation failed - would
+    # otherwise upload bare and need a manual regenerate per video.
+    # Generated before the insert so the slow part (seeking a frame) is
+    # not sitting between the upload finishing and the thumbnail call.
+    if not thumbnail_path(file_path).is_file():
+        JOBS.update(job.id, phase="thumbnail", message="Generating thumbnail")
+        generate_thumbnail(job.team, job.tournament, job.date, job.match, file_path)
+
     logger.info(
         "upload job %s -> YouTube: file=%s privacy=%s playlist=%s",
         job.id,
@@ -873,11 +882,13 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
         cancel_check=cancel_check,
     )
 
-    # Attach the thumbnail, if one was generated for this render. Done
-    # after the insert because it needs the video id, and best-effort
-    # because custom thumbnails require a verified channel - a 403 here
-    # must not fail an upload that otherwise succeeded.
-    _attach_thumbnail(job, file_path, result.video_id)
+    # Attach the thumbnail. `thumbnails.set` is a separate API call -
+    # `videos.insert` has no thumbnail field - so this is the earliest
+    # possible moment: right after the insert, as soon as there is a
+    # video id. Best-effort, because custom thumbnails require a
+    # verified channel and a 403 here must not fail an upload that
+    # otherwise succeeded.
+    thumbnail_synced = _attach_thumbnail(job, file_path, result.video_id)
 
     # Persist the upload record alongside the file. Subsequent listings
     # (team dashboard, render panel) pick this up via
@@ -897,6 +908,14 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
             "privacy_status": actual_privacy,
             "requested_privacy_status": privacy_status,
             "playlist_id": playlist_id,
+            "thumbnail_synced": thumbnail_synced,
+            # What YouTube is serving, so a later regenerate can tell
+            # "the image changed" from "nothing to push".
+            "thumbnail_digest": (
+                scanner.file_digest(thumbnail_path(file_path))
+                if thumbnail_synced
+                else None
+            ),
         },
     )
     # Surface the YouTube URL via `output_filename` so existing job-row
@@ -940,8 +959,14 @@ def _attach_thumbnail(job: Optional[RenderJob], file_path: Path, video_id: str) 
         if job is not None:
             JOBS.update(
                 job.id,
-                message=f"Uploaded; thumbnail rejected ({exc})",
+                message=f"Uploaded; thumbnail queued for retry ({exc})",
             )
+        # The usual cause is YouTube's per-channel thumbnail rate limit,
+        # which clears on its own. Hand it to the background worker
+        # instead of making the user re-push twelve reels by hand.
+        from ..upload.thumbnail_sync import WORKER as THUMBNAIL_SYNC
+
+        THUMBNAIL_SYNC.wake()
         return False
 
 

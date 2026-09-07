@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+import hashlib
 import json
 
 from ..config import MEDIA_ROOT, VIDEO_EXTENSIONS
@@ -81,6 +82,11 @@ class FullRenderInfo:
     # Whether a generated `<file>.thumbnail.jpg` sidecar exists, so the
     # UI knows to show a preview instead of an empty box.
     has_thumbnail: bool = False
+    # Whether that image is the one YouTube is actually serving. False
+    # when the last `thumbnails.set` was refused (unverified channel,
+    # rate limit) - the local file exists but the published video still
+    # shows something else, and the UI must not imply otherwise.
+    thumbnail_synced: bool = False
 
 
 @dataclass
@@ -252,6 +258,36 @@ def save_youtube_sidecar(render_path: Path, info: dict) -> None:
         json.dump(info, f, indent=2)
 
 
+def file_digest(path: Path) -> str | None:
+    """Content hash of a file, or None if it can't be read.
+
+    Used to tell "this thumbnail is new" from "this is the same image
+    again", so repeat pushes don't burn YouTube's thumbnail rate limit.
+    """
+    try:
+        return hashlib.sha1(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def mark_thumbnail_synced(
+    render_path: Path, synced: bool, digest: str | None = None
+) -> None:
+    """Record whether YouTube accepted this render's thumbnail.
+
+    Merged into the existing upload sidecar rather than kept in a file
+    of its own: the answer is only meaningful for an uploaded video, and
+    forgetting the upload should forget this too. `digest` identifies
+    WHICH image is live, so a no-op re-push can be skipped.
+    """
+    info = load_youtube_sidecar(render_path)
+    if info is None:
+        return
+    info["thumbnail_synced"] = bool(synced)
+    info["thumbnail_digest"] = digest if synced else None
+    save_youtube_sidecar(render_path, info)
+
+
 def delete_youtube_sidecar(render_path: Path) -> bool:
     """Drop a render's upload record. True if a sidecar was removed.
 
@@ -351,6 +387,7 @@ def _build_render_info(
         kind=kind,
         player_label=player_label,
         has_thumbnail=path.with_suffix(path.suffix + ".thumbnail.jpg").is_file(),
+        thumbnail_synced=bool(sidecar and sidecar.get("thumbnail_synced")),
     )
 
 

@@ -472,20 +472,39 @@ def regenerate_render_thumbnail(
             result["message"] = "Thumbnail regenerated (not pushed to YouTube)."
         return result
 
+    result["video_id"] = video_id
+    # Identical image, already live: pushing it again would change
+    # nothing and YouTube rate-limits thumbnail uploads per channel over
+    # a multi-hour window, so spend that budget only on real changes.
+    digest = scanner.file_digest(thumb)
+    if (
+        sidecar.get("thumbnail_synced")
+        and digest is not None
+        and digest == sidecar.get("thumbnail_digest")
+    ):
+        result["pushed"] = True
+        result["message"] = "Thumbnail is unchanged; YouTube already has it."
+        return result
+
     status = youtube_uploader.get_status()
     if not status.configured:
+        scanner.mark_thumbnail_synced(target, False)
         result["message"] = (
             f"Thumbnail regenerated, but YouTube is not configured: {status.reason}"
         )
         return result
     try:
         youtube_uploader.set_thumbnail(video_id, thumb)
-        result["pushed"] = True
-        result["video_id"] = video_id
-        result["message"] = "Thumbnail regenerated and updated on YouTube."
     except Exception as exc:
-        result["video_id"] = video_id
+        # The published video still shows the old image. Record that, so
+        # listings can stop claiming the new one is live, and report it
+        # as a failure - the local file being fresh is not the point.
+        scanner.mark_thumbnail_synced(target, False)
         result["message"] = f"Thumbnail regenerated, but YouTube refused it: {exc}"
+        return result
+    scanner.mark_thumbnail_synced(target, True, digest)
+    result["pushed"] = True
+    result["message"] = "Thumbnail regenerated and updated on YouTube."
     return result
 
 
