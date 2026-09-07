@@ -12,17 +12,14 @@ import { displayName } from "../util/names";
  * upload button after a successful upload (the backend records this
  * via a per-render `.youtube.json` sidecar).
  *
- * The list refreshes itself so newly-finished renders and uploads
+ * The list polls every 5s so newly-finished renders and uploads
  * (driven by the global render queue) appear without a manual refresh.
- * Slowly, though: a render takes minutes to hours, so a fast poll only
- * bought a fresher timestamp. Live progress is the render queue
- * widget's job, and every action here refreshes on completion anyway.
  */
 interface Props {
   team: string;
 }
 
-const POLL_MS = 60_000;
+const POLL_MS = 5000;
 
 function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
@@ -69,15 +66,7 @@ export function TeamFullRendersPanel({ team }: Props) {
     void reload();
     void api.youtubeStatus().then(setStatus).catch(() => setStatus(null));
     const t = window.setInterval(reload, POLL_MS);
-    // With a minute between polls, coming back to the tab is exactly
-    // when the list is most likely to be stale - so refresh on focus
-    // instead of showing a minute-old view.
-    const onFocus = () => void reload();
-    window.addEventListener("focus", onFocus);
-    return () => {
-      clearInterval(t);
-      window.removeEventListener("focus", onFocus);
-    };
+    return () => clearInterval(t);
   }, [reload]);
 
   /** Clear a stale "uploaded" marker so the row offers upload again.
