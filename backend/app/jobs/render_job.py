@@ -25,7 +25,12 @@ from ..render.overlays.scoreboard import TeamBranding
 from ..render.reels import build_chapters, reels_from_match
 from ..render.renderer import MatchRenderer, RenderCancelled, RenderProgress
 from ..render.settings import apply_container_extension
-from ..render.thumbnail import ThumbnailSpec, thumbnail_path, write_thumbnail
+from ..render.thumbnail import (
+    ThumbnailSpec,
+    thumbnail_path,
+    write_jellyfin_sidecars,
+    write_thumbnail,
+)
 from .manager import JOBS, RenderJob
 
 # Upload module is imported lazily inside `_run_upload` so the queue
@@ -144,7 +149,8 @@ def generate_thumbnail(
         home_image = home.logo_path
         home_badge = ""
         is_photo = False
-        if len(rel_parts) > 2 and rel_parts[0] == "reels":
+        is_reel = len(rel_parts) > 2 and rel_parts[0] == "reels"
+        if is_reel:
             jersey, player_name = paths.parse_player_folder(rel_parts[2])
             label = f"#{jersey} {player_name}".strip() if jersey is not None else player_name
             subject = f"{label}  ·  Highlights" if label else "Highlights"
@@ -170,7 +176,14 @@ def generate_thumbnail(
             subject=subject,
             backdrop=_grab_backdrop(render_path),
         )
-        return write_thumbnail(render_path, spec)
+        thumb = write_thumbnail(render_path, spec)
+        # Jellyfin sidecars for the match itself only. A media server
+        # library is organised around matches; twelve per-player reels
+        # from the same evening would each become their own "movie" with
+        # its own box art, which is noise rather than a library.
+        if not is_reel:
+            write_jellyfin_sidecars(render_path, spec, thumb)
+        return thumb
     except Exception:
         logger.warning(
             "thumbnail generation failed for %s", render_path, exc_info=True

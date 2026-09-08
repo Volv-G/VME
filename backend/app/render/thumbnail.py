@@ -1,7 +1,9 @@
-"""YouTube thumbnail generation.
+"""Thumbnail and poster generation.
 
 Produces a 1280x720 JPEG next to a render (`<render>.thumbnail.jpg`),
-which the upload job then attaches with `thumbnails.set`.
+which the upload job then attaches with `thumbnails.set`, plus - for
+full match renders - a pair of Jellyfin sidecars (see
+`write_jellyfin_sidecars`) including a 2:3 portrait poster.
 
 Design mirrors the scoreboard so a channel looks consistent: the two
 team colors meet at a slanted seam, circular team logos sit on either
@@ -18,6 +20,7 @@ same code serve full renders and player reels.
 from __future__ import annotations
 
 import logging
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +66,26 @@ LOGO_D = 300
 PHOTO_CROP_BIAS = 0.22
 SCORE_BOX_W = 300
 
+# Portrait poster, for media servers whose grid is built around 2:3 box
+# art (Jellyfin's "Primary" image). 1000x1500 is Jellyfin's recommended
+# poster size. The layout stacks the teams instead of placing them side
+# by side: at this aspect there is no room for two 300px discs plus
+# legible names on one line, and vertical stacking is what box art looks
+# like anyway.
+POSTER_W = 1000
+POSTER_H = 1500
+POSTER_LOGO_D = 340
+# The seam between the team colors runs across the poster rather than
+# down it, with the same lean as the landscape version.
+POSTER_SEAM_LEFT = 0.54
+POSTER_SEAM_RIGHT = 0.46
+# A portrait crop of a 16:9 frame keeps the full height, which would put
+# the render's burnt-in scoreboard - including the score - right at the
+# bottom of the poster. Zoom in and anchor the crop to the top so the
+# bottom fifth of the frame, scoreboard and all, is cut away.
+POSTER_ZOOM = 1.24
+POSTER_CROP_BIAS = 0.0
+
 
 @dataclass
 class ThumbnailSpec:
@@ -99,7 +122,7 @@ class ThumbnailSpec:
 
 def build_thumbnail(spec: ThumbnailSpec) -> Image.Image:
     """Compose the thumbnail. Never raises for content reasons."""
-    img = _backdrop_layer(spec.backdrop)
+    img = _backdrop_layer(spec.backdrop, THUMB_W, THUMB_H)
     _draw_wedges(img, spec, flat=spec.backdrop is None)
     _draw_logos(img, spec)
     _draw_center(img, spec)
@@ -107,29 +130,60 @@ def build_thumbnail(spec: ThumbnailSpec) -> Image.Image:
     return img.convert("RGB")
 
 
-def write_thumbnail(path: Path, spec: ThumbnailSpec) -> Optional[Path]:
-    """Render `spec` to `<path>.thumbnail.jpg`; return it, or None.
+def build_poster(spec: ThumbnailSpec) -> Image.Image:
+    """Compose the 2:3 portrait poster. Same design, stacked vertically."""
+    img = _backdrop_layer(
+        spec.backdrop,
+        POSTER_W,
+        POSTER_H,
+        zoom=POSTER_ZOOM,
+        crop_bias=POSTER_CROP_BIAS,
+    )
+    _draw_poster_wedges(img, spec, flat=spec.backdrop is None)
+    _draw_poster_content(img, spec)
+    return img.convert("RGB")
 
-    Failures are logged and swallowed: a thumbnail is a nicety, and a
-    render that took 40 minutes must not be marked failed because a font
-    was missing. Quality is stepped down until the file fits YouTube's
-    2 MiB cap - at 1280x720 even q=95 is ~300 KB, so this is belt and
-    braces rather than an expected path.
+
+def write_thumbnail(path: Path, spec: ThumbnailSpec) -> Optional[Path]:
+    """Render `spec` to `<path>.thumbnail.jpg`; return it, or None."""
+    return _write(thumbnail_path(path), build_thumbnail, spec, path)
+
+
+def write_poster(target: Path, spec: ThumbnailSpec) -> Optional[Path]:
+    """Render `spec` as a portrait poster to `target`; return it, or None."""
+    return _write(target, build_poster, spec, target)
+
+
+def write_jellyfin_sidecars(
+    render_path: Path, spec: ThumbnailSpec, thumbnail: Optional[Path] = None
+) -> list[Path]:
+    """Write Jellyfin's local-image sidecars for a render.
+
+    Jellyfin's local image provider matches on filename: for `Match.mp4`
+    it reads `Match-thumb.jpg` as the landscape Thumb and
+    `Match-poster.jpg` as the 2:3 Primary. Note how that differs from our
+    own sidecar (`Match.mp4.thumbnail.jpg`) - Jellyfin wants the media
+    extension *replaced*, not appended, so this can't be the same file
+    under a second name.
+
+    The landscape image is copied from the thumbnail we already built
+    rather than re-rendered; the poster is composed here because its
+    layout differs. Returns the files written - possibly none, since
+    like everything thumbnail-related this is best-effort.
     """
-    target = thumbnail_path(path)
+    written: list[Path] = []
+    thumb_target, poster_target = jellyfin_paths(render_path)
+    source = thumbnail or thumbnail_path(render_path)
     try:
-        img = build_thumbnail(spec)
-        for quality in (92, 85, 75, 60):
-            img.save(target, "JPEG", quality=quality, optimize=True)
-            if target.stat().st_size <= MAX_THUMB_BYTES:
-                break
-        logger.info(
-            "wrote thumbnail %s (%d KiB)", target, target.stat().st_size // 1024
-        )
-        return target
-    except Exception:
-        logger.warning("could not write thumbnail for %s", path, exc_info=True)
-        return None
+        if source.is_file():
+            shutil.copyfile(source, thumb_target)
+            written.append(thumb_target)
+    except OSError:
+        logger.warning("could not write %s", thumb_target, exc_info=True)
+    poster = write_poster(poster_target, spec)
+    if poster is not None:
+        written.append(poster)
+    return written
 
 
 def thumbnail_path(render_path: Path) -> Path:
@@ -137,33 +191,72 @@ def thumbnail_path(render_path: Path) -> Path:
     return render_path.with_suffix(render_path.suffix + ".thumbnail.jpg")
 
 
+def jellyfin_paths(render_path: Path) -> tuple[Path, Path]:
+    """`(<name>-thumb.jpg, <name>-poster.jpg)` for a render."""
+    stem = render_path.with_suffix("")
+    return (
+        stem.with_name(stem.name + "-thumb.jpg"),
+        stem.with_name(stem.name + "-poster.jpg"),
+    )
+
+
+def _write(target: Path, builder, spec: ThumbnailSpec, subject: Path):
+    """Build with `builder(spec)` and save as JPEG under the size cap.
+
+    Failures are logged and swallowed: images are a nicety, and a render
+    that took 40 minutes must not be marked failed because a font was
+    missing. Quality steps down until the file fits YouTube's 2 MiB cap -
+    at these sizes even q=92 is a few hundred KB, so this is belt and
+    braces rather than an expected path.
+    """
+    try:
+        img = builder(spec)
+        for quality in (92, 85, 75, 60):
+            img.save(target, "JPEG", quality=quality, optimize=True)
+            if target.stat().st_size <= MAX_THUMB_BYTES:
+                break
+        logger.info("wrote %s (%d KiB)", target, target.stat().st_size // 1024)
+        return target
+    except Exception:
+        logger.warning("could not write image for %s", subject, exc_info=True)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Layers
 # ---------------------------------------------------------------------------
 
 
-def _backdrop_layer(frame: Optional[np.ndarray]) -> Image.Image:
+def _backdrop_layer(
+    frame: Optional[np.ndarray],
+    width: int,
+    height: int,
+    *,
+    zoom: float = BACKDROP_ZOOM,
+    crop_bias: float = BACKDROP_CROP_BIAS,
+) -> Image.Image:
     """Darkened, slightly blurred cover-crop of `frame`, or flat charcoal."""
     if frame is None:
-        return Image.new("RGB", (THUMB_W, THUMB_H), (26, 22, 38))
+        return Image.new("RGB", (width, height), (26, 22, 38))
     try:
         src = Image.fromarray(np.asarray(frame, dtype=np.uint8), "RGB")
         # Cover-crop rather than squash: the source is 16:9 already, but
-        # a differently-shaped render shouldn't distort players.
-        scale = max(THUMB_W / src.width, THUMB_H / src.height) * BACKDROP_ZOOM
+        # a differently-shaped render shouldn't distort players - and the
+        # portrait poster crops a 16:9 frame hard by definition.
+        scale = max(width / src.width, height / src.height) * zoom
         src = src.resize(
-            (max(THUMB_W, round(src.width * scale)), max(THUMB_H, round(src.height * scale))),
+            (max(width, round(src.width * scale)), max(height, round(src.height * scale))),
             Image.LANCZOS,
         )
-        left = (src.width - THUMB_W) // 2
-        top = int((src.height - THUMB_H) * BACKDROP_CROP_BIAS)
-        src = src.crop((left, top, left + THUMB_W, top + THUMB_H))
+        left = (src.width - width) // 2
+        top = int((src.height - height) * crop_bias)
+        src = src.crop((left, top, left + width, top + height))
         src = src.filter(ImageFilter.GaussianBlur(BACKDROP_BLUR))
         arr = np.asarray(src, dtype=np.float32) * (1.0 - BACKDROP_DARKEN)
         return Image.fromarray(arr.astype(np.uint8), "RGB")
     except Exception:
         logger.warning("unusable backdrop frame; falling back to flat", exc_info=True)
-        return Image.new("RGB", (THUMB_W, THUMB_H), (26, 22, 38))
+        return Image.new("RGB", (width, height), (26, 22, 38))
 
 
 def _draw_wedges(img: Image.Image, spec: ThumbnailSpec, *, flat: bool) -> None:
@@ -260,6 +353,107 @@ def _draw_caption(img: Image.Image, spec: ThumbnailSpec) -> None:
             _font(64, bold=True),
             anchor="mm",
         )
+
+
+# ---------------------------------------------------------------------------
+# Portrait poster layers
+# ---------------------------------------------------------------------------
+
+
+def _draw_poster_wedges(img: Image.Image, spec: ThumbnailSpec, *, flat: bool) -> None:
+    """Two team-color bands meeting at a slanted horizontal seam."""
+    y_left = int(POSTER_H * POSTER_SEAM_LEFT)
+    y_right = int(POSTER_H * POSTER_SEAM_RIGHT)
+
+    layer = Image.new("RGBA", (POSTER_W, POSTER_H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    d.polygon(
+        [(0, 0), (POSTER_W, 0), (POSTER_W, y_right), (0, y_left)],
+        fill=_rgba(spec.home_color, 255),
+    )
+    d.polygon(
+        [(0, y_left), (POSTER_W, y_right), (POSTER_W, POSTER_H), (0, POSTER_H)],
+        fill=_rgba(spec.away_color, 255),
+    )
+    if not flat:
+        # Vertical ramp this time: strong at the top and bottom edges,
+        # nearly clear across the middle band where the action is.
+        ys = np.linspace(0.0, 1.0, POSTER_H, dtype=np.float32)
+        edge = np.abs(ys - 0.5) * 2.0
+        ramp = WEDGE_ALPHA_INNER + (WEDGE_ALPHA - WEDGE_ALPHA_INNER) * edge**1.5
+        mask = np.tile((ramp * 255).astype(np.uint8)[:, None], (1, POSTER_W))
+        alpha = np.asarray(layer.getchannel("A"), dtype=np.uint16) * mask // 255
+        layer.putalpha(Image.fromarray(alpha.astype(np.uint8)))
+    img.paste(Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB"), (0, 0))
+
+
+def _draw_poster_content(img: Image.Image, spec: ThumbnailSpec) -> None:
+    """Caption, then home crest/name, "VS", away crest/name, subject."""
+    cx = POSTER_W // 2
+    home_y = int(POSTER_H * 0.21)
+    away_y = int(POSTER_H * 0.72)
+
+    home_disc = _logo_disc(spec.home_logo, POSTER_LOGO_D, photo=spec.home_is_photo)
+    if home_disc is None and spec.home_badge:
+        home_disc = _badge_disc(spec.home_badge, spec.home_color, POSTER_LOGO_D)
+    for disc, cy in ((home_disc, home_y), (_logo_disc(spec.away_logo, POSTER_LOGO_D), away_y)):
+        if disc is None:
+            continue
+        rgba = img.convert("RGBA")
+        rgba.alpha_composite(
+            disc, (cx - POSTER_LOGO_D // 2, cy - POSTER_LOGO_D // 2)
+        )
+        img.paste(rgba.convert("RGB"), (0, 0))
+
+    d = ImageDraw.Draw(img, "RGBA")
+    name_font = _font(64, bold=True)
+    name_gap = POSTER_LOGO_D // 2 + 60
+    _fit_text(d, (cx, home_y + name_gap), spec.home_name, name_font, POSTER_W - 80)
+    _fit_text(d, (cx, away_y + name_gap), spec.away_name, name_font, POSTER_W - 80)
+
+    # "VS" plate on the seam, between the two teams.
+    text = spec.center_text or "VS"
+    vs_font = _font(110, bold=True)
+    vs_y = (home_y + away_y) // 2
+    bbox = d.textbbox((cx, vs_y), text, font=vs_font, anchor="mm")
+    d.rounded_rectangle(
+        [bbox[0] - 40, bbox[1] - 18, bbox[2] + 40, bbox[3] + 18],
+        radius=22,
+        fill=(20, 16, 30, 205),
+    )
+    _text_with_shadow(d, (cx, vs_y), text, vs_font, anchor="mm")
+
+    if spec.caption:
+        d.rectangle([0, 0, POSTER_W, 96], fill=(12, 10, 20, 175))
+        _fit_text(d, (cx, 48), spec.caption, _font(48, bold=True), POSTER_W - 40)
+    if spec.subject:
+        d.rectangle([0, POSTER_H - 120, POSTER_W, POSTER_H], fill=(12, 10, 20, 195))
+        _fit_text(
+            d,
+            (cx, POSTER_H - 60),
+            spec.subject,
+            _font(60, bold=True),
+            POSTER_W - 40,
+        )
+
+
+def _fit_text(draw, xy, text: str, font, max_width: int) -> None:
+    """Centered text, shrunk until it fits `max_width`.
+
+    The poster is only 1000px wide, so a long school name or tournament
+    caption that fits the landscape thumbnail comfortably would run off
+    both edges here.
+    """
+    if not text:
+        return
+    size = getattr(font, "size", 48)
+    while size > 12:
+        box = draw.textbbox(xy, text, font=font, anchor="mm")
+        if (box[2] - box[0]) <= max_width:
+            break
+        size = int(size * 0.92)
+        font = _font(size, bold=True)
+    _text_with_shadow(draw, xy, text, font, anchor="mm")
 
 
 # ---------------------------------------------------------------------------
