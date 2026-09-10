@@ -177,8 +177,71 @@ def team_dir(team: str) -> Path:
     return MEDIA_ROOT / safe_segment(team)
 
 
+# Tournaments live in their own folder under the team, so that anything
+# ELSE we keep per team (player photos today, whatever tomorrow) can't
+# be mistaken for one. Before this, every directory under the team was
+# assumed to be a tournament, and `players/` duly showed up in the
+# tournament list with "0 matches".
+TOURNAMENTS_SUBDIR = "tournaments"
+
+# Player photos live in one folder per team, named by jersey number, so
+# a rename of the player doesn't orphan the file and two players can't
+# collide. Referenced from roster.json as `players/<NN>.<ext>`, relative
+# to the team folder (same convention as team logos).
+PLAYER_PHOTO_SUBDIR = "players"
+
+# Per-team folders that are never tournaments, for the benefit of the
+# legacy scan below.
+RESERVED_TEAM_SUBDIRS = {TOURNAMENTS_SUBDIR, PLAYER_PHOTO_SUBDIR}
+
+
+def tournaments_root(team: str) -> Path:
+    return team_dir(team) / TOURNAMENTS_SUBDIR
+
+
 def tournament_dir(team: str, tournament: str) -> Path:
-    return team_dir(team) / safe_segment(tournament)
+    """Folder for one tournament.
+
+    New tournaments are created under `<team>/tournaments/`. Libraries
+    written before that change keep their folders directly under the
+    team, and are resolved there - moving gigabytes of match footage is
+    not something a path helper should do behind the user's back (see
+    `scripts/migrate_tournaments.py` for the opt-in move).
+
+    Only the fallback consults the disk; a brand-new tournament always
+    resolves to the canonical location.
+    """
+    slug = safe_segment(tournament)
+    canonical = tournaments_root(team) / slug
+    if canonical.is_dir():
+        return canonical
+    legacy = team_dir(team) / slug
+    if legacy.is_dir() and slug not in RESERVED_TEAM_SUBDIRS:
+        return legacy
+    return canonical
+
+
+def iter_tournament_dirs(team: str) -> list[Path]:
+    """Every tournament folder of a team, canonical and legacy, sorted.
+
+    A name present in both locations is reported once, from the
+    canonical one - that's what `tournament_dir` resolves to, so a
+    listing that showed the legacy twin would be lying about which
+    folder the app is using.
+    """
+    found: dict[str, Path] = {}
+    root = tournaments_root(team)
+    if root.is_dir():
+        for d in root.iterdir():
+            if d.is_dir():
+                found[d.name] = d
+    base = team_dir(team)
+    if base.is_dir():
+        for d in base.iterdir():
+            if not d.is_dir() or d.name in RESERVED_TEAM_SUBDIRS:
+                continue
+            found.setdefault(d.name, d)
+    return [found[name] for name in sorted(found)]
 
 
 def date_dir(team: str, tournament: str, date: str) -> Path:
@@ -220,13 +283,6 @@ OPPONENT_LOGO_STEM = "opponent_logo"
 # Formats accepted for logo uploads. PNG/WebP keep transparency, which
 # matters for overlaying a logo on a thumbnail.
 LOGO_EXTENSIONS = {".png", ".webp", ".jpg", ".jpeg", ".gif", ".bmp"}
-
-
-# Player photos live in one folder per team, named by jersey number, so
-# a rename of the player doesn't orphan the file and two players can't
-# collide. Referenced from roster.json as `players/<NN>.<ext>`, relative
-# to the team folder (same convention as team logos).
-PLAYER_PHOTO_SUBDIR = "players"
 
 
 def player_photo_dir(team: str) -> Path:

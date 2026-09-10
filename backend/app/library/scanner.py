@@ -116,7 +116,7 @@ def list_teams() -> list[TeamSummary]:
         if not d.is_dir():
             continue
         roster_path = d / "roster.json"
-        tournament_count = sum(1 for c in d.iterdir() if c.is_dir())
+        tournament_count = len(paths.iter_tournament_dirs(d.name))
         teams.append(
             TeamSummary(
                 name=d.name,
@@ -133,9 +133,7 @@ def list_tournaments(team: str) -> list[TournamentSummary]:
     if not team_path.exists():
         return []
     out: list[TournamentSummary] = []
-    for d in sorted(team_path.iterdir()):
-        if not d.is_dir():
-            continue
+    for d in paths.iter_tournament_dirs(team):
         # Count matches across all date subfolders.
         match_count = 0
         for date_d in d.iterdir():
@@ -406,9 +404,7 @@ def list_team_full_renders(team: str) -> list[FullRenderInfo]:
     if not team_path.exists():
         return []
     out: list[FullRenderInfo] = []
-    for tournament_d in team_path.iterdir():
-        if not tournament_d.is_dir():
-            continue
+    for tournament_d in paths.iter_tournament_dirs(team):
         for date_d in tournament_d.iterdir():
             if not date_d.is_dir():
                 continue
@@ -580,6 +576,9 @@ def create_team(team: str) -> Path:
 
 
 def create_tournament(team: str, tournament: str) -> Path:
+    # `tournament_dir` returns the canonical `<team>/tournaments/<slug>`
+    # for a name that doesn't exist yet, so new tournaments land in the
+    # right place without any special-casing here.
     p = paths.tournament_dir(team, tournament)
     p.mkdir(parents=True, exist_ok=True)
     return p
