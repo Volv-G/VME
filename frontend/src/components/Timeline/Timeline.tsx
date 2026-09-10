@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ClipDto, EventDto } from "../../types/api";
 import { analyzeCuts } from "../cutAnalysis";
 import { analyzeFocus } from "../focusAnalysis";
+import { analyzeRallies } from "../rallyAnalysis";
 import { EVENT_COLORS } from "../eventStyle";
 
 interface Props {
@@ -13,10 +14,15 @@ interface Props {
   onSelectEvent: (eventId: number) => void;
 }
 
-const TIMELINE_HEIGHT = 96;
 const RULER_HEIGHT = 18;
 const CLIP_HEIGHT = 30;
-const EVENT_BAND_TOP = RULER_HEIGHT + CLIP_HEIGHT + 4;
+// Rallies get their own lane rather than tinting the clips bar: cut
+// regions already tint it, and two overlapping washes read as a third
+// colour that means nothing.
+const RALLY_LANE_TOP = RULER_HEIGHT + CLIP_HEIGHT;
+const RALLY_LANE_HEIGHT = 9;
+const EVENT_BAND_TOP = RALLY_LANE_TOP + RALLY_LANE_HEIGHT + 4;
+const TIMELINE_HEIGHT = EVENT_BAND_TOP + 44;
 
 const MIN_ZOOM = 1;
 // Absolute ceiling. The effective cap is derived from the current
@@ -244,6 +250,30 @@ export function Timeline({
       ctx.strokeStyle = "rgba(248, 81, 73, 0.55)";
       ctx.lineWidth = 1;
       ctx.strokeRect(x0 + 0.5, RULER_HEIGHT + 0.5, Math.max(0, x1 - x0 - 1), CLIP_HEIGHT - 1);
+    }
+
+    // Rally lane: serve -> point, in the renderer's own terms.
+    for (const r of analyzeRallies(events)) {
+      const x0 = px(r.start);
+      const x1 = px(r.end ?? totalFrames);
+      const w = Math.max(1, x1 - x0);
+      // Unresolved rallies (no Kill/Ace/score before the next serve)
+      // are amber: the band is then a guess at where the point ended,
+      // and that's worth saying out loud.
+      ctx.fillStyle = r.resolved
+        ? "rgba(63, 185, 80, 0.38)"
+        : "rgba(210, 153, 34, 0.38)";
+      ctx.fillRect(x0, RALLY_LANE_TOP + 1, w, RALLY_LANE_HEIGHT - 2);
+      ctx.strokeStyle = r.resolved
+        ? "rgba(63, 185, 80, 0.8)"
+        : "rgba(210, 153, 34, 0.85)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(
+        x0 + 0.5,
+        RALLY_LANE_TOP + 1.5,
+        Math.max(0, w - 1),
+        RALLY_LANE_HEIGHT - 3
+      );
     }
 
     // Events.
