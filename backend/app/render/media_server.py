@@ -8,9 +8,9 @@ which tells Jellyfin nothing - it would show up as "full 20260906 190937"
 inside a folder called "renders". A media server wants one flat,
 self-describing name per video:
 
-    2026.09.03.NC.M1.Liberty.mp4
-    2026.09.03.NC.M1.Liberty-thumb.jpg      (landscape, Jellyfin "Thumb")
-    2026.09.03.NC.M1.Liberty-poster.jpg     (2:3 portrait, "Primary")
+    2026.09.03. NC. M1. Liberty.mp4
+    2026.09.03. NC. M1. Liberty-thumb.jpg    (landscape, Jellyfin "Thumb")
+    2026.09.03. NC. M1. Liberty-poster.jpg   (2:3 portrait, "Primary")
 
 So publishing is a copy plus a rename, driven by the same template
 machinery the YouTube titles use (`app/upload/templates.py`), which
@@ -25,12 +25,12 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from ..library import paths
 from ..upload.templates import TemplateVars, render_template
 from .renderer import RenderCancelled
 
@@ -66,15 +66,28 @@ class CopyPlan:
         return total
 
 
+# Characters Windows (and every media server's scanner) refuses in a
+# filename. Deliberately NOT the same rule as `paths.safe_segment`,
+# which also turns spaces into underscores: that's right for a path
+# segment we generate and parse ourselves, and wrong here. These names
+# are read by people in a library UI, and a template written as
+# "{date}. {tournament_abbr}. {opponent}" must come out with the spaces
+# the user typed.
+_UNSAFE_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
 def _safe_name(value: str) -> str:
     """Sanitize a rendered template into a single filename segment.
 
     Slashes are the important part: the template is a NAME, not a path,
     and a stray `/` from an opponent called "A/B" would otherwise write
-    outside the configured folder.
+    outside the configured folder. Spaces are preserved.
     """
-    cleaned = paths.safe_segment(value)
-    return cleaned.strip(". ") or "render"
+    cleaned = _UNSAFE_NAME_CHARS.sub("_", value or "")
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    # Windows silently drops trailing dots/spaces from filenames, which
+    # would make the file we wrote and the file we look for differ.
+    return cleaned.strip(" .") or "render"
 
 
 def target_basename(vars_: TemplateVars, template: str, *, player_label: str = "") -> str:

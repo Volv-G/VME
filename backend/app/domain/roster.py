@@ -64,7 +64,7 @@ DEFAULT_REEL_TEMPLATE = (
 # full_<timestamp>.mp4` - which tells a media server nothing. Copies go
 # out under one flat, self-describing name per match instead, with the
 # Jellyfin sidecar images renamed to match.
-DEFAULT_MEDIA_SERVER_TEMPLATE = "{date}.{tournament_abbr}.M{match_index}.{opponent}"
+DEFAULT_MEDIA_SERVER_TEMPLATE = "{date}. {tournament_abbr}. M{match_index}. {opponent}"
 
 
 @dataclass

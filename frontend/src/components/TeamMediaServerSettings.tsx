@@ -23,7 +23,7 @@ interface Props {
 }
 
 // Mirrors DEFAULT_MEDIA_SERVER_TEMPLATE in domain/roster.py.
-const DEFAULT_TEMPLATE = "{date}.{tournament_abbr}.M{match_index}.{opponent}";
+const DEFAULT_TEMPLATE = "{date}. {tournament_abbr}. M{match_index}. {opponent}";
 
 const VARS = [
   "{date}",
