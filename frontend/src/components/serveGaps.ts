@@ -10,7 +10,13 @@ import type { EventDto } from "../types/api";
  * changes, an injury) - so the list flags it and says how long, leaving
  * the judgement to the user.
  */
-export const SERVE_GAP_WARN_SECONDS = 10;
+// 15s, not 10: measured over a full match (134 serves), the median gap
+// from the previous event to the next serve is 11s - a score is logged
+// when the rally ends, and the celebration, rotation and walk to the
+// line genuinely take that long. A 10s threshold flagged 55% of serves,
+// which makes the warning mean "this is a serve". 15s flags the top
+// ~13%.
+export const SERVE_GAP_WARN_SECONDS = 15;
 
 /**
  * Gap in seconds, keyed by event id, for every `ball_served` whose
