@@ -25,7 +25,15 @@ def register_event(cls: Type[MatchEvent]) -> Type[MatchEvent]:
 # Identity fields are always emitted, even when they happen to equal the
 # dataclass default - they're load-bearing for round-tripping and useful
 # at a glance when reading the JSON.
-_ALWAYS_EMIT = frozenset({"id", "clip_id", "local_frame", "type"})
+#
+# `position` is here for a different reason: it is the SUBJECT of the
+# event it belongs to (a substitution is "who came in, and where"), and
+# omitting it forces every reader to know that the default is 1. The UI
+# didn't, and rendered a sub into position 1 as "enters at P0" - and
+# then looked up the outgoing player at that non-existent position, so
+# it couldn't name them either. A value the reader must guess is not a
+# default worth saving three bytes on.
+_ALWAYS_EMIT = frozenset({"id", "clip_id", "local_frame", "type", "position"})
 
 
 def event_to_dict(event: MatchEvent) -> dict[str, Any]:

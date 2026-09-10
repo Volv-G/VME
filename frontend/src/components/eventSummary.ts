@@ -40,7 +40,11 @@ export function summarizeEvent(
   switch (event.type) {
     case "substitution": {
       const team = String(p.team || "home");
-      const pos = Number(p.position ?? 0);
+      // Mirror the backend's dataclass default. It emits `position`
+      // explicitly now, but events written before that don't carry it,
+      // and defaulting to 0 named a position that cannot exist (courts
+      // are 1-6) - which also broke the outgoing-player lookup below.
+      const pos = Number(p.position ?? 1);
       const inNum = (p.player_in_number as number | null) ?? null;
       const positions = team === "home" ? prevState.home_positions : prevState.away_positions;
       const outNum = positions[pos] ?? null;
