@@ -16,6 +16,8 @@ import { eventIcon } from "./eventStyle";
 interface Props {
   events: EventDto[];
   selectedId: number | null;
+  /** Playhead position, so the list can follow playback. */
+  currentFrame: number;
   onSelect: (id: number) => void;
   onDelete: (id: number) => void;
   onSeek: (globalFrame: number) => void;
@@ -29,6 +31,7 @@ interface Props {
 export function EventList({
   events,
   selectedId,
+  currentFrame,
   onSelect,
   onDelete,
   onSeek,
@@ -121,6 +124,41 @@ export function EventList({
     },
     [cursor, events, matchCount, matchIndices, onSeek, onSelect]
   );
+
+  // The event the playhead is currently "inside": the last one at or
+  // before it. Before the first event we point at that first event
+  // instead of nothing - the list should always show where you are, and
+  // "just before the first event" is still, in every useful sense, at
+  // the first event.
+  //
+  // Events at the same frame resolve to the LAST one in list order (>=
+  // below), which is the most recent action - e.g. a Kill logged at the
+  // same frame as the Score it caused.
+  const playheadId = useMemo(() => {
+    let bestId: number | null = null;
+    let bestFrame = -1;
+    let firstId: number | null = null;
+    for (const ev of events) {
+      if (ev.global_frame === null) continue;
+      if (firstId === null) firstId = ev.id;
+      if (ev.global_frame <= currentFrame && ev.global_frame >= bestFrame) {
+        bestFrame = ev.global_frame;
+        bestId = ev.id;
+      }
+    }
+    return bestId ?? firstId;
+  }, [events, currentFrame]);
+
+  // Keep the playhead row on screen while the video plays. Only fires
+  // when the row actually changes, so scrubbing within one event (or
+  // scrolling the list while paused) doesn't yank the view.
+  useEffect(() => {
+    if (playheadId == null) return;
+    if (navScrolledIdRef.current === playheadId) return;
+    listRef.current
+      ?.querySelector(`[data-event-id="${playheadId}"]`)
+      ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [playheadId]);
 
   // Auto-scroll the selected row into view whenever the selection
   // changes. Used when an event is added or clicked elsewhere (e.g. the
@@ -220,6 +258,7 @@ export function EventList({
             ref={ev.id === selectedId ? selectedRowRef : undefined}
             className={
               "event-row" +
+              (ev.id === playheadId ? " current" : "") +
               (ev.id === selectedId ? " selected" : "") +
               (isOrphan ? " orphan" : "") +
               (isMatch ? " match" : "")

@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -56,6 +56,13 @@ AVATAR_SCALE = 1.9
 AVATAR_CROP_BIAS = 0.22
 AVATAR_RING = 2
 AVATAR_RING_COLOR: tuple[int, int, int, int] = (255, 255, 255, 235)
+# Space between the two faces on a substitution popup. Small enough
+# that they read as one unit belonging to the same line of text.
+AVATAR_GAP = 6
+# Jersey-number disc drawn for a player with no photo, so a two-player
+# popup always shows two circles and neither face can be mistaken for
+# the other player's.
+BADGE_FONT_SCALE = 0.44
 
 # Distinct popups kept rendered. ~64 KB each at 1080p.
 BOX_CACHE_LIMIT = 256
@@ -107,7 +114,7 @@ class MessageOverlayRenderer:
                 msg.image_path,
                 bg,
                 title_scale=msg.title_scale,
-                photo_path=self._photo_for(msg),
+                avatars=self._avatars_for(msg),
             )
             x_off = self._x_offset(msg.progress, box.width)
             x = w - box.width - margin + x_off
@@ -178,19 +185,75 @@ class MessageOverlayRenderer:
             return _hex_to_rgba(branding.color)
         return BG_COLOR_DEFAULT
 
-    def _photo_for(self, msg: ActiveMessage) -> Optional[str]:
-        """The photo to show on this popup, or None.
+    def _avatars_for(self, msg: ActiveMessage) -> list[tuple[Optional[str], int]]:
+        """(photo path, jersey) for each face on this popup, in draw order.
 
-        Only for popups about one identified player: a substitution names
-        two people, and there is no honest way to pick whose face goes on
-        it, so those keep the text-only layout.
+        A substitution names two people, so it gets two circles, ordered
+        to match its subtitle ("out → in"). Whichever of them has no
+        photo gets a jersey-number disc instead: showing one lone face
+        beside a two-player subtitle is what makes it ambiguous, not the
+        missing photo itself.
+
+        Returns nothing when we'd have no real photo to show at all -
+        two anonymous number discs add nothing to text that already
+        names both numbers.
         """
-        if msg.player_number is None or msg.player_out_number is not None:
-            return None
+        if msg.player_number is None:
+            return []
         branding = self._branding_for(msg.team)
         if branding is None:
+            return []
+        photos = branding.player_photos
+        if msg.player_out_number is not None:
+            pair = [
+                (photos.get(msg.player_out_number), msg.player_out_number),
+                (photos.get(msg.player_number), msg.player_number),
+            ]
+            return pair if any(path for path, _ in pair) else []
+        path = photos.get(msg.player_number)
+        return [(path, msg.player_number)] if path else []
+
+    def _badge(
+        self, jersey: int, diameter: int, bg_color: tuple[int, int, int, int]
+    ) -> Optional[Image.Image]:
+        """Circle with a jersey number, standing in for a missing photo."""
+        key = f"badge:{jersey}:{diameter}:{bg_color}"
+        if key in self._avatar_cache:
+            return self._avatar_cache[key]
+        if diameter < 4:
+            self._avatar_cache[key] = None
             return None
-        return branding.player_photos.get(msg.player_number)
+        disc = Image.new("RGBA", (diameter, diameter), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(disc)
+        # Darker than the popup so the disc reads as a hole in it, the
+        # same relationship the accent bar has to the background.
+        fill = (
+            int(bg_color[0] * 0.55),
+            int(bg_color[1] * 0.55),
+            int(bg_color[2] * 0.55),
+            255,
+        )
+        draw.ellipse([(0, 0), (diameter - 1, diameter - 1)], fill=fill)
+        if AVATAR_RING:
+            draw.ellipse(
+                [(0, 0), (diameter - 1, diameter - 1)],
+                outline=AVATAR_RING_COLOR,
+                width=AVATAR_RING,
+            )
+        text = str(jersey)
+        font = _load_font(int(diameter * BADGE_FONT_SCALE), bold=True)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        draw.text(
+            (
+                (diameter - (bbox[2] - bbox[0])) // 2 - bbox[0],
+                (diameter - (bbox[3] - bbox[1])) // 2 - bbox[1],
+            ),
+            text,
+            font=font,
+            fill=TEXT_COLOR,
+        )
+        self._avatar_cache[key] = disc
+        return disc
 
     def _avatar(self, path: str, diameter: int) -> Optional[Image.Image]:
         """Circle-cropped player photo, cached per (path, size).
@@ -248,7 +311,7 @@ class MessageOverlayRenderer:
         image_path: Optional[str],
         bg_color: tuple[int, int, int, int],
         title_scale: float = 1.0,
-        photo_path: Optional[str] = None,
+        avatars: Sequence[tuple[Optional[str], int]] = (),
     ) -> Image.Image:
         # `title_scale` clamped to a sane range so a typo in the effect
         # (e.g. 0.0) can't produce a zero-pixel font that crashes PIL.
@@ -289,16 +352,27 @@ class MessageOverlayRenderer:
         text_w = max(title_w, sub_w)
         text_h = title_h + (LINE_GAP + sub_h if sub_h else 0)
 
-        # The player's face, when we have one and the popup isn't already
-        # carrying an explicit image (an event-specific graphic wins - it
-        # was chosen deliberately, the photo is automatic).
-        if loaded_img is None and photo_path:
-            loaded_img = self._avatar(photo_path, int(text_h * AVATAR_SCALE))
+        # The players' faces, when we have any and the popup isn't
+        # already carrying an explicit image (an event-specific graphic
+        # wins - it was chosen deliberately, the photo is automatic).
+        leading: list[Image.Image] = []
+        if loaded_img is not None:
+            leading = [loaded_img]
+        elif avatars:
+            diameter = int(text_h * AVATAR_SCALE)
+            for path, jersey in avatars:
+                face = self._avatar(path, diameter) if path else None
+                if face is None:
+                    face = self._badge(jersey, diameter, bg_color)
+                if face is not None:
+                    leading.append(face)
 
-        img_w = loaded_img.width if loaded_img else 0
-        img_h = loaded_img.height if loaded_img else 0
+        img_w = sum(i.width for i in leading)
+        if len(leading) > 1:
+            img_w += AVATAR_GAP * (len(leading) - 1)
+        img_h = max((i.height for i in leading), default=0)
 
-        if loaded_img:
+        if leading:
             gap = PADDING if (title or subtitle) else 0
             content_w = img_w + gap + text_w
             content_h = max(img_h, text_h)
@@ -312,8 +386,8 @@ class MessageOverlayRenderer:
             title,
             subtitle,
             bg_color,
-            photo_path,
-            loaded_img is not None,
+            tuple((path or "", jersey) for path, jersey in avatars),
+            len(leading),
             box_w,
             box_h,
         )
@@ -334,10 +408,12 @@ class MessageOverlayRenderer:
         draw.rectangle([(0, 0), (ACCENT_BAR_WIDTH - 1, box_h - 1)], fill=accent)
 
         x_cursor = PADDING
-        if loaded_img:
-            img_y = PADDING + (content_h - img_h) // 2
-            img.paste(loaded_img, (x_cursor, img_y), loaded_img)
-            x_cursor += img_w + (PADDING if (title or subtitle) else 0)
+        for i, face in enumerate(leading):
+            face_y = PADDING + (content_h - face.height) // 2
+            img.paste(face, (x_cursor, face_y), face)
+            x_cursor += face.width + (AVATAR_GAP if i + 1 < len(leading) else 0)
+        if leading:
+            x_cursor += PADDING if (title or subtitle) else 0
 
         # Stack title + subtitle vertically inside the text region.
         text_block_top = PADDING + (content_h - text_h) // 2

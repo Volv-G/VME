@@ -206,7 +206,16 @@ export function MatchEditorPage() {
         </span>
         <div className="header-spacer" />
         <button onClick={() => setClipsOpen(true)}>Clips...</button>
-        <button onClick={() => setRenderOpen(true)}>Render...</button>
+        <button
+          onClick={() => {
+            // Nobody wants the match footage still running behind a
+            // dialog they opened to watch a render.
+            playerRef.current?.pause();
+            setRenderOpen(true);
+          }}
+        >
+          Render...
+        </button>
       </div>
 
       <div
@@ -246,6 +255,7 @@ export function MatchEditorPage() {
           <EventList
             events={data.events}
             selectedId={selectedEventId}
+            currentFrame={currentFrame}
             onSelect={setSelectedEventId}
             onDelete={(id) => void deleteEvent(id)}
             onSeek={seek}

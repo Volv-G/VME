@@ -324,6 +324,19 @@ label {
 .event-row:hover { background: var(--bg-elev-2); }
 .event-row.selected { background: var(--bg-elev-2); border-left: 3px solid var(--accent); }
 
+/* The event the playhead is inside. Distinct from `.selected` (which is
+   an explicit click) and quieter: it changes constantly during playback,
+   so a full-strength highlight would strobe. A left rule marks it, and
+   `.selected` overrides that rule when both apply. */
+.event-row.current {
+  background: rgba(88, 166, 255, 0.08);
+  border-left: 3px solid rgba(88, 166, 255, 0.55);
+}
+.event-row.current.selected {
+  background: var(--bg-elev-2);
+  border-left: 3px solid var(--accent);
+}
+
 /* Two-line content column: summary text on top, frame/time stamp below.
    The delete button sits to the right, vertically centered against both. */
 .event-row .event-row-body {

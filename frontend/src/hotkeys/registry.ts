@@ -98,6 +98,31 @@ export function subscribe(cb: () => void): () => void {
   return () => subscribers.delete(cb);
 }
 
+// --- Suppression --------------------------------------------------------
+
+// Depth rather than a boolean: dialogs nest (the render dialog opens the
+// player dialog), and the inner one closing must not re-arm the editor's
+// hotkeys while the outer one is still up.
+let suppressDepth = 0;
+
+/**
+ * Disable global hotkeys until the returned function is called.
+ *
+ * Modals use this. Without it, Space inside a dialog reached BOTH the
+ * dialog's focused <video> and the editor's play/pause action, so
+ * previewing a render started the render AND the match footage playing
+ * at once - two soundtracks, and a moving playhead behind the dialog.
+ */
+export function suppressHotkeys(): () => void {
+  suppressDepth += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    suppressDepth = Math.max(0, suppressDepth - 1);
+  };
+}
+
 // --- Dispatcher ---------------------------------------------------------
 
 let installed = false;
@@ -113,6 +138,8 @@ export function installHotkeys(): () => void {
 }
 
 function onKeyDown(e: KeyboardEvent): void {
+  // A modal owns the keyboard while it's open.
+  if (suppressDepth > 0) return;
   // Always let the user type into form fields without hijacking keys.
   if (isTypingTarget(e.target)) return;
   // Suppress key auto-repeat: actions are toggles, not held inputs.

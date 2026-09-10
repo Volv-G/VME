@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { suppressHotkeys } from "../hotkeys/registry";
 
 interface Props {
   open: boolean;
@@ -20,7 +21,14 @@ export function Modal({ open, title, onClose, children, width = "min(720px, 92vw
       }
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // While a dialog is open the editor's global hotkeys are off: keys
+    // belong to whatever is inside it (a <video>'s own Space/arrows, a
+    // text field, the Esc above).
+    const release = suppressHotkeys();
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      release();
+    };
   }, [open, onClose]);
 
   if (!open) return null;
