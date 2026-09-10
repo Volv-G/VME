@@ -10,6 +10,7 @@ import type { EventDto, RosterDto } from "../types/api";
 import { EMPTY_STATE } from "./Controls/state";
 import { analyzeCuts } from "./cutAnalysis";
 import { analyzeFocus } from "./focusAnalysis";
+import { analyzeServeGaps } from "./serveGaps";
 import { summarizeEvent } from "./eventSummary";
 import { eventIcon } from "./eventStyle";
 
@@ -58,6 +59,10 @@ export function EventList({
     () => new Set([...cutOrphans, ...focusOrphans]),
     [cutOrphans, focusOrphans]
   );
+  // Serves that arrive suspiciously long after the previous event -
+  // usually something wasn't logged. Warning, not error: real breaks
+  // exist, so we show the gap and let the user judge.
+  const serveGaps = useMemo(() => analyzeServeGaps(events, fps), [events, fps]);
 
   // Pre-compute summary strings so the empty-list check below still has a
   // search bar and the match count is consistent with what's rendered.
@@ -240,6 +245,12 @@ export function EventList({
       {events.map((ev, i) => {
         const summary = summaries[i];
         const isOrphan = orphanIds.has(ev.id);
+        const gap = serveGaps.get(ev.id);
+        const gapLabel = gap === undefined ? null : `${gap.toFixed(1)}s`;
+        const gapReason =
+          gap === undefined
+            ? ""
+            : `${gap.toFixed(1)}s since the previous event - check for a missing event before this serve`;
         const isMatch =
           lowerQuery !== "" && summary.toLowerCase().includes(lowerQuery);
         const orphanReason =
@@ -250,7 +261,11 @@ export function EventList({
             : ev.type === "focus_in"
             ? "Focus In without a matching Focus Out - this focus will be skipped at render time"
             : "Orphan event";
-        const title = isOrphan ? `${summary} - ${orphanReason}` : summary;
+        const title = isOrphan
+          ? `${summary} - ${orphanReason}`
+          : gapReason
+            ? `${summary} - ${gapReason}`
+            : summary;
         return (
           <div
             key={ev.id}
@@ -260,6 +275,7 @@ export function EventList({
               "event-row" +
               (ev.id === playheadId ? " current" : "") +
               (ev.id === selectedId ? " selected" : "") +
+              (gapLabel && !isOrphan ? " warn" : "") +
               (isOrphan ? " orphan" : "") +
               (isMatch ? " match" : "")
             }
@@ -274,6 +290,11 @@ export function EventList({
             <div className="event-row-body">
               <div className="event-row-text" title={title}>
                 {isOrphan && <span className="orphan-badge" title={orphanReason}>!</span>}
+                {gapLabel && !isOrphan && (
+                  <span className="gap-badge" title={gapReason}>
+                    ⚠ {gapLabel}
+                  </span>
+                )}
                 <span className="event-row-icon" aria-hidden="true">
                   {eventIcon(ev.type)}
                 </span>

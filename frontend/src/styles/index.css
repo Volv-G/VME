@@ -361,6 +361,29 @@ label {
   font-size: 11px;
 }
 
+/* Serve logged an unusually long time after the previous event: likely
+   something missing before it. Amber, and declared BEFORE `.orphan` so a
+   row that is both an orphan and late reads as the error it is. */
+.event-row.warn {
+  background: rgba(210, 153, 34, 0.10);
+  border-left: 3px solid #d29922;
+}
+.event-row.warn:hover { background: rgba(210, 153, 34, 0.16); }
+.event-row.warn.selected { background: rgba(210, 153, 34, 0.18); }
+.event-row .gap-badge {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: rgba(210, 153, 34, 0.22);
+  color: #e5c07b;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  margin-right: 6px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
 .event-row.orphan {
   background: rgba(248, 81, 73, 0.10);
   border-left: 3px solid var(--danger, #f85149);
