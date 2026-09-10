@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { displayName } from "../util/names";
+import { RenderPlayerModal } from "./RenderPlayerModal";
 import type {
   RenderFileDto,
   RenderJobDto,
@@ -115,6 +116,9 @@ export function RenderPanel({
   const [matchJobs, setMatchJobs] = useState<RenderJobDto[]>([]);
   // Per-job SSE subscriptions for live progress. Keyed by job.id.
   const esMap = useRef<Map<string, EventSource>>(new Map());
+  // Render open in the player dialog. Just the relative filename -
+  // everything else (stream URL, download URL) derives from it.
+  const [playing, setPlaying] = useState<string | null>(null);
 
   // ---- Renders folder ---------------------------------------------------
 
@@ -415,6 +419,7 @@ Clear the record anyway? The video on YouTube is not ` +
   const playheadTime = (currentFrame / (fps || 30)).toFixed(1);
 
   return (
+    <>
     <div className="card" style={{ marginBottom: 0 }}>
       <div className="card-header">
         <h2>Render</h2>
@@ -576,6 +581,11 @@ Clear the record anyway? The video on YouTube is not ` +
                       )
                     : undefined
                 }
+                onPlay={
+                  j.output_filename
+                    ? () => setPlaying(j.output_filename!)
+                    : undefined
+                }
               />
             ))}
           </div>
@@ -602,6 +612,7 @@ Clear the record anyway? The video on YouTube is not ` +
             onDelete={removeRender}
             onUpload={uploadToYouTube}
             onForgetUpload={forgetUpload}
+            onPlay={setPlaying}
             uploads={uploads}
             uploadingName={uploadingName}
             ytStatus={ytStatus}
@@ -609,6 +620,20 @@ Clear the record anyway? The video on YouTube is not ` +
         )}
       </div>
     </div>
+    {playing && (
+      <RenderPlayerModal
+        open
+        onClose={() => setPlaying(null)}
+        title={playing.split("/").pop() || playing}
+        subtitle={playing.includes("/") ? playing : undefined}
+        src={api.renderStreamUrl(team, tournament, date, match, playing)}
+        downloadUrl={api.downloadUrl(team, tournament, date, match, playing)}
+        youtubeUrl={
+          uploads[playing] ? `https://youtu.be/${uploads[playing]}` : null
+        }
+      />
+    )}
+    </>
   );
 }
 
@@ -625,6 +650,8 @@ interface RendersByDirProps {
   onUpload: (filename: string) => void;
   /** Clear a stale upload record so the row can be uploaded again. */
   onForgetUpload: (filename: string) => void;
+  /** Open a render in the in-app player. */
+  onPlay: (filename: string) => void;
   /** Map of filename -> YouTube video id for already-uploaded renders. */
   uploads: Record<string, string>;
   /** Filename currently being enqueued (button disabled / spinner). */
@@ -642,6 +669,7 @@ function RendersByDir({
   onDelete,
   onUpload,
   onForgetUpload,
+  onPlay,
   uploads,
   uploadingName,
   ytStatus,
@@ -698,15 +726,16 @@ function RendersByDir({
                     }}
                     title={r.filename}
                   >
+                    {/* Play, don't download: checking the output is
+                        the reason to click, and a full match is
+                        gigabytes. Download has its own button. */}
                     <a
-                      href={api.downloadUrl(
-                        team,
-                        tournament,
-                        date,
-                        match,
-                        r.filename
-                      )}
-                      download
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        onPlay(r.filename);
+                      }}
+                      title={`Play ${r.filename}`}
                     >
                       {leaf}
                     </a>
@@ -715,6 +744,19 @@ function RendersByDir({
                     {formatBytes(r.size_bytes)} · {formatAge(r.created_at)}
                   </div>
                 </div>
+                <a
+                  href={api.downloadUrl(
+                    team,
+                    tournament,
+                    date,
+                    match,
+                    r.filename
+                  )}
+                  download
+                  title="Download this file"
+                >
+                  <button style={{ padding: "2px 8px" }}>⬇</button>
+                </a>
                 {canUpload &&
                   (uploaded ? (
                     <span
@@ -784,9 +826,18 @@ interface JobRowProps {
   onCancel: () => void;
   onDelete: () => void;
   downloadUrl?: string;
+  /** Open the finished output in the in-app player. Omitted by callers
+   *  that don't have a player mounted (e.g. the team queue widget). */
+  onPlay?: () => void;
 }
 
-export function JobRow({ job, onCancel, onDelete, downloadUrl }: JobRowProps) {
+export function JobRow({
+  job,
+  onCancel,
+  onDelete,
+  downloadUrl,
+  onPlay,
+}: JobRowProps) {
   const live = job.status === "pending" || job.status === "running";
   return (
     <div className="list-row" style={{ alignItems: "center" }}>
@@ -828,9 +879,26 @@ export function JobRow({ job, onCancel, onDelete, downloadUrl }: JobRowProps) {
               ? job.error || "failed"
               : job.status === "done" && downloadUrl
                 ? (
-                    <a href={downloadUrl} download>
-                      Download {job.output_filename}
-                    </a>
+                    <>
+                      {onPlay ? (
+                        <a
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            onPlay();
+                          }}
+                          title="Play in the browser"
+                        >
+                          ▶ {job.output_filename}
+                        </a>
+                      ) : (
+                        <span>{job.output_filename}</span>
+                      )}
+                      {" · "}
+                      <a href={downloadUrl} download>
+                        download
+                      </a>
+                    </>
                   )
                 : job.phase}
         </div>

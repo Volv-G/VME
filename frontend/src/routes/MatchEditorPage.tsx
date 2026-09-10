@@ -194,7 +194,8 @@ export function MatchEditorPage() {
       <div className="editor-header">
         <Link to={tournamentHref} className="muted">← {displayName(tournament)}</Link>
         <strong>
-          {data.match_index != null ? `Match ${data.match_index} – ` : ""}
+          {/* 0 means "unnumbered": there is only one match that day. */}
+          {data.match_index ? `Match ${data.match_index} – ` : ""}
           vs {data.opponent || "TBD"}
         </strong>
         <span className="muted">{data.date || "no date"}</span>

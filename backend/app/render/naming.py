@@ -137,7 +137,13 @@ def _common_match_vars(
             or tournament_abbreviation
             or _slug_to_display(tournament)
         ),
-        "match_index": str(idx) if idx is not None else "0",
+        # Empty for an unnumbered match (index 0) AND for a legacy
+        # folder with no prefix - in a FILENAME there's nothing useful
+        # to say about an unknown match order, and an empty value gets
+        # its `M`/`Match` marker and dangling separators cleaned up by
+        # `render_naming_template`.
+        "match_index": "" if idx in (None, 0) else str(idx),
+        "date_iso": paths.safe_segment(date),
     }
 
 
@@ -365,6 +371,11 @@ def render_naming_template(template: str, vars_: dict[str, str]) -> str:
     rendered. The caller composes the final disk path with
     `Path(renders_root) / result` which converts to native separators.
     """
+    # An unnumbered match leaves `{match_index}` empty; strip the marker
+    # in front of it (`M{match_index}`) so the filename doesn't keep a
+    # stranded "M", and collapse the separators around the hole.
+    if not vars_.get("match_index"):
+        template = paths.strip_match_number(template)
     try:
         out = template.format(**vars_)
     except KeyError as exc:
@@ -376,6 +387,9 @@ def render_naming_template(template: str, vars_: dict[str, str]) -> str:
         ) from exc
     except (IndexError, ValueError) as exc:
         raise TemplateError(f"Failed to format template: {exc}") from exc
+
+    if not vars_.get("match_index"):
+        out = paths.collapse_empty_segments(out)
 
     # Normalize separators and reject absolute / traversing paths.
     norm = out.replace("\\", "/")

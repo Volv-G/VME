@@ -14,7 +14,14 @@ Variables (all strings, never None) made available to `str.format(...)`:
   {match_index}       - 1-based match order on the date (e.g. "3" - bare,
                         wrap with `M{match_index}` or `Match {match_index}`
                         yourself in the template; user said never more
-                        than 9 matches/day so padding is unnecessary)
+                        than 9 matches/day so padding is unnecessary).
+                        EMPTY for match 0, the "only match of the day,
+                        don't number it" case - and then any `M` /
+                        `Match` / `#` marker in front of it is dropped
+                        too, along with the separators that would be
+                        left doubled up.
+  {date_iso}          - the same date as `YYYY-MM-DD`, for names that
+                        already use dots as their separator
 
 Player-reel uploads additionally get (see `with_reel`):
 
@@ -52,6 +59,7 @@ class TemplateVars:
     """Resolved string values for the template placeholders."""
 
     date: str
+    date_iso: str
     team: str
     opponent: str
     tournament_abbr: str
@@ -69,6 +77,7 @@ class TemplateVars:
     def as_dict(self) -> dict[str, str]:
         return {
             "date": self.date,
+            "date_iso": self.date_iso,
             "team": self.team,
             "opponent": self.opponent,
             "tournament_abbr": self.tournament_abbr,
@@ -131,13 +140,21 @@ def build_vars(
     tournament_slug_pretty = _slug_to_display(tournament)
     abbr = tournament_info.resolve_abbreviation(tournament_slug_pretty)
     full = tournament_info.resolve_full_name(tournament_slug_pretty)
+    # Match 0 is "the only match that day": no number anywhere. A folder
+    # with no numeric prefix at all is a legacy folder, where we don't
+    # know the order - "?" says so rather than pretending it's match 1.
+    if paths.is_unnumbered_match(idx):
+        match_index = ""
+    else:
+        match_index = str(idx) if idx is not None else "?"
     return TemplateVars(
         date=paths.format_date_for_template(date),
+        date_iso=paths.safe_segment(date),
         team=(roster.team_name or _slug_to_display(team)),
         opponent=(match_obj.opponent or _slug_to_display(match)),
         tournament_abbr=abbr,
         tournament_full=full,
-        match_index=(str(idx) if idx is not None else "?"),
+        match_index=match_index,
     )
 
 
@@ -162,5 +179,13 @@ def render_template(template: str, vars_: TemplateVars) -> str:
     standard format behavior). KeyError on unknown placeholders is
     intentional - it should bubble up so the API returns a 400 instead
     of uploading a video with broken metadata.
+
+    An unnumbered match (index 0) additionally drops the `M`/`Match`/`#`
+    marker in front of the placeholder and tidies the separators that
+    would be left dangling, so a template written for numbered matches
+    still produces a clean title.
     """
+    if not vars_.match_index:
+        rendered = paths.strip_match_number(template).format(**vars_.as_dict())
+        return paths.collapse_empty_segments(rendered)
     return template.format(**vars_.as_dict())

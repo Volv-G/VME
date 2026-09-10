@@ -611,6 +611,11 @@ def create_match(
     server picks `max(existing) + 1`. When supplied, it must not collide with
     an existing match (raises `MatchIndexConflict`).
 
+    Index 0 is legal and means "the only match of the day": the folder
+    still gets a `00_` prefix so the on-disk convention is uniform, but
+    every name derived from the match omits the number (see
+    `paths.UNNUMBERED_MATCH_INDEX`).
+
     Returns `(match_name, Match)` where `match_name` is the on-disk folder
     leaf (e.g. `"03_North_Vipers"`).
     """
@@ -630,8 +635,8 @@ def create_match(
     if match_index is None:
         idx = (max(used_indices) + 1) if used_indices else 1
     else:
-        if match_index < 1:
-            raise ValueError("match_index must be >= 1")
+        if match_index < 0:
+            raise ValueError("match_index must be >= 0")
         if match_index in used_indices:
             raise MatchIndexConflict(
                 f"Match #{match_index} already exists on {date}"

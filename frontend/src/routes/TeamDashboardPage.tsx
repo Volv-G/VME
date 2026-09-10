@@ -7,6 +7,7 @@ import { Modal } from "../components/Modal";
 import { TeamRenderQueue } from "../components/TeamRenderQueue";
 import { TeamYouTubeSettings } from "../components/TeamYouTubeSettings";
 import { TeamNamingSettings } from "../components/TeamNamingSettings";
+import { TeamMediaServerSettings } from "../components/TeamMediaServerSettings";
 import { TeamFullRendersPanel } from "../components/TeamFullRendersPanel";
 import { displayName } from "../util/names";
 
@@ -137,6 +138,8 @@ export function TeamDashboardPage() {
       <TeamYouTubeSettings team={team} roster={roster} onSaved={setRoster} />
 
       <TeamNamingSettings team={team} roster={roster} onSaved={setRoster} />
+
+      <TeamMediaServerSettings team={team} roster={roster} onSaved={setRoster} />
 
       {roster && <RosterEditor value={roster} onSave={saveRoster} defaultName={displayName(team)} team={team} />}
 

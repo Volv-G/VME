@@ -35,6 +35,16 @@ export interface NamingConfigDto {
   reel_template?: string | null;
 }
 
+export interface MediaServerConfigDto {
+  /** Folder ON THE SERVER that a media server (Jellyfin, Plex, ...)
+   *  plays from. Empty/null = the copy button stays hidden. */
+  path?: string | null;
+  /** Base name (no extension) for copied files. Same placeholders as
+   *  the YouTube templates. Default:
+   *  `{date}.{tournament_abbr}.M{match_index}.{opponent}` */
+  filename_template?: string | null;
+}
+
 export interface RosterDto {
   team_name?: string | null;
   team_color?: string | null;
@@ -48,6 +58,9 @@ export interface RosterDto {
   /** Team-level render-output naming templates. Optional - omitted
    *  block leaves previously-saved values intact. */
   naming?: NamingConfigDto | null;
+  /** Media-server publishing target. Optional - omitted block leaves
+   *  previously-saved values intact. */
+  media_server?: MediaServerConfigDto | null;
   players: PlayerDto[];
 }
 

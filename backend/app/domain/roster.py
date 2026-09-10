@@ -59,6 +59,13 @@ DEFAULT_REEL_TEMPLATE = (
     "reels/{team}/{player}/{date}_vs_{opponent}_{player}_reel.mp4"
 )
 
+# Media-server (Jellyfin/Plex/...) publishing. The renders tree is
+# organised for editing - `<tournament>/<date>/<NN_Opponent>/renders/
+# full_<timestamp>.mp4` - which tells a media server nothing. Copies go
+# out under one flat, self-describing name per match instead, with the
+# Jellyfin sidecar images renamed to match.
+DEFAULT_MEDIA_SERVER_TEMPLATE = "{date}.{tournament_abbr}.M{match_index}.{opponent}"
+
 
 @dataclass
 class NamingConfig:
@@ -102,6 +109,45 @@ class NamingConfig:
                 data.get("focused_template") or DEFAULT_FOCUSED_TEMPLATE
             ),
             reel_template=(data.get("reel_template") or DEFAULT_REEL_TEMPLATE),
+        )
+
+
+@dataclass
+class MediaServerConfig:
+    """Where finished renders get copied for a media server to play.
+
+    Stored under `roster.json -> media_server`. `path` is a plain
+    filesystem location on the SERVER (a local folder or a UNC share it
+    can reach) - the copy is done by the backend, not the browser, so a
+    multi-gigabyte match never travels through the UI.
+
+    Empty `path` = the feature is off, and the UI hides the copy button.
+    """
+
+    path: Optional[str] = None
+    # Base name (no extension) for the copied files. Same placeholders
+    # as the YouTube templates - see `app/upload/templates.py`.
+    filename_template: str = DEFAULT_MEDIA_SERVER_TEMPLATE
+
+    @property
+    def enabled(self) -> bool:
+        return bool((self.path or "").strip())
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "filename_template": self.filename_template,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "MediaServerConfig":
+        if not isinstance(data, dict):
+            return cls()
+        return cls(
+            path=(data.get("path") or None),
+            filename_template=(
+                data.get("filename_template") or DEFAULT_MEDIA_SERVER_TEMPLATE
+            ),
         )
 
 
@@ -191,6 +237,9 @@ class Roster:
     # present with defaults applied - call sites can read
     # `roster.naming.full_render_template` without None-checking.
     naming: NamingConfig = field(default_factory=NamingConfig)
+    # Where to copy finished renders for a media server (Jellyfin etc.).
+    # Always present; `enabled` is False until a path is configured.
+    media_server: MediaServerConfig = field(default_factory=MediaServerConfig)
 
     def __iter__(self) -> Iterator[Player]:
         return iter(self.players)
@@ -238,6 +287,7 @@ class Roster:
         if include_admin:
             out["youtube"] = self.youtube.to_dict()
             out["naming"] = self.naming.to_dict()
+            out["media_server"] = self.media_server.to_dict()
         out["players"] = [p.to_dict() for p in self.players]
         return out
 
@@ -252,6 +302,7 @@ class Roster:
                 team_logo_path=data.get("team_logo_path"),
                 youtube=YouTubeConfig.from_dict(data.get("youtube")),
                 naming=NamingConfig.from_dict(data.get("naming")),
+                media_server=MediaServerConfig.from_dict(data.get("media_server")),
                 players=[Player.from_dict(p) for p in data.get("players", [])],
             )
         return cls()

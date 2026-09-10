@@ -128,7 +128,7 @@ export function TeamRenderQueue({ team }: Props) {
           {jobs.map((j) => (
             <div key={j.id}>
               <div className="row-meta" style={{ marginBottom: 2 }}>
-                {j.match_index != null ? `Match ${j.match_index} – ` : ""}
+                {j.match_index ? `Match ${j.match_index} – ` : ""}
                 vs {j.opponent || "TBD"}
                 {" · "}
                 {displayName(j.tournament)} · {j.date}

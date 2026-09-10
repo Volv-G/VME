@@ -62,6 +62,9 @@ class RenderJob:
     #   - "youtube_upload"     -> upload an existing render file to YouTube
     #                             (not a render at all; reuses the queue's
     #                             FIFO + progress + SSE plumbing).
+    #   - "media_server_copy"  -> copy a finished render + its Jellyfin
+    #                             images into the team's media-server
+    #                             folder, renamed for a library.
     # Stored as a plain string for forward compatibility (older clients
     # just don't know about new kinds; the backend still serializes them).
     kind: str = "full"
@@ -83,6 +86,7 @@ class RenderJob:
     # fields that only one kind uses. Currently carries:
     #   - youtube_upload: {filename, title, description, privacy_status,
     #                      playlist_id, tags}
+    #   - media_server_copy: {filename, target, images, skip_if_current}
     payload: dict[str, Any] = field(default_factory=dict)
 
     status: JobStatus = JobStatus.PENDING

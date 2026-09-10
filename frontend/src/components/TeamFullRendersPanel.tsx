@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { FullRenderDto, YouTubeStatusDto } from "../types/api";
 import { displayName } from "../util/names";
+import { RenderPlayerModal } from "./RenderPlayerModal";
 
 /**
  * Team-wide "Full renders" list, with per-row YouTube upload action.
@@ -53,6 +54,12 @@ export function TeamFullRendersPanel({ team }: Props) {
   // itself rather than an index so polling (which replaces the array)
   // can't silently slide the user onto a different day.
   const [activeDate, setActiveDate] = useState<string | null>(null);
+  // Render currently open in the player dialog, if any.
+  const [playing, setPlaying] = useState<FullRenderDto | null>(null);
+  // Media-server folder from the team profile. Null until loaded; the
+  // copy button only appears once a folder is configured, because
+  // without one the action can only fail.
+  const [mediaServerPath, setMediaServerPath] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -68,6 +75,15 @@ export function TeamFullRendersPanel({ team }: Props) {
     const t = window.setInterval(reload, POLL_MS);
     return () => clearInterval(t);
   }, [reload]);
+
+  // Roster is fetched once (not polled): the media-server path changes
+  // when the user edits team settings, which remounts this panel.
+  useEffect(() => {
+    void api
+      .getRoster(team)
+      .then((r) => setMediaServerPath(r.media_server?.path?.trim() || null))
+      .catch(() => setMediaServerPath(null));
+  }, [team]);
 
   /** Clear a stale "uploaded" marker so the row offers upload again.
    *
@@ -146,6 +162,33 @@ export function TeamFullRendersPanel({ team }: Props) {
     }
   }
 
+  /** Copy this render + its Jellyfin images to the media-server folder.
+   *
+   *  The copy itself runs as a background job (gigabytes), so this only
+   *  reports what was started - progress shows up in the render queue
+   *  widget. An unchanged destination is reported as skipped rather
+   *  than re-copied. */
+  async function copyToMediaServer(r: FullRenderDto) {
+    const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
+    setErr(null);
+    setNote(null);
+    setBusyId(id);
+    try {
+      const res = await api.copyToMediaServer(
+        team,
+        r.tournament,
+        r.date,
+        r.match,
+        r.filename
+      );
+      setNote({ text: res.message, ok: true });
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function upload(r: FullRenderDto) {
     if (!status?.configured) return;
     const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
@@ -197,6 +240,7 @@ export function TeamFullRendersPanel({ team }: Props) {
   }
 
   return (
+    <>
     <div className="card">
       <div className="card-header">
         <h2>
@@ -409,7 +453,16 @@ export function TeamFullRendersPanel({ team }: Props) {
                     </span>
                   </div>
                   <div className="row-meta" style={{ marginTop: 2 }}>
-                    <a href={downloadUrl(r)} download title={r.filename}>
+                    {/* Opens the player, not a download: the usual
+                        reason to click a render is to check it. */}
+                    <a
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setPlaying(r);
+                      }}
+                      title={`Play ${r.filename}`}
+                    >
                       {leaf}
                     </a>{" "}
                     · {formatBytes(r.size_bytes)} · {formatAge(r.created_at)}
@@ -465,6 +518,21 @@ export function TeamFullRendersPanel({ team }: Props) {
                       >
                         {busyId === id ? "…" : "↺"}
                       </button>
+                      {mediaServerPath && (
+                        <button
+                          onClick={() => copyToMediaServer(r)}
+                          disabled={busyId === id}
+                          title={`Copy this render and its images to ${mediaServerPath}`}
+                          style={{ padding: "1px 6px", fontSize: 11 }}
+                        >
+                          {busyId === id ? "…" : "📺"}
+                        </button>
+                      )}
+                      <a href={downloadUrl(r)} download title="Download">
+                        <button style={{ padding: "1px 6px", fontSize: 11 }}>
+                          ⬇
+                        </button>
+                      </a>
                     </div>
                     {/* Show the privacy status as a small badge. When
                         YouTube downgraded the upload (requested !=
@@ -522,6 +590,19 @@ export function TeamFullRendersPanel({ team }: Props) {
                   >
                     {busyId === id ? "…" : "🖼"}
                   </button>
+                  {mediaServerPath && (
+                    <button
+                      onClick={() => copyToMediaServer(r)}
+                      disabled={busyId === id}
+                      title={`Copy this render and its images to ${mediaServerPath}`}
+                      style={{ padding: "2px 8px" }}
+                    >
+                      {busyId === id ? "…" : "📺"}
+                    </button>
+                  )}
+                  <a href={downloadUrl(r)} download title="Download this render">
+                    <button style={{ padding: "2px 8px" }}>⬇</button>
+                  </a>
                   <button
                     onClick={() => upload(r)}
                     disabled={!status?.configured || busyId === id}
@@ -542,5 +623,29 @@ export function TeamFullRendersPanel({ team }: Props) {
         </div>
       )}
     </div>
+    {playing && (
+      <RenderPlayerModal
+        open
+        onClose={() => setPlaying(null)}
+        title={playing.filename.split("/").pop() || playing.filename}
+        subtitle={`${playing.date} · ${displayName(
+          playing.opponent || playing.match
+        )} · ${formatBytes(playing.size_bytes)}`}
+        src={api.renderStreamUrl(
+          team,
+          playing.tournament,
+          playing.date,
+          playing.match,
+          playing.filename
+        )}
+        downloadUrl={downloadUrl(playing)}
+        youtubeUrl={
+          playing.youtube_video_id
+            ? `https://youtu.be/${playing.youtube_video_id}`
+            : null
+        }
+      />
+    )}
+    </>
   );
 }

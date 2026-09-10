@@ -108,6 +108,71 @@ def format_match_folder(index: int, opponent: str) -> str:
     return f"{index:02d}_{safe_segment(opponent)}"
 
 
+# Match 0 means "this date has only one match, don't number it". The
+# folder still carries the `00_` prefix - the on-disk convention stays
+# uniform and sorting still works - but every NAME derived from the
+# match (render filenames, YouTube titles, media-server files) leaves
+# the number out entirely.
+UNNUMBERED_MATCH_INDEX = 0
+
+
+def is_unnumbered_match(index: Optional[int]) -> bool:
+    return index == UNNUMBERED_MATCH_INDEX
+
+
+# A template that wants a match number almost always decorates it -
+# `M{match_index}`, `Match {match_index}`, `#{match_index}`. Dropping
+# only the number would leave the decoration stranded ("NC. M. Liberty"),
+# so the marker is removed together with the placeholder. Done on the
+# TEMPLATE, before formatting, because there the marker's relationship
+# to the number is unambiguous - guessing at a stray "M" in rendered
+# output would eventually eat someone's team name.
+_MATCH_MARKER_RE = re.compile(r"(?i)(?:match\s*|m|#)\s*(\{match_index\})")
+
+# Separators left doubled-up once a placeholder rendered empty:
+# "NC. . Liberty" -> "NC. Liberty", "a__b" -> "a_b", "x - - y" -> "x - y".
+_EMPTY_SEGMENT_RES = (
+    (re.compile(r"\.[ \t]*\."), "."),
+    (re.compile(r"-[ \t]*-"), "-"),
+    (re.compile(r"__+"), "_"),
+    (re.compile(r"[ \t]{2,}"), " "),
+)
+_LEADING_SEP_RE = re.compile(r"^[ \t]*[.\-_]+[ \t]+")
+_TRAILING_SEP_RE = re.compile(r"[ \t]+[.\-_]+[ \t]*$")
+
+
+def strip_match_number(template: str) -> str:
+    """Remove `M`/`Match`/`#` decoration in front of `{match_index}`.
+
+    The placeholder itself is kept (it formats to an empty string) so
+    callers don't need to care whether the template mentioned it.
+    """
+    return _MATCH_MARKER_RE.sub(r"\1", template or "")
+
+
+def collapse_empty_segments(text: str) -> str:
+    """Tidy separators orphaned by a placeholder that rendered empty.
+
+    Applied per line so a multi-line YouTube description (chapters and
+    all) keeps its shape. Only called when something WAS dropped, which
+    keeps it away from text that legitimately contains `. .`.
+    """
+    out = []
+    for line in (text or "").splitlines():
+        for pattern, repl in _EMPTY_SEGMENT_RES:
+            prev = None
+            while prev != line:
+                prev = line
+                line = pattern.sub(repl, line)
+        # Edge separators, but only the DANGLING kind - one that follows
+        # or precedes whitespace. A line ending in "." is a sentence, and
+        # a line starting with "- " is a bullet; neither is our doing.
+        line = _LEADING_SEP_RE.sub("", line)
+        line = _TRAILING_SEP_RE.sub("", line)
+        out.append(line)
+    return "\n".join(out)
+
+
 def team_dir(team: str) -> Path:
     return MEDIA_ROOT / safe_segment(team)
 

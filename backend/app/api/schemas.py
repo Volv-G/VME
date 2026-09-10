@@ -46,6 +46,17 @@ class NamingConfigOut(BaseModel):
     reel_template: Optional[str] = None
 
 
+class MediaServerConfigOut(BaseModel):
+    """Where the server copies finished renders for a media server.
+
+    `path` is a filesystem location on the SERVER - a local folder or a
+    UNC share it can reach. Empty/None disables the copy button.
+    """
+
+    path: Optional[str] = None
+    filename_template: Optional[str] = None
+
+
 class RosterOut(BaseModel):
     team_name: Optional[str] = None
     team_color: Optional[str] = None
@@ -55,6 +66,7 @@ class RosterOut(BaseModel):
     team_logo_path: Optional[str] = None
     youtube: Optional[YouTubeConfigOut] = None
     naming: Optional[NamingConfigOut] = None
+    media_server: Optional[MediaServerConfigOut] = None
     players: list[PlayerOut] = Field(default_factory=list)
 
 
@@ -211,7 +223,11 @@ class CreateTournamentIn(BaseModel):
 class CreateMatchIn(BaseModel):
     """New-match request. The folder is `<Tournament>/<date>/<NN>_<opponent>/`
     where `NN` is the 1-based match order on that date. If `match_index` is
-    omitted, the server picks the next available number for that date."""
+    omitted, the server picks the next available number for that date.
+
+    `match_index=0` means "the only match of the day": the folder is
+    still prefixed (`00_`), but the number is left out of render
+    filenames, YouTube titles and media-server files."""
 
     opponent: str
     date: str

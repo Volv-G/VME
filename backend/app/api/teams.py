@@ -8,10 +8,11 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from ..domain.player import Player
-from ..domain.roster import NamingConfig, Roster, YouTubeConfig
+from ..domain.roster import MediaServerConfig, NamingConfig, Roster, YouTubeConfig
 from ..library import paths, scanner
 from .schemas import (
     FullRenderOut,
+    MediaServerConfigOut,
     NamingConfigOut,
     PlayerOut,
     RosterOut,
@@ -59,6 +60,7 @@ def _serialize_roster(r: Roster) -> RosterOut:
         team_logo_path=r.team_logo_path,
         youtube=YouTubeConfigOut(**r.youtube.to_dict()),
         naming=NamingConfigOut(**r.naming.to_dict()),
+        media_server=MediaServerConfigOut(**r.media_server.to_dict()),
         players=[PlayerOut(**p.to_dict()) for p in r.players],
     )
 
@@ -76,7 +78,11 @@ def put_roster(team: str, roster: RosterOut) -> RosterOut:
     # previously-saved settings - reload existing first when EITHER is
     # missing so we don't refetch twice.
     existing = None
-    if roster.youtube is None or roster.naming is None:
+    if (
+        roster.youtube is None
+        or roster.naming is None
+        or roster.media_server is None
+    ):
         existing = scanner.load_team_roster(team)
 
     yt: YouTubeConfig
@@ -90,6 +96,12 @@ def put_roster(team: str, roster: RosterOut) -> RosterOut:
         naming = existing.naming  # type: ignore[union-attr]
     else:
         naming = NamingConfig.from_dict(roster.naming.model_dump())
+
+    media_server: MediaServerConfig
+    if roster.media_server is None:
+        media_server = existing.media_server  # type: ignore[union-attr]
+    else:
+        media_server = MediaServerConfig.from_dict(roster.media_server.model_dump())
 
     # Player photos are managed by their own upload endpoints too, so
     # keep the saved path for any player the request didn't echo it for.
@@ -110,6 +122,7 @@ def put_roster(team: str, roster: RosterOut) -> RosterOut:
         team_logo_path=logo,
         youtube=yt,
         naming=naming,
+        media_server=media_server,
         players=[
             Player.from_dict(_keep_photo(p.model_dump(), existing_players))
             for p in roster.players

@@ -110,8 +110,11 @@ export function TournamentDashboardPage() {
 
   async function createMatch() {
     if (!newMatch.opponent.trim() || !newMatch.date.trim()) return;
+    // 0 is a real choice ("the only match that day - don't number
+    // it"), so the guard is >= 0, not > 0. A blank field still means
+    // "server picks the next number".
     const parsedIdx = parseInt(newMatch.match_index, 10);
-    const idx = Number.isFinite(parsedIdx) && parsedIdx > 0 ? parsedIdx : null;
+    const idx = Number.isFinite(parsedIdx) && parsedIdx >= 0 ? parsedIdx : null;
     try {
       await api.createMatch(team, tournament, {
         opponent: newMatch.opponent.trim(),
@@ -208,7 +211,7 @@ export function TournamentDashboardPage() {
             >
               <div>
                 <div>
-                  {m.match_index != null ? `Match ${m.match_index} – ` : ""}
+                  {m.match_index ? `Match ${m.match_index} – ` : ""}
                   vs {m.opponent}
                 </div>
                 <div className="row-meta">
@@ -254,16 +257,24 @@ export function TournamentDashboardPage() {
             Match #
             <input
               type="number"
-              min={1}
+              min={0}
               value={newMatch.match_index}
               onChange={(e) => {
                 setMatchIndexTouched(true);
                 setNewMatch({ ...newMatch, match_index: e.target.value });
               }}
-              title="Order of this match on the chosen date"
+              title={
+                "Order of this match on the chosen date. Use 0 when it " +
+                "is the only match that day: the number is then left out " +
+                "of render filenames, YouTube titles and media-server files."
+              }
             />
           </label>
         </div>
+        <p className="muted" style={{ fontSize: 11, marginTop: -4 }}>
+          Match <strong>0</strong> = the only match of the day; the number is
+          omitted from every generated name.
+        </p>
         <div className="toolbar" style={{ marginTop: 16, justifyContent: "flex-end" }}>
           <button onClick={() => setCreating(false)}>Cancel</button>
           <button className="primary" onClick={createMatch}>Create</button>

@@ -304,6 +304,10 @@ def run_render(job: RenderJob) -> None:
         _run_upload(job, cancel_check)
         return
 
+    if job.kind == "media_server_copy":
+        _run_media_server_copy(job, cancel_check)
+        return
+
     m = scanner.load_or_create_match(job.team, job.tournament, job.date, job.match)
     if not m.clips:
         raise RuntimeError("Match has no clips to render")
@@ -820,6 +824,93 @@ def _write_chapter_sidecar(renderer, spec, output_path: Path, fps: float) -> Non
     except Exception:
         # A missing chapter file must never fail an otherwise good render.
         logger.warning("could not write chapter sidecar for %s", output_path, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Media-server publishing
+# ---------------------------------------------------------------------------
+
+
+def _run_media_server_copy(job: RenderJob, cancel_check) -> None:
+    """Copy a render (and its images) into the team's media-server folder.
+
+    A job rather than a request handler because the payload is a
+    multi-gigabyte file: an HTTP request would sit open for minutes and
+    the user would get no progress. Enqueued as `immediate` so it runs
+    straight away instead of queueing behind a long render - a copy
+    barely touches the CPU the render queue exists to protect.
+
+    The enqueue endpoint resolved the destination names, so the payload
+    carries final paths; nothing here depends on team settings that may
+    have changed since.
+    """
+    from ..render.media_server import CopyPlan, copy_file, is_up_to_date
+
+    payload = job.payload or {}
+    filename = payload.get("filename")
+    target = payload.get("target")
+    if not filename or not target:
+        raise RuntimeError("Media-server copy job is missing filename/target")
+
+    renders = paths.renders_dir(job.team, job.tournament, job.date, job.match)
+    source = renders / filename
+    if not source.is_file():
+        raise RuntimeError(f"Render file not found: {source}")
+
+    plan = CopyPlan(
+        source=source,
+        target=Path(target),
+        images=[(Path(s), Path(t)) for s, t in payload.get("images") or []],
+    )
+
+    if payload.get("skip_if_current", True) and is_up_to_date(plan):
+        JOBS.update(
+            job.id,
+            percent=100.0,
+            phase="done",
+            message=f"{plan.target.name} is already up to date",
+        )
+        JOBS.mark_done(job.id, filename)
+        return
+
+    total = max(plan.total_bytes, 1)
+    last_emit = [0.0]
+
+    def on_progress(done: int) -> None:
+        now = time.time()
+        if now - last_emit[0] < 0.4:
+            return
+        last_emit[0] = now
+        JOBS.update(
+            job.id,
+            percent=min(100.0, 100.0 * done / total),
+            phase="copying",
+            message=f"{_fmt_mb(done)} / {_fmt_mb(total)}",
+        )
+
+    JOBS.update(job.id, percent=0.0, phase="copying", message=plan.target.name)
+    done = copy_file(
+        plan.source,
+        plan.target,
+        on_progress=on_progress,
+        cancel_check=cancel_check,
+    )
+    # Images are tiny next to the video; copy them without progress.
+    for src, dst in plan.images:
+        try:
+            copy_file(src, dst, base_done=done)
+        except Exception:
+            # A missing poster shouldn't fail a successful video copy;
+            # the media server just falls back to its own artwork.
+            logger.warning("could not copy %s to %s", src, dst, exc_info=True)
+
+    JOBS.update(
+        job.id,
+        percent=100.0,
+        phase="done",
+        message=f"Copied to {plan.target}",
+    )
+    JOBS.mark_done(job.id, filename)
 
 
 # ---------------------------------------------------------------------------

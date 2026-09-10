@@ -257,6 +257,123 @@ def enqueue_youtube_upload(
     return job.to_dict()
 
 
+# ---- Media-server publishing ----------------------------------------------
+
+
+@router.post(
+    "/teams/{team}/tournaments/{tournament}/dates/{date}/matches/{match}"
+    "/renders/{filename:path}/media-server"
+)
+def copy_render_to_media_server(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    filename: str,
+    force: bool = False,
+) -> dict:
+    """Copy a render + its images into the team's media-server folder.
+
+    Enqueued as an immediate job rather than done inline: a full match
+    is gigabytes, so the caller gets a job id and the existing progress
+    UI, not a request that hangs for minutes. Immediate (not queued)
+    because a file copy doesn't compete with renders for the CPU the
+    queue exists to serialize.
+
+    Everything that can be wrong with the configuration - no folder set,
+    unreachable share, template that references an unknown placeholder -
+    is resolved HERE, so the user gets a 400 with a real explanation
+    instead of a failed job.
+    """
+    from ..render import media_server
+
+    renders_root = paths.renders_dir(team, tournament, date, match)
+    source = _safe_render_path(renders_root, filename)
+    if not source.is_file():
+        raise HTTPException(404, f"Render file not found: {filename}")
+
+    roster = scanner.load_team_roster(team)
+    cfg = roster.media_server
+    try:
+        dest_dir = media_server.resolve_dest_dir(cfg.path or "")
+    except media_server.MediaServerError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    try:
+        m = load_match_or_404(team, tournament, date, match)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    vars_ = build_vars(
+        team=team,
+        tournament=tournament,
+        date=date,
+        match=match,
+        match_obj=m,
+        roster=roster,
+        tournament_info=scanner.load_tournament_info(team, tournament),
+    )
+    # A reel is the same match with one player's plays: keep the match
+    # name as the prefix (so a day's files sort together) and append the
+    # player, which is the only thing that distinguishes twelve reels.
+    rel_parts = [p for p in filename.replace("\\", "/").split("/") if p]
+    player_label = ""
+    if len(rel_parts) > 2 and rel_parts[0] == "reels":
+        jersey, player_name = paths.parse_player_folder(rel_parts[2])
+        if jersey is not None:
+            player_label = f"{jersey:02d}_{player_name}".strip("_")
+        else:
+            player_label = player_name or rel_parts[2]
+
+    try:
+        basename = media_server.target_basename(
+            vars_, cfg.filename_template, player_label=player_label
+        )
+    except (KeyError, IndexError, ValueError) as exc:
+        raise HTTPException(
+            400, f"Failed to expand the media-server filename template: {exc}"
+        ) from exc
+
+    try:
+        plan = media_server.plan_copy(source, dest_dir, basename)
+    except media_server.MediaServerError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    if not force and media_server.is_up_to_date(plan):
+        return {
+            "skipped": True,
+            "target": str(plan.target),
+            "message": f"{plan.target.name} is already up to date.",
+        }
+
+    match_index, _ = paths.parse_match_folder(match)
+    job = JOBS.enqueue(
+        team=team,
+        tournament=tournament,
+        date=date,
+        match=match,
+        label=f"media server: {plan.target.name}",
+        kind="media_server_copy",
+        opponent=m.opponent or "",
+        match_index=match_index,
+        immediate=True,
+        payload={
+            "filename": filename,
+            "target": str(plan.target),
+            "images": [[str(s), str(t)] for s, t in plan.images],
+            "skip_if_current": not force,
+        },
+    )
+    kick_off_immediate(job)
+    return {
+        "skipped": False,
+        "target": str(plan.target),
+        "images": [t.name for _, t in plan.images],
+        "job": job.to_dict(),
+        "message": f"Copying to {plan.target.name}…",
+    }
+
+
 # ---- Queue control --------------------------------------------------------
 
 
@@ -517,13 +634,40 @@ def download_render(
     date: str,
     match: str,
     filename: str,
+    inline: bool = False,
 ) -> FileResponse:
+    """Serve a render file.
+
+    `inline=true` is what the in-app player uses: same bytes, but
+    `Content-Disposition: inline` so the browser plays it instead of
+    offering a download. Range requests work either way (Starlette's
+    FileResponse handles them), which is what makes seeking in a
+    multi-gigabyte match possible without downloading it first.
+    """
     renders = paths.renders_dir(team, tournament, date, match)
     target = _safe_render_path(renders, filename)
     if not target.is_file():
         raise HTTPException(404, "Render file not found")
+    # The container is configurable (mp4 / mkv / mov), so don't claim
+    # mp4 for everything - a wrong type can stop a browser playing it.
+    media_type = _VIDEO_MEDIA_TYPES.get(target.suffix.lower(), "video/mp4")
     # `name` is just the leaf for the Content-Disposition header.
-    return FileResponse(target, media_type="video/mp4", filename=target.name)
+    return FileResponse(
+        target,
+        media_type=media_type,
+        filename=target.name,
+        content_disposition_type="inline" if inline else "attachment",
+    )
+
+
+_VIDEO_MEDIA_TYPES = {
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".mov": "video/quicktime",
+    ".mkv": "video/x-matroska",
+    ".webm": "video/webm",
+    ".avi": "video/x-msvideo",
+}
 
 
 @router.delete(

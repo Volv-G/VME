@@ -632,6 +632,44 @@ export const api = {
   ): string {
     return `${BASE}${matchBase(team, tournament, date, match)}/renders/${encPath(filename)}`;
   },
+  /** Same file, served `Content-Disposition: inline` so a <video> plays
+   *  it instead of the browser offering a download. Range requests are
+   *  supported, so seeking works without fetching the whole match. */
+  renderStreamUrl(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    filename: string
+  ): string {
+    return (
+      `${BASE}${matchBase(team, tournament, date, match)}/renders/` +
+      `${encPath(filename)}?inline=1`
+    );
+  },
+  /** Copy a render (and its Jellyfin images) to the team's media-server
+   *  folder. Returns immediately: the copy itself runs as a job, which
+   *  shows up in the render queue with progress. */
+  async copyToMediaServer(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    filename: string,
+    force = false
+  ): Promise<{
+    skipped: boolean;
+    target: string;
+    images?: string[];
+    message: string;
+    job?: RenderJobDto;
+  }> {
+    return fetchJson(
+      `${matchBase(team, tournament, date, match)}/renders/` +
+        `${encPath(filename)}/media-server${force ? "?force=true" : ""}`,
+      { method: "POST" }
+    );
+  },
   clipStreamUrl(
     team: string,
     tournament: string,
