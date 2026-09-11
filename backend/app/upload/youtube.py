@@ -27,8 +27,30 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..config import DATA_DIR, PROJECT_ROOT
+from . import quota
 
 logger = logging.getLogger(__name__)
+
+
+class QuotaExceeded(RuntimeError):
+    """The API refused a call because the daily quota pool is empty.
+
+    Distinct from every other failure because the answer is "wait for
+    the Pacific-midnight reset", not "fix something" - the upload queue
+    parks the job instead of failing it.
+    """
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    """Does this HttpError mean "daily quota gone"?
+
+    Google answers 403 with reason `quotaExceeded` for the daily pool and
+    `rateLimitExceeded` / `uploadRateLimitExceeded` for the much shorter
+    burst buckets - only the first is a day-long wait, so they must not
+    be conflated.
+    """
+    text = str(exc)
+    return "quotaExceeded" in text and "uploadRateLimitExceeded" not in text
 
 
 # Scopes we request during the one-time consent flow. `youtube.upload`
@@ -307,8 +329,16 @@ def set_thumbnail(video_id: str, image_path: Path) -> None:
             videoId=video_id,
             media_body=MediaFileUpload(str(image_path), mimetype=mimetype),
         ).execute()
+        quota.record("thumbnails.set", note=video_id)
     except HttpError as exc:
         status = getattr(exc.resp, "status", 0)
+        if _is_quota_error(exc):
+            quota.mark_exhausted(f"thumbnails.set {video_id}")
+            raise QuotaExceeded(
+                "The YouTube API daily quota is exhausted, so the thumbnail "
+                f"could not be pushed. It resets {quota.format_reset()}; the "
+                "local image is already correct and will be retried."
+            ) from exc
         if status == 403:
             raise RuntimeError(
                 "YouTube refused the custom thumbnail (403). Custom "
@@ -346,6 +376,7 @@ def video_exists(video_id: str) -> Optional[bool]:
     try:
         youtube = _build_service()
         resp = youtube.videos().list(part="id", id=video_id).execute()
+        quota.record("videos.list", note=video_id)
     except Exception as exc:
         logger.warning("could not verify YouTube video %s: %s", video_id, exc)
         return None
@@ -443,6 +474,11 @@ def upload_video(
     request = youtube.videos().insert(
         part="snippet,status", body=body, media_body=media
     )
+    # Charge the insert BEFORE sending. Google bills the call, not its
+    # outcome, and an upload that dies on chunk 300 of 600 has already
+    # cost the 1,600 units - counting it only on success would let the
+    # queue start a second doomed upload straight after.
+    quota.record("videos.insert", note=file_path.name)
 
     total = file_path.stat().st_size
     response = None
@@ -462,6 +498,13 @@ def upload_video(
             # 4xx immediately to surface bad-data / auth issues without
             # eating retries.
             status_code = getattr(exc.resp, "status", 0)
+            if _is_quota_error(exc):
+                quota.mark_exhausted(f"videos.insert {file_path.name}")
+                raise QuotaExceeded(
+                    "The YouTube API daily quota ran out mid-upload. It "
+                    f"resets {quota.format_reset()} - the queue will retry "
+                    "then."
+                ) from exc
             if 500 <= status_code < 600 and retries < MAX_RETRIES:
                 retries += 1
                 wait = 2**retries
@@ -524,6 +567,7 @@ def upload_video(
     # would mark the whole job failed even though the upload worked.
     if playlist_id:
         try:
+            quota.record("playlistItems.insert", note=playlist_id)
             youtube.playlistItems().insert(
                 part="snippet",
                 body={

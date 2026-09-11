@@ -69,12 +69,23 @@ export function TeamFullRendersPanel({ team }: Props) {
     }
   }, [team]);
 
+  // Status is re-fetched on the same cadence as the renders list, not
+  // just once: it carries today's quota spend, which moves as uploads
+  // run and is the thing that decides whether queueing more is useful.
+  // The endpoint reads two local files - no API round-trip.
+  const refreshStatus = useCallback(() => {
+    void api.youtubeStatus().then(setStatus).catch(() => setStatus(null));
+  }, []);
+
   useEffect(() => {
     void reload();
-    void api.youtubeStatus().then(setStatus).catch(() => setStatus(null));
-    const t = window.setInterval(reload, POLL_MS);
+    refreshStatus();
+    const t = window.setInterval(() => {
+      void reload();
+      refreshStatus();
+    }, POLL_MS);
     return () => clearInterval(t);
-  }, [reload]);
+  }, [reload, refreshStatus]);
 
   // Roster is fetched once (not polled): the media-server path changes
   // when the user edits team settings, which remounts this panel.
@@ -293,6 +304,38 @@ export function TeamFullRendersPanel({ team }: Props) {
             }}
           >
             YouTube: {status.configured ? "ready" : "not configured"}
+          </span>
+        )}
+        {/* The API's daily quota is the real constraint on a match day:
+            six uploads, then nothing until Pacific midnight. Say so
+            up front instead of letting the 7th upload discover it. */}
+        {status?.configured && status.quota && (
+          <span
+            className="row-meta"
+            title={
+              `${status.quota.spent} of ${status.quota.limit} API units used ` +
+              `today (${status.quota.uploads_today} upload(s)). ` +
+              `videos.insert costs 1600, so ${status.quota.uploads_remaining} ` +
+              `more fit today. Resets in ` +
+              `${Math.floor(status.quota.seconds_until_reset / 3600)}h ` +
+              `${Math.floor((status.quota.seconds_until_reset % 3600) / 60)}m ` +
+              `(midnight US/Pacific). Queue as many as you like - the queue ` +
+              `parks what doesn't fit and resumes after the reset.`
+            }
+            style={{
+              color:
+                status.quota.uploads_remaining > 0
+                  ? "var(--text-dim)"
+                  : "var(--warn, #d29922)",
+            }}
+          >
+            {status.quota.uploads_remaining > 0
+              ? `${status.quota.uploads_remaining} upload${
+                  status.quota.uploads_remaining === 1 ? "" : "s"
+                } left today`
+              : `quota used up - resets in ${Math.floor(
+                  status.quota.seconds_until_reset / 3600
+                )}h`}
           </span>
         )}
       </div>
@@ -663,10 +706,14 @@ export function TeamFullRendersPanel({ team }: Props) {
                     onClick={() => upload(r)}
                     disabled={!status?.configured || busyId === id}
                     title={
-                      status?.configured
-                        ? "Upload this render to YouTube"
-                        : status?.reason ||
+                      !status?.configured
+                        ? status?.reason ||
                           "YouTube uploads are not configured for this server"
+                        : status.quota && status.quota.uploads_remaining <= 0
+                          ? "Today's YouTube API quota is used up - this will " +
+                            "be queued and uploaded automatically after the " +
+                            "reset (midnight US/Pacific)."
+                          : "Upload this render to YouTube"
                     }
                     style={{ padding: "2px 8px" }}
                   >

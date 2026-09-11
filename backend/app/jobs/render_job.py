@@ -31,7 +31,7 @@ from ..render.thumbnail import (
     write_jellyfin_sidecars,
     write_thumbnail,
 )
-from .manager import JOBS, RenderJob
+from .manager import JOBS, JobStatus, RenderJob
 
 # Upload module is imported lazily inside `_run_upload` so the queue
 # can still operate (and the dispatcher start cleanly) on installs that
@@ -957,7 +957,19 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
 
     # Lazy import: keeps the dispatcher healthy on machines without the
     # google-* deps installed.
-    from ..upload.youtube import upload_video
+    from ..upload import quota
+    from ..upload.youtube import QuotaExceeded, upload_video
+
+    # Don't start an upload the API will refuse. `videos.insert` costs
+    # 1,600 of a default project's 10,000 units/day, so a match day's
+    # worth of videos cannot all go up today - and finding that out by
+    # pushing 4 GB over residential upstream first is the expensive way.
+    # Park the job instead: still PENDING, invisible to the dispatcher
+    # until the Pacific-midnight reset, so a queued batch drains over as
+    # many days as it needs without anyone re-clicking anything.
+    if not quota.can_afford("videos.insert"):
+        _defer_for_quota(job, "the daily YouTube upload quota is used up")
+        return
 
     last_emit = [time.time()]
     last_pct = [0.0]
@@ -992,16 +1004,23 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
         privacy_status,
         playlist_id,
     )
-    result = upload_video(
-        file_path=file_path,
-        title=title,
-        description=description,
-        privacy_status=privacy_status,
-        tags=tags,
-        playlist_id=playlist_id,
-        progress_cb=on_progress,
-        cancel_check=cancel_check,
-    )
+    try:
+        result = upload_video(
+            file_path=file_path,
+            title=title,
+            description=description,
+            privacy_status=privacy_status,
+            tags=tags,
+            playlist_id=playlist_id,
+            progress_cb=on_progress,
+            cancel_check=cancel_check,
+        )
+    except QuotaExceeded as exc:
+        # The pool ran out mid-upload (someone else's spend, or our
+        # ledger under-counted). Same treatment as refusing to start:
+        # this is a wait, not a failure.
+        _defer_for_quota(job, str(exc))
+        return
 
     # Attach the thumbnail. `thumbnails.set` is a separate API call -
     # `videos.insert` has no thumbnail field - so this is the earliest
@@ -1054,6 +1073,30 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
             ),
         )
     JOBS.mark_done(job.id, result.video_url)
+
+
+def _defer_for_quota(job: RenderJob, reason: str) -> None:
+    """Put an upload job back to sleep until the quota pool refills.
+
+    Leaves it PENDING with `defer_until` set past the reset, plus a
+    small margin - Google's reset is not to-the-second, and waking up
+    early would just burn another failed attempt. Percent is reset to 0
+    so a partially-uploaded attempt doesn't leave a misleading bar.
+    """
+    from ..upload import quota
+
+    wait = quota.seconds_until_reset() + 120
+    JOBS.update(
+        job.id,
+        status=JobStatus.PENDING,
+        phase="waiting for quota",
+        percent=0.0,
+        defer_until=time.time() + wait,
+        message=f"{reason}; retrying {quota.format_reset()}",
+    )
+    logger.info(
+        "upload job %s deferred %ds for YouTube quota (%s)", job.id, wait, reason
+    )
 
 
 def _attach_thumbnail(job: Optional[RenderJob], file_path: Path, video_id: str) -> bool:

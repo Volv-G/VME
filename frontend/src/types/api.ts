@@ -238,12 +238,26 @@ export interface FullRenderDto {
 /** Whether the backend can upload to YouTube right now.
  *  `configured=false` => UI disables the upload button and shows
  *  `reason` as a tooltip. */
+/** Today's YouTube Data API spend. `videos.insert` costs 1600 of a
+ *  default project's 10000 units/day, so `uploads_remaining` is the
+ *  number that matters: it is usually 6 at the start of a day. */
+export interface YouTubeQuotaDto {
+  day: string;
+  spent: number;
+  limit: number;
+  remaining: number;
+  seconds_until_reset: number;
+  uploads_today: number;
+  uploads_remaining: number;
+}
+
 export interface YouTubeStatusDto {
   configured: boolean;
   reason: string;
   has_client_secret: boolean;
   has_token: boolean;
   library_installed: boolean;
+  quota?: YouTubeQuotaDto;
 }
 
 export interface AutoCutsResultDto {

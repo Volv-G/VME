@@ -116,6 +116,21 @@ def run_once(limit: int = BATCH) -> tuple[int, int, bool]:
         logger.debug("thumbnail sync skipped: %s", status.reason)
         return (0, 0, False)
 
+    # Don't spend the last of the day's quota on thumbnails. An upload
+    # that can't happen is a lost day; a thumbnail that waits an hour
+    # costs nothing, so video uploads get first claim on what's left.
+    from . import quota
+
+    reserve = quota.COSTS["videos.insert"] + quota.COSTS["thumbnails.set"]
+    if quota.state().remaining < reserve:
+        logger.info(
+            "thumbnail sync deferred: only %d quota units left today, "
+            "keeping them for uploads (%d pending)",
+            quota.state().remaining,
+            len(items),
+        )
+        return (0, 0, True)
+
     pushed = failed = 0
     for index, (video_id, render) in enumerate(items[:limit]):
         if index:

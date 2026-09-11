@@ -89,6 +89,13 @@ class RenderJob:
     #   - media_server_copy: {filename, target, images, skip_if_current}
     payload: dict[str, Any] = field(default_factory=dict)
 
+    # Unix time before which the dispatcher must not start this job.
+    # Used to park a job that can't run *yet* for a reason that is not a
+    # failure - currently a YouTube upload waiting for the daily quota
+    # to reset. Staying PENDING (rather than FAILED) is the point: the
+    # user queues a day's worth of uploads, and the queue drains what it
+    # can and picks the rest up after the reset without anyone watching.
+    defer_until: float = 0.0
     status: JobStatus = JobStatus.PENDING
     percent: float = 0.0
     phase: str = "queued"
@@ -120,6 +127,7 @@ class RenderJob:
             "opponent": self.opponent,
             "match_index": self.match_index,
             "immediate": self.immediate,
+            "defer_until": self.defer_until,
             "payload": self.payload,
             "status": self.status.value,
             "percent": round(self.percent, 1),
@@ -154,6 +162,7 @@ class RenderJob:
             opponent=data.get("opponent", ""),
             match_index=data.get("match_index"),
             immediate=bool(data.get("immediate", False)),
+            defer_until=float(data.get("defer_until") or 0.0),
             payload=dict(data.get("payload") or {}),
             status=JobStatus(data.get("status", "pending")),
             percent=float(data.get("percent", 0.0)),
@@ -252,11 +261,20 @@ class JobManager:
         Immediate jobs run via their own thread (see `kick_off_immediate`
         in `render_job.py`); the dispatcher must not pick them up or it
         could race-run the same job twice.
+
+        Deferred jobs (`defer_until` in the future) are skipped but NOT
+        skipped over permanently: a later job can run ahead of them, and
+        once the timer passes they become eligible again in creation
+        order. Without the skip the dispatcher would spin on a job that
+        keeps declining to start.
         """
+        now = time.time()
         candidates = [
             j
             for j in self._jobs.values()
-            if j.status == JobStatus.PENDING and not j.immediate
+            if j.status == JobStatus.PENDING
+            and not j.immediate
+            and j.defer_until <= now
         ]
         if not candidates:
             return None

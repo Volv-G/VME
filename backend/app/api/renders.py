@@ -104,7 +104,14 @@ def youtube_status() -> dict:
 
     Frontend uses `configured=False` to disable the upload button and
     show `reason` as a tooltip. Cheap to call - no network round-trips.
+
+    Also carries today's API quota spend, because "how many more videos
+    can I upload today" is a question the UI has to answer BEFORE the
+    user queues twelve reels - `videos.insert` costs 1,600 of 10,000
+    units/day, so the honest answer is usually "six".
     """
+    from ..upload import quota
+
     s = youtube_uploader.get_status()
     return {
         "configured": s.configured,
@@ -112,6 +119,7 @@ def youtube_status() -> dict:
         "has_client_secret": s.has_client_secret,
         "has_token": s.has_token,
         "library_installed": s.library_installed,
+        "quota": quota.state().to_dict(),
     }
 
 
