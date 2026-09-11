@@ -336,6 +336,12 @@ def translate_preset(preset: dict[str, Any]) -> dict[str, Any]:
     ):
         params += ["-tag:v", "hvc1"]
 
+    # HandBrake's "Web optimized": move the moov atom (the index) to the
+    # front. Without it the index lands after the mdat - 4.7 GB in for a
+    # full match - and nothing can start playing until the player has
+    # probed to the end of the file and pulled it back, which over a
+    # remote link reads as "stuck loading". Costs one extra rewrite pass
+    # of the finished file.
     if preset.get("Optimize") and ext in (".mp4", ".mov"):
         params += ["-movflags", "+faststart"]
 

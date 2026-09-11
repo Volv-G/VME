@@ -41,7 +41,7 @@
       "ChapterMarkers": true,
       "Default": true,
       "FileFormat": "av_mp4",
-      "Optimize": false,
+      "Optimize": true,
       "Mp4iPodCompatible": false,
       "PictureCropMode": 0,
       "PictureBottomCrop": 0,
