@@ -856,22 +856,25 @@ function RendersByDir({
                       }
                       title={
                         ytStatus?.configured
-                          ? "Enqueue an upload of this render to YouTube"
+                          ? "Upload this render to YouTube"
                           : ytStatus?.reason ||
                             "YouTube uploads are not configured for this server"
                       }
+                      style={{ padding: "2px 8px" }}
                     >
-                      {uploadingName === r.filename
-                        ? "Enqueueing…"
-                        : "Upload"}
+                      {/* Icons, like the team panel: with dozens of
+                          highlight rows, text buttons wrapped the row
+                          and the filename lost its space. */}
+                      {uploadingName === r.filename ? "…" : "📤"}
                     </button>
                   ))}
                 <button
                   className="danger"
                   onClick={() => onDelete(r.filename)}
                   title="Delete this render file"
+                  style={{ padding: "2px 8px" }}
                 >
-                  Delete
+                  🗑
                 </button>
               </div>
             );
