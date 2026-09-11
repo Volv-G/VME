@@ -189,6 +189,43 @@ export function TeamFullRendersPanel({ team }: Props) {
     }
   }
 
+  /** Delete the render file (and its sidecars) from disk.
+   *
+   *  Confirmed, because it's gigabytes of irreversible work - and the
+   *  confirmation says so if the render is already on YouTube, since
+   *  deleting the local file leaves that video in place with nothing
+   *  behind it to re-upload or re-thumbnail. */
+  async function remove(r: FullRenderDto) {
+    const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
+    const leaf = r.filename.split("/").pop() || r.filename;
+    const uploadedWarning = r.youtube_video_id
+      ? `\n\nThis render is on YouTube (${r.youtube_video_id}). That video ` +
+        `stays up, but you won't be able to re-upload or re-thumbnail it ` +
+        `without rendering again.`
+      : "";
+    if (
+      !confirm(
+        `Delete ${leaf} (${formatBytes(r.size_bytes)})?\n\nThe file and its ` +
+          `thumbnail / poster / chapter sidecars are removed from disk. ` +
+          `Copies already on the media server are not touched.` +
+          uploadedWarning
+      )
+    )
+      return;
+    setErr(null);
+    setNote(null);
+    setBusyId(id);
+    try {
+      await api.deleteRender(team, r.tournament, r.date, r.match, r.filename);
+      setNote({ text: `Deleted ${leaf}`, ok: true });
+      await reload();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function upload(r: FullRenderDto) {
     if (!status?.configured) return;
     const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
@@ -533,6 +570,17 @@ export function TeamFullRendersPanel({ team }: Props) {
                           ⬇
                         </button>
                       </a>
+                      <button
+                        onClick={() => remove(r)}
+                        disabled={busyId === id}
+                        title={
+                          "Delete this render from disk. The YouTube video " +
+                          "is not touched."
+                        }
+                        style={{ padding: "1px 6px", fontSize: 11 }}
+                      >
+                        {busyId === id ? "…" : "🗑"}
+                      </button>
                     </div>
                     {/* Show the privacy status as a small badge. When
                         YouTube downgraded the upload (requested !=
@@ -603,6 +651,14 @@ export function TeamFullRendersPanel({ team }: Props) {
                   <a href={downloadUrl(r)} download title="Download this render">
                     <button style={{ padding: "2px 8px" }}>⬇</button>
                   </a>
+                  <button
+                    onClick={() => remove(r)}
+                    disabled={busyId === id}
+                    title="Delete this render from disk"
+                    style={{ padding: "2px 8px" }}
+                  >
+                    {busyId === id ? "…" : "🗑"}
+                  </button>
                   <button
                     onClick={() => upload(r)}
                     disabled={!status?.configured || busyId === id}

@@ -30,7 +30,7 @@ from ..upload.templates import (
     template_uses_chapters,
 )
 from ..jobs.render_job import generate_thumbnail, read_chapter_sidecar
-from ..render.thumbnail import thumbnail_path
+from ..render.thumbnail import jellyfin_paths, thumbnail_path
 from .helpers import load_match_or_404
 from .schemas import RenderFileOut, RenderRequestIn, UploadYouTubeRequestIn
 
@@ -738,14 +738,23 @@ def delete_render(
     if not target.is_file():
         raise HTTPException(404, "Render file not found")
     target.unlink()
-    # Also drop the YouTube sidecar if present - keeping it would
-    # confuse subsequent listings into thinking an uploaded file still
-    # exists locally.
-    sidecar = paths.youtube_sidecar_path(target)
-    try:
-        sidecar.unlink(missing_ok=True)
-    except OSError:
-        pass
+    # Take the sidecars with it. Every one of them describes THIS file -
+    # the upload record, the thumbnail, the Jellyfin images, the chapter
+    # list - so leaving them behind means an orphan that either lies to
+    # a later listing ("already uploaded") or accumulates forever
+    # because nothing else knows it exists.
+    thumb, poster = jellyfin_paths(target)
+    for sidecar in (
+        paths.youtube_sidecar_path(target),
+        thumbnail_path(target),
+        target.with_suffix(target.suffix + ".chapters.txt"),
+        thumb,
+        poster,
+    ):
+        try:
+            sidecar.unlink(missing_ok=True)
+        except OSError:
+            pass
     # Best-effort prune of empty parent dirs (e.g. delete the last
     # highlight for a player and their folder goes away too). Stop at
     # the renders root so we never remove `renders/` itself.
