@@ -257,14 +257,18 @@ export function TeamFullRendersPanel({ team }: Props) {
     }
   }
 
-  // Dates newest-first. `renders` already arrives in that order, so
-  // first-seen order is the right order and no sort is needed.
-  const dates: string[] = [];
+  // Match days, newest first. Sorted by the MATCH date, not by when the
+  // files were written: `renders` arrives ordered by created_at, so
+  // re-rendering a match from last month would otherwise jump that day
+  // to the front of the pager and make the season order meaningless.
+  // Dates are ISO (`YYYY-MM-DD`), so a string compare is a date compare.
   const countByDate = new Map<string, number>();
   for (const r of renders) {
-    if (!countByDate.has(r.date)) dates.push(r.date);
     countByDate.set(r.date, (countByDate.get(r.date) ?? 0) + 1);
   }
+  const dates: string[] = [...countByDate.keys()].sort((a, b) =>
+    b.localeCompare(a)
+  );
   // Fall back to the newest date when nothing is chosen yet, or when the
   // chosen day no longer has renders (deleted on disk).
   const currentDate =
