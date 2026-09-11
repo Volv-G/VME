@@ -39,6 +39,19 @@ DEFAULT_YT_REEL_TITLE_TEMPLATE = (
 DEFAULT_YT_REEL_DESCRIPTION_TEMPLATE = (
     "{date}. {tournament_full}. Match {match_index}. {opponent}\n\n{chapters}"
 )
+# Condensed renders are the same match as the full one, so sharing the
+# match templates would give two videos the same title - something you
+# only notice after publishing. Defaults are the match templates with
+# the variant spelled out; the whole thing is editable because how a
+# team wants to label it ("Condensed", "Plays only", "Highlights") is
+# not ours to decide.
+DEFAULT_YT_CONDENSED_TITLE_TEMPLATE = (
+    "{date}. {tournament_abbr}. M{match_index}. {opponent} (Condensed)"
+)
+DEFAULT_YT_CONDENSED_DESCRIPTION_TEMPLATE = (
+    "{date}. {tournament_full}. Match {match_index}. {opponent}\n\n"
+    "Condensed match: every rally, without the breaks between them."
+)
 
 # Default render-output naming. Replicates the previous hard-coded
 # behavior exactly so existing files keep their format unless the team
@@ -175,6 +188,11 @@ class YouTubeConfig:
     # Same, but for player-reel uploads (one video per player).
     reel_title_template: str = DEFAULT_YT_REEL_TITLE_TEMPLATE
     reel_description_template: str = DEFAULT_YT_REEL_DESCRIPTION_TEMPLATE
+    # Same again for condensed renders (plays only, no breaks).
+    condensed_title_template: str = DEFAULT_YT_CONDENSED_TITLE_TEMPLATE
+    condensed_description_template: str = (
+        DEFAULT_YT_CONDENSED_DESCRIPTION_TEMPLATE
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -184,6 +202,10 @@ class YouTubeConfig:
             "description_template": self.description_template,
             "reel_title_template": self.reel_title_template,
             "reel_description_template": self.reel_description_template,
+            "condensed_title_template": self.condensed_title_template,
+            "condensed_description_template": (
+                self.condensed_description_template
+            ),
         }
 
     @classmethod
@@ -207,6 +229,14 @@ class YouTubeConfig:
             reel_description_template=(
                 data.get("reel_description_template")
                 or DEFAULT_YT_REEL_DESCRIPTION_TEMPLATE
+            ),
+            condensed_title_template=(
+                data.get("condensed_title_template")
+                or DEFAULT_YT_CONDENSED_TITLE_TEMPLATE
+            ),
+            condensed_description_template=(
+                data.get("condensed_description_template")
+                or DEFAULT_YT_CONDENSED_DESCRIPTION_TEMPLATE
             ),
         )
 

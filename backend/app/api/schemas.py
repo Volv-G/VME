@@ -31,6 +31,10 @@ class YouTubeConfigOut(BaseModel):
     # {chapters}.
     reel_title_template: Optional[str] = None
     reel_description_template: Optional[str] = None
+    # Condensed renders (plays only) - same placeholders as the match
+    # templates, separate so one match's two videos get distinct names.
+    condensed_title_template: Optional[str] = None
+    condensed_description_template: Optional[str] = None
 
 
 class NamingConfigOut(BaseModel):

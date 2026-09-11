@@ -36,6 +36,14 @@ const DEFAULT_REEL_TITLE =
   "{date} - {player} - {tournament_abbr}. M{match_index}. {opponent}";
 const DEFAULT_REEL_DESC =
   "{date}. {tournament_full}. Match {match_index}. {opponent}\n\n{chapters}";
+// Condensed renders are the same match as the full one, so they need
+// their own pair too - otherwise both videos of one match get the same
+// title, which you only notice after publishing.
+const DEFAULT_CONDENSED_TITLE =
+  "{date}. {tournament_abbr}. M{match_index}. {opponent} (Condensed)";
+const DEFAULT_CONDENSED_DESC =
+  "{date}. {tournament_full}. Match {match_index}. {opponent}\n\n" +
+  "Condensed match: every rally, without the breaks between them.";
 
 export function TeamYouTubeSettings({ team, roster, onSaved }: Props) {
   const [status, setStatus] = useState<YouTubeStatusDto | null>(null);
@@ -47,6 +55,8 @@ export function TeamYouTubeSettings({ team, roster, onSaved }: Props) {
   const [descTpl, setDescTpl] = useState<string>("");
   const [reelTitleTpl, setReelTitleTpl] = useState<string>("");
   const [reelDescTpl, setReelDescTpl] = useState<string>("");
+  const [condTitleTpl, setCondTitleTpl] = useState<string>("");
+  const [condDescTpl, setCondDescTpl] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -66,6 +76,12 @@ export function TeamYouTubeSettings({ team, roster, onSaved }: Props) {
     setDescTpl(yt?.description_template || DEFAULT_DESC);
     setReelTitleTpl(yt?.reel_title_template || DEFAULT_REEL_TITLE);
     setReelDescTpl(yt?.reel_description_template || DEFAULT_REEL_DESC);
+    setCondTitleTpl(
+      yt?.condensed_title_template || DEFAULT_CONDENSED_TITLE
+    );
+    setCondDescTpl(
+      yt?.condensed_description_template || DEFAULT_CONDENSED_DESC
+    );
   }, [roster]);
 
   // A field left at (or emptied back to) the default is persisted as
@@ -97,6 +113,14 @@ export function TeamYouTubeSettings({ team, roster, onSaved }: Props) {
             reelDescTpl,
             DEFAULT_REEL_DESC
           ),
+          condensed_title_template: normalize(
+            condTitleTpl,
+            DEFAULT_CONDENSED_TITLE
+          ),
+          condensed_description_template: normalize(
+            condDescTpl,
+            DEFAULT_CONDENSED_DESC
+          ),
         } satisfies YouTubeConfigDto,
       };
       const saved = await api.putRoster(team, next);
@@ -122,7 +146,11 @@ export function TeamYouTubeSettings({ team, roster, onSaved }: Props) {
       normalize(reelTitleTpl, DEFAULT_REEL_TITLE) !==
         (roster.youtube?.reel_title_template ?? null) ||
       normalize(reelDescTpl, DEFAULT_REEL_DESC) !==
-        (roster.youtube?.reel_description_template ?? null));
+        (roster.youtube?.reel_description_template ?? null) ||
+      normalize(condTitleTpl, DEFAULT_CONDENSED_TITLE) !==
+        (roster.youtube?.condensed_title_template ?? null) ||
+      normalize(condDescTpl, DEFAULT_CONDENSED_DESC) !==
+        (roster.youtube?.condensed_description_template ?? null));
 
   // The status indicator below reports SERVER-SIDE readiness (the
   // google-* libs are installed, an OAuth client_secret file exists,
@@ -270,6 +298,38 @@ export function TeamYouTubeSettings({ team, roster, onSaved }: Props) {
           <code>{"{chapters}"}</code>. Put <code>{"{chapters}"}</code>{" "}
           where you want the per-play timestamp list; if you omit it, the
           list is appended at the end.
+        </p>
+      </div>
+
+      <div
+        style={{
+          marginTop: 12,
+          paddingTop: 10,
+          borderTop: "1px solid var(--border)",
+        }}
+      >
+        <strong style={{ fontSize: 12 }}>Condensed match</strong>
+        <label style={{ marginTop: 8 }}>
+          Condensed title template
+          <input
+            value={condTitleTpl}
+            onChange={(e) => setCondTitleTpl(e.target.value)}
+            placeholder={DEFAULT_CONDENSED_TITLE}
+          />
+        </label>
+        <label style={{ marginTop: 8 }}>
+          Condensed description template
+          <textarea
+            value={condDescTpl}
+            onChange={(e) => setCondDescTpl(e.target.value)}
+            rows={4}
+            placeholder={DEFAULT_CONDENSED_DESC}
+          />
+        </label>
+        <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+          Used for renders of the plays only (the <code>condensed_</code>
+          files). Same variables as the match templates - it needs its own
+          pair because otherwise both videos of a match get the same name.
         </p>
       </div>
 

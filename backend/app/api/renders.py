@@ -192,8 +192,13 @@ def enqueue_youtube_upload(
     # title. The player comes from the path (`reels/<team>/<NN_Name>/...`)
     # and the chapter block from the `<file>.chapters.txt` sidecar, both
     # exposed to the template as placeholders.
+    # A condensed render is the same match, so the match templates would
+    # name both videos identically; it gets its own pair.
     title_template = roster.youtube.title_template
     description_template = roster.youtube.description_template
+    if scanner.is_condensed_render(body.filename):
+        title_template = roster.youtube.condensed_title_template
+        description_template = roster.youtube.condensed_description_template
     if is_reel:
         title_template = roster.youtube.reel_title_template
         description_template = roster.youtube.reel_description_template
@@ -229,14 +234,6 @@ def enqueue_youtube_upload(
             and not template_uses_chapters(description_template)
         ):
             description = (description.rstrip() + "\n\n" + vars_.chapters).strip()
-        # A condensed render is the same match as the full one, so the
-        # team's match template gives them identical titles - and two
-        # videos of one match with the same name is the sort of thing
-        # you only notice after publishing. Marked here rather than via
-        # a fourth template pair: there is exactly one sensible thing to
-        # say, and it must not be silently omittable.
-        if scanner.is_condensed_render(filename) and body.title_override is None:
-            title = f"{title} (Condensed)"
     except (KeyError, IndexError, ValueError) as exc:
         # KeyError = unknown placeholder; ValueError = malformed template.
         raise HTTPException(

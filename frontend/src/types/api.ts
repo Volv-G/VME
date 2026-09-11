@@ -14,6 +14,11 @@ export interface YouTubeConfigDto {
    *  {player_number}, {player_name}, {clip_count}, {chapters}. */
   reel_title_template?: string | null;
   reel_description_template?: string | null;
+  /** Condensed-render upload templates (plays only). Same placeholders
+   *  as the match templates; separate so one match's full and condensed
+   *  videos don't end up identically named. */
+  condensed_title_template?: string | null;
+  condensed_description_template?: string | null;
 }
 
 /** Team-level render-output naming templates. Slashes in a template
