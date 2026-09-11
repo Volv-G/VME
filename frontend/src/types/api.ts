@@ -160,10 +160,12 @@ export interface RenderJobDto {
    *  - "preview"            window around `playhead_frame`, one output
    *  - "highlights"         one mp4 per highlight (rally bounds)
    *  - "focused_highlights" one mp4 per FocusIn/FocusOut span
+   *  - "condensed"          whole match, plays only (serve -> point)
    *  - "player_reels"       one file per player, all of their plays
    *                         concatenated, with a chapter sidecar */
   kind:
     | "full"
+    | "condensed"
     | "preview"
     | "highlights"
     | "focused_highlights"
@@ -218,8 +220,9 @@ export interface FullRenderDto {
   created_at: number;
   opponent: string;
   match_index: number | null;
-  /** "full" = top-level match render, "reel" = one player's reel. */
-  kind?: "full" | "reel";
+  /** "full" = whole match, "condensed" = the plays only, "reel" = one
+   *  player's reel. */
+  kind?: "full" | "condensed" | "reel";
   /** For reels: the player the reel belongs to, e.g. "#8 Kate G". */
   player_label?: string;
   /** A generated `<file>.thumbnail.jpg` exists next to the render. */

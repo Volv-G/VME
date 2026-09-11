@@ -554,6 +554,7 @@ export const api = {
       /** Render kind. Defaults to "full" server-side. */
       kind?:
         | "full"
+        | "condensed"
         | "preview"
         | "highlights"
         | "focused_highlights"

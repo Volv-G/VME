@@ -71,6 +71,7 @@ def enqueue_render(
     kind = body.kind or "full"
     if kind not in {
         "full",
+        "condensed",
         "preview",
         "highlights",
         "focused_highlights",
@@ -228,6 +229,14 @@ def enqueue_youtube_upload(
             and not template_uses_chapters(description_template)
         ):
             description = (description.rstrip() + "\n\n" + vars_.chapters).strip()
+        # A condensed render is the same match as the full one, so the
+        # team's match template gives them identical titles - and two
+        # videos of one match with the same name is the sort of thing
+        # you only notice after publishing. Marked here rather than via
+        # a fourth template pair: there is exactly one sensible thing to
+        # say, and it must not be silently omittable.
+        if scanner.is_condensed_render(filename) and body.title_override is None:
+            title = f"{title} (Condensed)"
     except (KeyError, IndexError, ValueError) as exc:
         # KeyError = unknown placeholder; ValueError = malformed template.
         raise HTTPException(
@@ -332,6 +341,12 @@ def copy_render_to_media_server(
             player_label = f"{jersey:02d}_{player_name}".strip("_")
         else:
             player_label = player_name or rel_parts[2]
+    elif scanner.is_condensed_render(filename):
+        # Same match, so the same name - but it must not overwrite the
+        # full render's copy in the media library. Reuse the reel's
+        # suffix mechanism so both variants keep the match name prefix
+        # and sort together.
+        player_label = "Condensed"
 
     try:
         basename = media_server.target_basename(

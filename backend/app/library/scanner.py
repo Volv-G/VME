@@ -42,6 +42,11 @@ class FullRenderInfo:
     * `"full"` - a render at the top level of a match's `renders/`
       directory. Preview renders also live there, so they're filtered
       out by their `preview_` filename prefix (see render_job.py).
+    * `"condensed"` - a top-level render too, but only the plays (see
+      `render/condensed.py`). Same product as `"full"` in every way
+      that matters here (uploadable, thumbnailed, publishable); the
+      separate kind exists so the UI can label it, because "22 minutes"
+      and "66 minutes" of the same match otherwise look like a mistake.
     * `"reel"` - a player reel from `renders/reels/<team>/<player>/`.
       One file per player, so the list stays short and each is worth
       uploading on its own.
@@ -74,7 +79,7 @@ class FullRenderInfo:
     # Google Cloud Console "Testing" mode.
     youtube_privacy_status: str | None = None
     youtube_requested_privacy_status: str | None = None
-    # "full" or "reel". Drives how the row is labelled in the UI.
+    # "full", "condensed" or "reel". Drives how the row is labelled.
     kind: str = "full"
     # For reels: the player the reel belongs to, formatted for display
     # ("#8 Kate G"). Empty for full renders.
@@ -332,6 +337,20 @@ def _is_full_render(render_filename: str) -> bool:
     return True
 
 
+# Filename prefix forced onto condensed renders (see render_job.py, which
+# applies it the same way it applies `preview_`). Name-based because the
+# team's naming template may not mention `{label}` at all, and every
+# consumer - listings, media-server naming, upload titles - has only the
+# filename to go on.
+CONDENSED_PREFIX = "condensed_"
+
+
+def is_condensed_render(render_filename: str) -> bool:
+    """True iff this render contains only the plays, not the whole match."""
+    leaf = Path(render_filename.replace("\\", "/")).name.lower()
+    return leaf.startswith(CONDENSED_PREFIX) or Path(leaf).stem == "condensed"
+
+
 REELS_SUBDIR = "reels"
 
 
@@ -438,7 +457,14 @@ def list_team_full_renders(team: str) -> list[FullRenderInfo]:
                     if not p.is_file() or not _is_full_render(p.name):
                         continue
                     info = _build_render_info(
-                        path=p, relative=p.name, kind="full", **common
+                        path=p,
+                        relative=p.name,
+                        kind=(
+                            "condensed"
+                            if is_condensed_render(p.name)
+                            else "full"
+                        ),
+                        **common,
                     )
                     if info is not None:
                         out.append(info)

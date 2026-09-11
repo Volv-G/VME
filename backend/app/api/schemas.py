@@ -125,7 +125,8 @@ class FullRenderOut(BaseModel):
     created_at: float
     opponent: str = ""
     match_index: Optional[int] = None
-    # "full" (top-level match render) or "reel" (one player's plays).
+    # "full" (top-level match render), "condensed" (the plays only) or
+    # "reel" (one player's plays).
     kind: str = "full"
     # True when a `<file>.thumbnail.jpg` sidecar exists next to the render.
     has_thumbnail: bool = False

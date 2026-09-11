@@ -20,6 +20,68 @@ const QUEUED_NOTICE_MS = 9000;
  *  accept it. */
 const VIDEO_EXTENSIONS = [".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm"];
 
+/** Render kinds that go through the queue (previews run immediately and
+ *  have their own button, so they're not in here). */
+type QueueKind =
+  | "full"
+  | "condensed"
+  | "highlights"
+  | "focused_highlights"
+  | "player_reels";
+
+/** The queue-able kinds, in the order they're offered.
+ *
+ *  `label` is short enough for a dropdown; `blurb` is shown under the
+ *  selector, because what each kind produces is not guessable from its
+ *  name and a tooltip is invisible until it's too late. */
+const QUEUE_KINDS: {
+  kind: QueueKind;
+  label: string;
+  /** Job label, which becomes the `{label}` segment of the output
+   *  filename. Kept as the historical short forms so filenames don't
+   *  change shape just because the UI moved to a dropdown. */
+  jobLabel: string;
+  blurb: string;
+}[] = [
+  {
+    kind: "full",
+    label: "Full match",
+    jobLabel: "full",
+    blurb: "One video of the whole match, scoreboard and popups included.",
+  },
+  {
+    kind: "condensed",
+    label: "Condensed match",
+    jobLabel: "condensed",
+    blurb:
+      "Only the plays: each rally from just before the serve to just " +
+      "after the point, cut together with fades between sets. Typically " +
+      "just over half the length of the full match.",
+  },
+  {
+    kind: "highlights",
+    label: "Highlights (one clip per play)",
+    jobLabel: "highlights",
+    blurb:
+      "One rally clip per tagged action, filed by player and action. " +
+      "Dozens of files - they stay on this page, not the team dashboard.",
+  },
+  {
+    kind: "focused_highlights",
+    label: "Focused spans (one clip per focus)",
+    jobLabel: "focused",
+    blurb: "One clip per FocusIn/FocusOut span, filed by player.",
+  },
+  {
+    kind: "player_reels",
+    label: "Player reels (one video per player)",
+    jobLabel: "reels",
+    blurb:
+      "One video per player with all of their plays and a chapter list, " +
+      "ready to upload. Separate from highlights - both can be run.",
+  },
+];
+
 function isFullRender(filename: string): boolean {
   if (filename.includes("/") || filename.includes("\\")) return false;
   const lower = filename.toLowerCase();
@@ -98,6 +160,11 @@ export function RenderPanel({
     DEFAULT_PREVIEW_SECONDS
   );
   const [renders, setRenders] = useState<RenderFileDto[]>([]);
+  // Which queued render to enqueue. A dropdown rather than one button
+  // per kind: five buttons already wrapped onto a second row, and each
+  // needed a tooltip nobody reads to say what it produces. One choice
+  // plus a visible description of it says more in less space.
+  const [queueKind, setQueueKind] = useState<QueueKind>("full");
   // YouTube readiness check. Fetched once on mount; controls whether
   // the per-render "Upload" button is enabled.
   const [ytStatus, setYtStatus] = useState<YouTubeStatusDto | null>(null);
@@ -273,12 +340,7 @@ export function RenderPanel({
   async function enqueue(
     label: string,
     opts: {
-      kind?:
-        | "full"
-        | "preview"
-        | "highlights"
-        | "focused_highlights"
-        | "player_reels";
+      kind?: QueueKind | "preview";
       playheadFrame?: number;
       secondsAround?: number;
       immediate?: boolean;
@@ -450,7 +512,7 @@ Clear the record anyway? The video on YouTube is not ` +
         </div>
       </div>
 
-      <div className="toolbar" style={{ flexWrap: "wrap" }}>
+      <div className="toolbar">
         <button
           className="primary"
           disabled={!hasClips}
@@ -466,44 +528,45 @@ Clear the record anyway? The video on YouTube is not ` +
         >
           Render preview
         </button>
-        <button
+        <span className="muted" style={{ fontSize: 11 }}>
+          runs immediately
+        </span>
+      </div>
+
+      <div
+        className="toolbar"
+        style={{ marginTop: 10, alignItems: "center", gap: 8 }}
+      >
+        <select
+          value={queueKind}
+          onChange={(e) => setQueueKind(e.target.value as QueueKind)}
           disabled={!hasClips}
-          onClick={() => enqueue("full", { kind: "full" })}
-          title="Add a full-match render to the team queue"
+          style={{ flex: 1, minWidth: 0 }}
+          aria-label="Render kind"
         >
-          Enqueue full
-        </button>
-        <button
-          disabled={!hasClips}
-          onClick={() => enqueue("highlights", { kind: "highlights" })}
-          title="Enqueue one rally clip per Highlight event, organized by player"
-        >
-          Enqueue highlights
-        </button>
+          {QUEUE_KINDS.map((k) => (
+            <option key={k.kind} value={k.kind}>
+              {k.label}
+            </option>
+          ))}
+        </select>
         <button
           disabled={!hasClips}
           onClick={() =>
-            enqueue("focused", { kind: "focused_highlights" })
+            enqueue(
+              QUEUE_KINDS.find((k) => k.kind === queueKind)?.jobLabel ??
+                queueKind,
+              { kind: queueKind }
+            )
           }
-          title="Enqueue one clip per FocusIn/FocusOut span, organized by player"
+          title="Add this render to the team queue"
         >
-          Enqueue focused
-        </button>
-        <button
-          disabled={!hasClips}
-          onClick={() => enqueue("reels", { kind: "player_reels" })}
-          title={
-            "Enqueue ONE video per player containing all of their plays, " +
-            "with a chapter list for sharing / YouTube upload. " +
-            "Separate from highlights - both can be run on the same match."
-          }
-        >
-          Enqueue player reels
+          Enqueue
         </button>
       </div>
       <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
-        Previews run immediately. Other renders are queued - start the queue
-        from the team dashboard when ready.
+        {QUEUE_KINDS.find((k) => k.kind === queueKind)?.blurb} Queued renders
+        start when the queue is running - start it from the team dashboard.
       </p>
 
       {notice && (

@@ -367,24 +367,61 @@ def _set_color_blend(
 # ----- Pass 3: per-frame overlay state ---------------------------------------
 
 
+def build_input_index(fmap: FrameMap) -> dict[tuple[str, int], int]:
+    """`(clip_id, local_frame) -> output index` for every frame's primary
+    input.
+
+    Built once and shared, because the alternative -
+    `_output_index_for_input` per event - is a linear scan of a
+    240,000-frame map for each of ~500 events. Only valid while the map
+    isn't being re-seated (the timeline pass deletes frames as it goes,
+    so it keeps using the scan).
+    """
+    index: dict[tuple[str, int], int] = {}
+    for i, entry in enumerate(fmap.entries):
+        if not entry.inputs:
+            continue
+        inp = entry.inputs[0]
+        index.setdefault((inp.clip_id, inp.local_frame), i)
+    return index
+
+
+def index_events(match: Match, fmap: FrameMap) -> list[tuple[int, MatchEvent]]:
+    """`(output_index, event)` for every event that survived the cuts,
+    in output order. Events inside a cut region have no output frame and
+    are dropped.
+    """
+    lookup = build_input_index(fmap)
+    indexed: list[tuple[int, MatchEvent]] = []
+    for e in match.events:
+        if isinstance(e, ClipTransitionEvent):
+            continue
+        out_idx = lookup.get((e.clip_id, e.local_frame))
+        if out_idx is not None:
+            indexed.append((out_idx, e))
+    indexed.sort(key=lambda p: p[0])
+    return indexed
+
+
 def apply_overlay_state(
     match: Match,
     fmap: FrameMap,
     *,
     popup_duration_seconds: float,
+    indexed: Optional[list[tuple[int, MatchEvent]]] = None,
 ) -> None:
+    """Populate per-frame scoreboard visibility + active popups.
+
+    `indexed` lets a caller supply its own event->frame placement rather
+    than the natural one. The condensed render uses that to move popups
+    that fired during removed footage (substitutions between rallies)
+    onto frames that are actually in the output.
+    """
     fps = fmap.fps
     popup_frames = max(1, int(popup_duration_seconds * fps))
 
-    # Build event list with output indices for non-transition events.
-    indexed: list[tuple[int, MatchEvent]] = []
-    for e in match.events:
-        if isinstance(e, ClipTransitionEvent):
-            continue
-        out_idx = _output_index_for_input(fmap, e.clip_id, e.local_frame)
-        if out_idx is not None:
-            indexed.append((out_idx, e))
-    indexed.sort(key=lambda p: p[0])
+    if indexed is None:
+        indexed = index_events(match, fmap)
 
     scoreboard_visible = False
     # (start_idx, resolved overlay effect). The EFFECT is stored rather

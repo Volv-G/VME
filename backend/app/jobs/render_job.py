@@ -283,7 +283,10 @@ def run_render(job: RenderJob) -> None:
     need to clean up the partial output file before re-raising.
 
     Dispatch on `job.kind`:
-      - "full" / "preview" -> single-output path via MatchRenderer.
+      - "full" / "condensed" / "preview" -> single-output path via
+        MatchRenderer. "condensed" keeps only the plays (see
+        `app/render/condensed.py`); it is the same pipeline with a
+        different frame map, not a separate renderer.
       - "highlights" / "focused_highlights" -> batch path producing one
         file per detected span (see `app/render/batch.py`).
       - "player_reels" -> one file per PLAYER, all of their plays
@@ -396,6 +399,17 @@ def run_render(job: RenderJob) -> None:
             parts[-1] = f"preview_{leaf}"
             output_filename = "/".join(parts)
 
+    # Condensed renders get the same treatment for the same reason: the
+    # file has to be self-describing, because listings, media-server
+    # naming and upload titles all distinguish a 22-minute condensed
+    # render from the 66-minute full one by filename alone.
+    if job.kind == "condensed":
+        parts = output_filename.rsplit("/", 1)
+        leaf = parts[-1]
+        if not leaf.lower().startswith(scanner.CONDENSED_PREFIX):
+            parts[-1] = f"{scanner.CONDENSED_PREFIX}{leaf}"
+            output_filename = "/".join(parts)
+
     # Naming templates spell out an extension (legacy default: .mp4) but
     # the actual container comes from render_settings.json (default:
     # QuickTime/.mov for DNxHR), so normalize it here - the renderer does
@@ -450,6 +464,7 @@ def run_render(job: RenderJob) -> None:
                 output_path,
                 progress=on_progress,
                 source_frame_range=source_frame_range,
+                condensed=job.kind == "condensed",
                 cancel_check=cancel_check,
             )
     except RenderCancelled:

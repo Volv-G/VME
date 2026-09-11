@@ -15,6 +15,7 @@ from moviepy import AudioClip, VideoClip, VideoFileClip
 from ..domain.match import Match
 from ..domain.roster import Roster
 from .frame_map import FrameEntry, FrameMap
+from .condensed import build_condensed_frame_map
 from .frame_map_builder import build_frame_map
 from .overlays.message import MessageOverlayRenderer
 from .overlays.scoreboard import ScoreboardOverlay, TeamBranding
@@ -98,6 +99,7 @@ class MatchRenderer:
         progress: Optional[ProgressCb] = None,
         source_frame_range: Optional[tuple[int, int]] = None,
         source_frame_ranges: Optional[list[tuple[int, int]]] = None,
+        condensed: bool = False,
         cancel_check: Optional[CancelCheck] = None,
     ) -> Path:
         """Render the match to ``output_path``.
@@ -112,7 +114,18 @@ class MatchRenderer:
         Ranges are honored as listed (no sorting, no merging), so the caller
         controls the running order and can compute chapter offsets from the
         same list.
+
+        ``condensed`` renders only the plays (serve -> point), with set
+        breaks faded - see `render.condensed`. It is a different FRAME MAP
+        rather than a frame range, because which frames survive depends on
+        the events, and popups from the removed footage have to be moved
+        onto frames that remain. Mutually exclusive with the range
+        arguments.
         """
+        if condensed and (source_frame_range or source_frame_ranges):
+            raise ValueError(
+                "condensed=True cannot be combined with source frame ranges"
+            )
         if settings is None:
             settings = load_settings()
         # ffmpeg picks the muxer from the file extension, so force it to
@@ -121,7 +134,11 @@ class MatchRenderer:
         output_path = apply_container_extension(Path(output_path), settings)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        fmap = build_frame_map(self.match)
+        if condensed:
+            fmap, condensed_stats = build_condensed_frame_map(self.match)
+            logger.info("condensed: %s", condensed_stats.summary(fmap.fps))
+        else:
+            fmap = build_frame_map(self.match)
         if len(fmap) == 0:
             raise ValueError("Frame map is empty (no frames to render)")
 

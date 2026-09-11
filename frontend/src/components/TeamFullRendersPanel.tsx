@@ -420,6 +420,7 @@ export function TeamFullRendersPanel({ team }: Props) {
               ? `M${r.match_index}. ${displayName(r.opponent || r.match)}`
               : displayName(r.opponent || r.match);
             const isReel = r.kind === "reel";
+            const isCondensed = r.kind === "condensed";
             // Reels are one row per player: lead with the player so a
             // dozen rows from the same match stay distinguishable, and
             // show the leaf filename rather than the nested path.
@@ -505,6 +506,23 @@ export function TeamFullRendersPanel({ team }: Props) {
                         without a pager it's the only place it appears. */}
                     {dates.length <= 1 && (
                       <strong style={{ fontSize: 13 }}>{r.date}</strong>
+                    )}
+                    {/* A condensed render is the same match at half the
+                        length; without a badge the pair looks like one
+                        of them failed. */}
+                    {isCondensed && (
+                      <span
+                        style={{
+                          fontSize: 10,
+                          padding: "1px 6px",
+                          borderRadius: 3,
+                          border: "1px solid var(--border)",
+                          color: "var(--text-dim)",
+                        }}
+                        title="Condensed: only the plays, set breaks faded"
+                      >
+                        condensed
+                      </span>
                     )}
                     {isReel && (
                       <>
