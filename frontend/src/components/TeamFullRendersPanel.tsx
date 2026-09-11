@@ -664,12 +664,13 @@ export function TeamFullRendersPanel({ team }: Props) {
                     disabled={!status?.configured || busyId === id}
                     title={
                       status?.configured
-                        ? "Enqueue an upload of this render to YouTube"
+                        ? "Upload this render to YouTube"
                         : status?.reason ||
                           "YouTube uploads are not configured for this server"
                     }
+                    style={{ padding: "2px 8px" }}
                   >
-                    {busyId === id ? "Enqueueing…" : "Upload to YouTube"}
+                    {busyId === id ? "…" : "▶"}
                   </button>
                   </div>
                 )}
