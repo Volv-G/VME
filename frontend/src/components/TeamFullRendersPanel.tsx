@@ -670,7 +670,9 @@ export function TeamFullRendersPanel({ team }: Props) {
                     }
                     style={{ padding: "2px 8px" }}
                   >
-                    {busyId === id ? "…" : "▶"}
+                    {/* Not ▶: that already means "play" on the filename
+                        link above, and this queues an upload. */}
+                    {busyId === id ? "…" : "📤"}
                   </button>
                   </div>
                 )}
