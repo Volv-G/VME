@@ -268,7 +268,15 @@ export interface YouTubeQuotaDto {
   remaining: number;
   seconds_until_reset: number;
   uploads_today: number;
+  /** Videos that still fit in today's API units - forced to 0 while
+   *  `uploads_blocked`, since quota you can't spend isn't capacity. */
   uploads_remaining: number;
+  /** Unix time until which YouTube is expected to keep refusing NEW
+   *  VIDEOS on this channel (a separate ceiling from the API quota:
+   *  400 `uploadLimitExceeded`, undocumented, clears as earlier
+   *  uploads age out). 0 when no refusal has been seen. */
+  upload_limit_until?: number;
+  uploads_blocked?: boolean;
 }
 
 export interface YouTubeStatusDto {

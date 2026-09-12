@@ -388,35 +388,65 @@ export function TeamFullRendersPanel({ team }: Props) {
         {/* The API's daily quota is the real constraint on a match day:
             six uploads, then nothing until Pacific midnight. Say so
             up front instead of letting the 7th upload discover it. */}
-        {status?.configured && status.quota && (
-          <span
-            className="row-meta"
-            title={
-              `${status.quota.spent} of ${status.quota.limit} API units used ` +
-              `today (${status.quota.uploads_today} upload(s)). ` +
-              `videos.insert costs 1600, so ${status.quota.uploads_remaining} ` +
-              `more fit today. Resets in ` +
-              `${Math.floor(status.quota.seconds_until_reset / 3600)}h ` +
-              `${Math.floor((status.quota.seconds_until_reset % 3600) / 60)}m ` +
-              `(midnight US/Pacific). Queue as many as you like - the queue ` +
-              `parks what doesn't fit and resumes after the reset.`
-            }
-            style={{
-              color:
-                status.quota.uploads_remaining > 0
-                  ? "var(--text-dim)"
-                  : "var(--warn, #d29922)",
-            }}
-          >
-            {status.quota.uploads_remaining > 0
-              ? `${status.quota.uploads_remaining} upload${
-                  status.quota.uploads_remaining === 1 ? "" : "s"
-                } left today`
-              : `quota used up - resets in ${Math.floor(
-                  status.quota.seconds_until_reset / 3600
-                )}h`}
-          </span>
-        )}
+        {status?.configured && status.quota && (() => {
+          const q = status.quota;
+          // Two independent ceilings, and the honest label is whichever
+          // one is actually binding. Saying "4 uploads left today" while
+          // YouTube refuses every video (channel cap) describes our
+          // ledger, not reality - and the ledger is the one thing the
+          // user can't check.
+          const blockedFor = q.upload_limit_until
+            ? q.upload_limit_until * 1000 - Date.now()
+            : 0;
+          const blocked = blockedFor > 0;
+          const resetH = Math.floor(q.seconds_until_reset / 3600);
+          const resetM = Math.floor((q.seconds_until_reset % 3600) / 60);
+          const blockedH = Math.max(1, Math.round(blockedFor / 3600000));
+          let label: string;
+          if (blocked) {
+            label = `channel upload limit - retrying for ~${blockedH}h`;
+          } else if (q.uploads_remaining > 0) {
+            label = `${q.uploads_remaining} upload${
+              q.uploads_remaining === 1 ? "" : "s"
+            } left today`;
+          } else {
+            label = `quota used up - resets in ${resetH}h`;
+          }
+          return (
+            <span
+              className="row-meta"
+              title={
+                (blocked
+                  ? "YouTube refused an upload with 'uploadLimitExceeded': " +
+                    "this CHANNEL has published as many videos as it " +
+                    "currently allows. That is separate from the API " +
+                    "quota and clears as earlier uploads age out - " +
+                    "queued uploads keep retrying on their own for up " +
+                    "to a week. "
+                  : "") +
+                `${q.spent} of ${q.limit} API units used today ` +
+                `(${q.uploads_today} successful upload(s)). ` +
+                `videos.insert costs 1600, so ${
+                  Math.floor(
+                    Math.max(0, q.limit - q.spent) / 1600
+                  )
+                } more fit in today's quota. Resets in ${resetH}h ` +
+                `${resetM}m (midnight US/Pacific). Queue as many as you ` +
+                `like - the queue parks what doesn't fit and resumes by ` +
+                `itself. Refused attempts are refunded, so this counts ` +
+                `uploads that actually happened.`
+              }
+              style={{
+                color:
+                  !blocked && q.uploads_remaining > 0
+                    ? "var(--text-dim)"
+                    : "var(--warn, #d29922)",
+              }}
+            >
+              {label}
+            </span>
+          );
+        })()}
       </div>
 
       {err && <div className="error" style={{ marginBottom: 8 }}>{err}</div>}
@@ -807,11 +837,16 @@ export function TeamFullRendersPanel({ team }: Props) {
                       !status?.configured
                         ? status?.reason ||
                           "YouTube uploads are not configured for this server"
-                        : status.quota && status.quota.uploads_remaining <= 0
-                          ? "Today's YouTube API quota is used up - this will " +
-                            "be queued and uploaded automatically after the " +
-                            "reset (midnight US/Pacific)."
-                          : "Upload this render to YouTube"
+                        : status.quota?.uploads_blocked
+                          ? "YouTube is refusing new videos on this channel " +
+                            "right now (channel upload limit). This will be " +
+                            "queued and retried automatically - for up to a " +
+                            "week - without you watching it."
+                          : status.quota && status.quota.uploads_remaining <= 0
+                            ? "Today's YouTube API quota is used up - this " +
+                              "will be queued and uploaded automatically " +
+                              "after the reset (midnight US/Pacific)."
+                            : "Upload this render to YouTube"
                     }
                     style={{ padding: "2px 8px" }}
                   >

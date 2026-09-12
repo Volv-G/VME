@@ -26,6 +26,21 @@ Quota facts this encodes
   authoritative, because the API knows better than our arithmetic (other
   clients, retries, and our own restarts can all spend units we never
   saw).
+* An insert that is **refused outright** (`uploadLimitExceeded`,
+  `uploadRateLimitExceeded`) never creates a video, so `refund()` takes
+  the charge back. Without it, two throttled attempts read as "3200
+  units spent, 4 uploads left" when nothing whatsoever was uploaded -
+  the number then describes our own retries instead of the channel.
+
+What this ledger does NOT know
+------------------------------
+API units are only one of the two ceilings. YouTube separately caps how
+many *videos* a channel may publish in a rolling window, and refuses
+them with 400 `uploadLimitExceeded` regardless of how much quota is
+left. That cap is invisible to the API - there is no endpoint that
+reports it - so the only way to know is to be told, once, by a
+rejection. `mark_upload_limit()` remembers that rejection so the UI can
+stop advertising "N uploads left today" when the real answer is zero.
 
 The ledger is advisory. It can only under-count if something else uses
 the same API project, which is why `mark_exhausted()` exists and why
@@ -131,6 +146,16 @@ def seconds_until_reset(ts: Optional[float] = None) -> int:
 # ---- Ledger ----------------------------------------------------------------
 
 
+# How long to assume the channel's video-count cap stays shut after a
+# `uploadLimitExceeded`. Google documents neither the limit nor its
+# window; reports put it at a rolling 24h, and the cap clears
+# gradually as older uploads age out. 6h is a compromise: long enough
+# that we stop hammering, short enough that a cap which frees up in
+# the afternoon isn't ignored until tomorrow. Retrying only costs a
+# refused request - the upload bytes are never sent.
+UPLOAD_LIMIT_COOLDOWN_SECONDS = 6 * 60 * 60.0
+
+
 @dataclass
 class QuotaState:
     day: str
@@ -139,6 +164,14 @@ class QuotaState:
     seconds_until_reset: int
     uploads_today: int
     events: list[dict[str, Any]]
+    # Unix time until which YouTube is expected to keep refusing new
+    # videos on this channel (0 = no known block). Survives the quota
+    # day rollover on purpose: it is not a quota-day thing.
+    upload_limit_until: float = 0.0
+
+    @property
+    def uploads_blocked(self) -> bool:
+        return self.upload_limit_until > time.time()
 
     @property
     def remaining(self) -> int:
@@ -153,8 +186,17 @@ class QuotaState:
             "seconds_until_reset": self.seconds_until_reset,
             "uploads_today": self.uploads_today,
             # How many more videos fit in what's left - the only number
-            # a user actually plans around.
-            "uploads_remaining": self.remaining // COSTS["videos.insert"],
+            # a user actually plans around. Zero while the channel cap
+            # is shut: quota we can't spend is not capacity, and saying
+            # "4 uploads left" to someone whose uploads are all being
+            # refused is worse than saying nothing.
+            "uploads_remaining": (
+                0
+                if self.uploads_blocked
+                else self.remaining // COSTS["videos.insert"]
+            ),
+            "upload_limit_until": self.upload_limit_until,
+            "uploads_blocked": self.uploads_blocked,
         }
 
 
@@ -166,9 +208,15 @@ def _read() -> dict[str, Any]:
         return {"day": current_day(), "spent": 0, "events": []}
     if not isinstance(data, dict):
         return {"day": current_day(), "spent": 0, "events": []}
-    # A stale day means the pool has refilled since we last wrote.
+    # A stale day means the pool has refilled since we last wrote. The
+    # channel's video-count cap is NOT a quota-day thing, so it carries
+    # over the reset if it hasn't expired yet.
     if data.get("day") != current_day():
-        return {"day": current_day(), "spent": 0, "events": []}
+        fresh: dict[str, Any] = {"day": current_day(), "spent": 0, "events": []}
+        until = float(data.get("upload_limit_until") or 0)
+        if until > time.time():
+            fresh["upload_limit_until"] = until
+        return fresh
     data.setdefault("spent", 0)
     data.setdefault("events", [])
     return data
@@ -213,6 +261,93 @@ def record(operation: str, units: Optional[int] = None, note: str = "") -> int:
     return total
 
 
+def refund(operation: str, units: Optional[int] = None, note: str = "") -> int:
+    """Give back a charge for a call the API refused outright.
+
+    Only for rejections that created nothing: `uploadLimitExceeded` and
+    the rate-limit family. NOT for an upload that died halfway - Google
+    bills the call, not the outcome, and those units are genuinely gone.
+
+    Under-counting is the safe direction here: the API's own 403
+    `quotaExceeded` is authoritative and parks the queue anyway, whereas
+    over-counting makes the UI refuse uploads YouTube would have taken.
+    """
+    cost = units if units is not None else COSTS.get(operation, 1)
+    with _lock:
+        data = _read()
+        data["spent"] = max(0, int(data.get("spent", 0)) - int(cost))
+        events = list(data.get("events") or [])
+        events.append(
+            {
+                "at": time.time(),
+                "op": f"refund:{operation}",
+                "units": -int(cost),
+                "note": note,
+            }
+        )
+        data["events"] = events[-_MAX_EVENTS:]
+        _write(data)
+        total = int(data["spent"])
+    logger.info(
+        "YouTube quota: -%d refunded for a refused %s (%d/%d today)",
+        cost,
+        operation,
+        total,
+        daily_limit(),
+    )
+    return total
+
+
+def mark_upload_limit(
+    seconds: float = UPLOAD_LIMIT_COOLDOWN_SECONDS, note: str = ""
+) -> float:
+    """Record that the channel's video-count cap is shut; returns the
+    unix time it is expected to open again.
+
+    There is no API to ask about this limit, so a rejection is the only
+    evidence that will ever exist. Remembering it is what lets the queue
+    stop starting uploads and the UI stop promising capacity.
+    """
+    until = time.time() + max(0.0, seconds)
+    with _lock:
+        data = _read()
+        # Never shorten an existing cooldown: two rejections in a row
+        # mean the cap is still shut, not that it reopened.
+        data["upload_limit_until"] = max(
+            float(data.get("upload_limit_until") or 0), until
+        )
+        events = list(data.get("events") or [])
+        events.append(
+            {
+                "at": time.time(),
+                "op": "uploadLimitExceeded",
+                "units": 0,
+                "note": note or "channel video-count limit reached",
+            }
+        )
+        data["events"] = events[-_MAX_EVENTS:]
+        _write(data)
+        until = float(data["upload_limit_until"])
+    logger.warning(
+        "YouTube channel upload limit reached (%s); not attempting uploads "
+        "for %.1f h",
+        note,
+        (until - time.time()) / 3600.0,
+    )
+    return until
+
+
+def clear_upload_limit() -> None:
+    """Forget the channel cap - after a successful upload proves it."""
+    with _lock:
+        data = _read()
+        if not data.get("upload_limit_until"):
+            return
+        data["upload_limit_until"] = 0.0
+        _write(data)
+    logger.info("YouTube channel upload limit cleared by a successful upload")
+
+
 def mark_exhausted(note: str = "") -> None:
     """Record the API's own verdict that the pool is gone.
 
@@ -246,7 +381,15 @@ def state() -> QuotaState:
         spent=int(data.get("spent") or 0),
         limit=daily_limit(),
         seconds_until_reset=seconds_until_reset(),
-        uploads_today=sum(1 for e in events if e.get("op") == "videos.insert"),
+        # Refunds cancel their insert: an attempt YouTube refused is not
+        # an upload, and counting it makes "2 uploads today" appear on a
+        # channel with nothing new on it.
+        uploads_today=max(
+            0,
+            sum(1 for e in events if e.get("op") == "videos.insert")
+            - sum(1 for e in events if e.get("op") == "refund:videos.insert"),
+        ),
+        upload_limit_until=float(data.get("upload_limit_until") or 0),
         events=events,
     )
 
@@ -254,6 +397,16 @@ def state() -> QuotaState:
 def can_afford(operation: str, units: Optional[int] = None) -> bool:
     cost = units if units is not None else COSTS.get(operation, 1)
     return state().remaining >= cost
+
+
+def format_wait(seconds: float) -> str:
+    """"in 5h 12m" / "in 12m" - for messages that explain a wait."""
+    secs = max(0, int(seconds))
+    hours, rem = divmod(secs, 3600)
+    minutes = rem // 60
+    if hours:
+        return f"in {hours}h {minutes:02d}m"
+    return f"in {minutes}m"
 
 
 def format_reset() -> str:

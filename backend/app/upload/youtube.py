@@ -51,7 +51,36 @@ class RateLimited(RuntimeError):
     the same - come back later with the same request. Distinct from
     `QuotaExceeded` (a whole day) and from a real failure (fix
     something), because the upload queue treats all three differently.
+
+    `retry_after` is a hint in seconds for callers that park the work:
+    the channel video-count cap needs hours, a plain burst needs
+    minutes, and using one wait for both either hammers the API or
+    stalls an upload that could have gone an hour ago.
     """
+
+    def __init__(self, message: str, *, retry_after: Optional[float] = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _is_upload_limit_error(exc: Exception) -> bool:
+    """Does this mean "this channel has published too many videos"?
+
+    A DIFFERENT limit from everything else here, and the one that
+    actually stops a match day: YouTube caps how many videos a channel
+    may publish in a rolling window and answers
+
+        400 uploadLimitExceeded
+        "The user has exceeded the number of videos they may upload."
+
+    Note the 400 - not 403, not 429 - and note that the reason string
+    `uploadLimitExceeded` is NOT a substring of `uploadRateLimitExceeded`
+    or `rateLimitExceeded`, so it has to be matched on its own or it
+    reads as an unretryable client error and fails the job.
+
+    Nothing in the API reports this cap; only a rejection reveals it.
+    """
+    return "uploadLimitExceeded" in str(exc)
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -64,6 +93,8 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     """
     if _is_quota_error(exc):
         return False
+    if _is_upload_limit_error(exc):
+        return True
     if getattr(getattr(exc, "resp", None), "status", 0) == 429:
         return True
     text = str(exc)
@@ -542,10 +573,29 @@ def upload_video(
                     "then."
                 ) from exc
             if _is_rate_limit_error(exc):
-                # A burst bucket, not the daily pool. The bytes we sent
-                # are lost (no resumable handle survives the process),
-                # but the answer is simply "later" - the caller parks
-                # the job rather than failing it.
+                # A burst bucket or the channel's video-count cap -
+                # either way no video was created, so take the 1,600
+                # units back: otherwise a few refused attempts read as
+                # "quota nearly gone" when nothing was uploaded at all.
+                # The bytes we sent are lost (no resumable handle
+                # survives the process), but the answer is simply
+                # "later" - the caller parks the job rather than
+                # failing it.
+                quota.refund(
+                    "videos.insert",
+                    note=f"refused: {file_path.name}",
+                )
+                if _is_upload_limit_error(exc):
+                    until = quota.mark_upload_limit(note=file_path.name)
+                    raise RateLimited(
+                        "YouTube says this channel has published as many "
+                        "videos as it currently allows, so it refused the "
+                        "upload. This is a channel limit, not the API "
+                        "quota - it frees up as earlier uploads age out. "
+                        "The upload stays queued and will be retried "
+                        f"{quota.format_wait(until - time.time())}.",
+                        retry_after=max(0.0, until - time.time()),
+                    ) from exc
                 raise RateLimited(
                     "YouTube is rate-limiting uploads on this channel right "
                     "now (too many videos in a short window). The upload "
@@ -571,6 +621,11 @@ def upload_video(
     video_id = (response or {}).get("id")
     if not video_id:
         raise RuntimeError(f"YouTube did not return a video id: {response!r}")
+
+    # An accepted video is proof the channel cap has reopened - better
+    # evidence than the cooldown guess, so drop it and let the rest of
+    # the queue run.
+    quota.clear_upload_limit()
 
     # YouTube silently downgrades `privacyStatus` to `private` when the
     # OAuth client is in Google Cloud Console's "Testing" publishing

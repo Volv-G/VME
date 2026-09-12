@@ -986,6 +986,22 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
         _defer_for_quota(job, "the daily YouTube upload quota is used up")
         return
 
+    # Same idea for the OTHER ceiling: YouTube caps how many videos a
+    # channel may publish in a rolling window, and while that cap is
+    # shut every insert is refused on arrival. We only learn about it
+    # from a rejection, so once one has happened, don't spend the next
+    # few hours re-discovering it with 4 GB uploads.
+    qstate = quota.state()
+    if qstate.uploads_blocked:
+        wait = max(60.0, qstate.upload_limit_until - time.time())
+        _defer_for_rate_limit(
+            job,
+            "YouTube has capped how many videos this channel can publish "
+            "right now; the upload stays queued.",
+            retry_after=wait,
+        )
+        return
+
     last_emit = [time.time()]
     last_pct = [0.0]
 
@@ -1037,9 +1053,10 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
         _defer_for_quota(job, str(exc))
         return
     except RateLimited as exc:
-        # A burst bucket, which refills in minutes to hours. Park and
-        # come back, exactly like the thumbnail backlog does.
-        _defer_for_rate_limit(job, str(exc))
+        # A burst bucket or the channel's video-count cap. Park and come
+        # back, exactly like the thumbnail backlog does - for days if
+        # that is what the limit needs.
+        _defer_for_rate_limit(job, str(exc), getattr(exc, "retry_after", None))
         return
 
     # Attach the thumbnail. `thumbnails.set` is a separate API call -
@@ -1102,54 +1119,77 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
 # re-sends gigabytes for nothing. Mirrors `thumbnail_sync.BACKOFF_*`.
 UPLOAD_RETRY_START_SECONDS = 20 * 60.0
 UPLOAD_RETRY_MAX_SECONDS = 4 * 60 * 60.0
-# Attempts before giving up and failing the job. 6 attempts with the
-# doubling above covers ~10 hours, which is far longer than any burst
-# bucket observed; past that the cause is something a retry can't fix
-# and the user needs to see an error rather than a job that quietly
-# retries forever.
-UPLOAD_MAX_RETRIES = 6
+# Give up on the CLOCK, not on an attempt count. Every ceiling that
+# stops an upload here is measured in days, not minutes: the API quota
+# pool refills once per Pacific day, and the channel's video-count cap
+# ages out over a rolling ~24h. A queue of 13 videos from one match day
+# physically cannot go up in one day, so "6 attempts then fail" would
+# mark work as failed while the only thing wrong with it is that it is
+# Tuesday. A week of patience covers a match-day backlog draining at
+# six uploads a day with room to spare, and still means a genuinely
+# broken upload surfaces as an error rather than retrying forever.
+UPLOAD_RETRY_DAYS = 7.0
+UPLOAD_RETRY_DEADLINE_SECONDS = UPLOAD_RETRY_DAYS * 24 * 60 * 60.0
 
 
-def _defer_for_rate_limit(job: RenderJob, reason: str) -> None:
+def _defer_for_rate_limit(
+    job: RenderJob, reason: str, retry_after: Optional[float] = None
+) -> None:
     """Park a throttled upload and try again after a growing delay.
 
-    Counts attempts on the job payload so the wait doubles and so a
-    permanently-refused upload eventually fails instead of looping. The
-    job stays PENDING - the dispatcher skips it until `defer_until`,
+    The job stays PENDING - the dispatcher skips it until `defer_until`,
     then picks it up in creation order like any other queued work.
+
+    `retry_after` is the API's own hint (the channel cap knows roughly
+    when it reopens); it wins over the doubling when it is longer,
+    because retrying before the stated time is guaranteed to be refused.
+
+    Attempts are counted for the message only. What ends the retries is
+    `UPLOAD_RETRY_DEADLINE_SECONDS` from the first refusal: the limits
+    being waited on are day-scale, so a count would give up on a healthy
+    upload that simply queued behind a day's worth of others.
     """
-    attempts = int((job.payload or {}).get("retry_attempts") or 0) + 1
-    if attempts > UPLOAD_MAX_RETRIES:
+    now = time.time()
+    payload = dict(job.payload or {})
+    attempts = int(payload.get("retry_attempts") or 0) + 1
+    first = float(payload.get("retry_since") or now)
+    waited = now - first
+    if waited > UPLOAD_RETRY_DEADLINE_SECONDS:
         JOBS.mark_failed(
             job.id,
-            f"{reason} Gave up after {UPLOAD_MAX_RETRIES} attempts - "
-            "retry manually once YouTube stops refusing.",
+            f"{reason} Gave up after {waited / 86400:.1f} days and "
+            f"{attempts} attempts - YouTube is still refusing this "
+            "upload, so something needs looking at.",
         )
         return
     wait = min(
         UPLOAD_RETRY_MAX_SECONDS,
         UPLOAD_RETRY_START_SECONDS * (2 ** (attempts - 1)),
     )
-    payload = dict(job.payload or {})
+    if retry_after:
+        wait = max(wait, float(retry_after))
     payload["retry_attempts"] = attempts
+    payload["retry_since"] = first
     JOBS.update(
         job.id,
         status=JobStatus.PENDING,
         phase="waiting for YouTube",
         percent=0.0,
         payload=payload,
-        defer_until=time.time() + wait,
+        defer_until=now + wait,
         message=(
-            f"{reason} Attempt {attempts}/{UPLOAD_MAX_RETRIES}; "
-            f"retrying in {_fmt_wait(wait)}."
+            f"{reason} Attempt {attempts}; retrying in {_fmt_wait(wait)} "
+            f"(keeps trying for up to {UPLOAD_RETRY_DAYS:.0f} days)."
         ),
     )
     logger.info(
-        "upload job %s deferred %ds (attempt %d/%d): %s",
+        "upload job %s deferred %ds (attempt %d, %.1f h into a %.0f day "
+        "budget): %s",
         job.id,
         int(wait),
         attempts,
-        UPLOAD_MAX_RETRIES,
+        waited / 3600.0,
+        UPLOAD_RETRY_DAYS,
         reason,
     )
 
