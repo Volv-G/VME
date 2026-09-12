@@ -973,7 +973,7 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
     # Lazy import: keeps the dispatcher healthy on machines without the
     # google-* deps installed.
     from ..upload import quota
-    from ..upload.youtube import QuotaExceeded, upload_video
+    from ..upload.youtube import QuotaExceeded, RateLimited, upload_video
 
     # Don't start an upload the API will refuse. `videos.insert` costs
     # 1,600 of a default project's 10,000 units/day, so a match day's
@@ -1036,6 +1036,11 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
         # this is a wait, not a failure.
         _defer_for_quota(job, str(exc))
         return
+    except RateLimited as exc:
+        # A burst bucket, which refills in minutes to hours. Park and
+        # come back, exactly like the thumbnail backlog does.
+        _defer_for_rate_limit(job, str(exc))
+        return
 
     # Attach the thumbnail. `thumbnails.set` is a separate API call -
     # `videos.insert` has no thumbnail field - so this is the earliest
@@ -1088,6 +1093,73 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
             ),
         )
     JOBS.mark_done(job.id, result.video_url)
+
+
+# Backoff for an upload YouTube is throttling. The per-channel upload
+# bucket is undocumented and refills over hours, so the first wait is
+# already long: retrying in 30 seconds only burns the bucket further
+# and (because a resumable session can't be resumed across attempts)
+# re-sends gigabytes for nothing. Mirrors `thumbnail_sync.BACKOFF_*`.
+UPLOAD_RETRY_START_SECONDS = 20 * 60.0
+UPLOAD_RETRY_MAX_SECONDS = 4 * 60 * 60.0
+# Attempts before giving up and failing the job. 6 attempts with the
+# doubling above covers ~10 hours, which is far longer than any burst
+# bucket observed; past that the cause is something a retry can't fix
+# and the user needs to see an error rather than a job that quietly
+# retries forever.
+UPLOAD_MAX_RETRIES = 6
+
+
+def _defer_for_rate_limit(job: RenderJob, reason: str) -> None:
+    """Park a throttled upload and try again after a growing delay.
+
+    Counts attempts on the job payload so the wait doubles and so a
+    permanently-refused upload eventually fails instead of looping. The
+    job stays PENDING - the dispatcher skips it until `defer_until`,
+    then picks it up in creation order like any other queued work.
+    """
+    attempts = int((job.payload or {}).get("retry_attempts") or 0) + 1
+    if attempts > UPLOAD_MAX_RETRIES:
+        JOBS.mark_failed(
+            job.id,
+            f"{reason} Gave up after {UPLOAD_MAX_RETRIES} attempts - "
+            "retry manually once YouTube stops refusing.",
+        )
+        return
+    wait = min(
+        UPLOAD_RETRY_MAX_SECONDS,
+        UPLOAD_RETRY_START_SECONDS * (2 ** (attempts - 1)),
+    )
+    payload = dict(job.payload or {})
+    payload["retry_attempts"] = attempts
+    JOBS.update(
+        job.id,
+        status=JobStatus.PENDING,
+        phase="waiting for YouTube",
+        percent=0.0,
+        payload=payload,
+        defer_until=time.time() + wait,
+        message=(
+            f"{reason} Attempt {attempts}/{UPLOAD_MAX_RETRIES}; "
+            f"retrying in {_fmt_wait(wait)}."
+        ),
+    )
+    logger.info(
+        "upload job %s deferred %ds (attempt %d/%d): %s",
+        job.id,
+        int(wait),
+        attempts,
+        UPLOAD_MAX_RETRIES,
+        reason,
+    )
+
+
+def _fmt_wait(seconds: float) -> str:
+    if seconds < 90:
+        return f"{int(seconds)}s"
+    if seconds < 90 * 60:
+        return f"{int(round(seconds / 60))} min"
+    return f"{seconds / 3600:.1f} h"
 
 
 def _defer_for_quota(job: RenderJob, reason: str) -> None:

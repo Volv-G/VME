@@ -94,6 +94,12 @@ def _record_failure(render: Path, error: str) -> None:
 
 
 def _is_rate_limited(exc: Exception) -> bool:
+    from .youtube import RateLimited
+
+    if isinstance(exc, RateLimited):
+        return True
+    # Text fallback for anything raised before the typed exception
+    # existed, or wrapped by a caller on the way up.
     text = str(exc)
     return "rate-limit" in text or "rateLimit" in text or "429" in text
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -9,7 +10,9 @@ from fastapi.responses import FileResponse
 
 from ..domain.player import Player
 from ..domain.roster import MediaServerConfig, NamingConfig, Roster, YouTubeConfig
+from ..jobs.manager import JOBS, JobStatus
 from ..library import paths, scanner
+from ..upload import thumbnail_sync
 from .schemas import (
     FullRenderOut,
     MediaServerConfigOut,
@@ -149,7 +152,14 @@ def list_full_renders(team: str) -> list[FullRenderOut]:
     renders plus one row per player reel (`kind="reel"`). Each entry
     carries the location info needed to construct download/upload URLs
     plus the YouTube state read from the per-render sidecar.
+
+    Outstanding upload jobs are folded in here rather than left to the
+    client: the queue and the renders list are two different endpoints,
+    and matching a job to a row means re-deriving the job's payload
+    filename in TypeScript. The row is where the user looks, so the row
+    is where "this one is waiting to go up" belongs.
     """
+    pending_uploads = _pending_upload_index(team)
     return [
         FullRenderOut(
             team=r.team,
@@ -169,6 +179,58 @@ def list_full_renders(team: str) -> list[FullRenderOut]:
             youtube_uploaded_at=r.youtube_uploaded_at,
             youtube_privacy_status=r.youtube_privacy_status,
             youtube_requested_privacy_status=r.youtube_requested_privacy_status,
+            upload_state=pending_uploads.get(
+                (r.tournament, r.date, r.match, r.filename), (None, "")
+            )[0],
+            upload_detail=pending_uploads.get(
+                (r.tournament, r.date, r.match, r.filename), (None, "")
+            )[1],
+            # A thumbnail counts as pending only when the image actually
+            # exists locally and the video is up - those are the two
+            # things the sync worker needs to do anything about it.
+            thumbnail_pending=bool(
+                r.youtube_video_id
+                and r.has_thumbnail
+                and not r.thumbnail_synced
+                and r.thumbnail_attempts < thumbnail_sync.MAX_ATTEMPTS
+            ),
+            thumbnail_refused=bool(
+                r.youtube_video_id
+                and r.has_thumbnail
+                and not r.thumbnail_synced
+                and r.thumbnail_attempts >= thumbnail_sync.MAX_ATTEMPTS
+            ),
         )
         for r in scanner.list_team_full_renders(team)
     ]
+
+
+def _pending_upload_index(team: str) -> dict[tuple[str, str, str, str], tuple[str, str]]:
+    """`(tournament, date, match, filename)` -> `(state, message)`.
+
+    Only jobs that will still do something are included: a finished or
+    failed upload is history, and the sidecar (or its absence) already
+    tells that story on the row.
+    """
+    out: dict[tuple[str, str, str, str], tuple[str, str]] = {}
+    for job in JOBS.list_team_jobs(team):
+        if job.kind != "youtube_upload":
+            continue
+        filename = (job.payload or {}).get("filename")
+        if not filename:
+            continue
+        if job.status == JobStatus.RUNNING:
+            state = "uploading"
+        elif job.status == JobStatus.PENDING:
+            # Deferred jobs are pending too, but they're waiting on the
+            # clock rather than on the queue, which is a different thing
+            # to tell the user: one needs the queue started, the other
+            # needs patience.
+            state = "waiting" if job.defer_until > time.time() else "queued"
+        else:
+            continue
+        out[(job.tournament, job.date, job.match, filename)] = (
+            state,
+            job.message or job.phase,
+        )
+    return out

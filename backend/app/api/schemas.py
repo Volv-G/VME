@@ -146,6 +146,22 @@ class FullRenderOut(BaseModel):
     # mismatch to flag the row.
     youtube_privacy_status: Optional[str] = None
     youtube_requested_privacy_status: Optional[str] = None
+    # Live state of an upload job for THIS file, when one exists:
+    #   "queued"   - waiting its turn in the render queue
+    #   "uploading"- bytes going out now
+    #   "waiting"  - parked until the daily quota resets or YouTube
+    #                stops throttling (still pending, not failed)
+    # None when no upload job is outstanding. Computed per request from
+    # the job registry, not stored - a job is the authority on itself.
+    upload_state: Optional[str] = None
+    # The job's own message, so the row can say *why* it's waiting.
+    upload_detail: str = ""
+    # A local thumbnail exists that YouTube hasn't accepted, and the
+    # background sync worker still has attempts left for it.
+    thumbnail_pending: bool = False
+    # Same, but the worker has given up - only a manual re-push (or a
+    # regenerated image, which resets the counter) will change it.
+    thumbnail_refused: bool = False
 
 
 class UploadYouTubeRequestIn(BaseModel):

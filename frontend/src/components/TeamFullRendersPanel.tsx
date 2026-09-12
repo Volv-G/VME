@@ -36,6 +36,81 @@ function formatAge(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
+/** Work still owed to YouTube for one render.
+ *
+ *  Both queues are "offline" in the sense that they finish on their own
+ *  schedule: an upload can be parked for hours by a throttle or for a
+ *  day by the quota, and a refused thumbnail is retried by a background
+ *  worker. Without a mark on the row, the only evidence is a job buried
+ *  in the queue list, so a render that is on its way looks exactly like
+ *  one nobody touched - and the user re-clicks Upload. */
+function PendingBadges({ r }: { r: FullRenderDto }) {
+  const items: { text: string; title: string; warn?: boolean }[] = [];
+  if (r.upload_state === "uploading") {
+    items.push({
+      text: "↑ uploading",
+      title: r.upload_detail || "Uploading to YouTube now",
+    });
+  } else if (r.upload_state === "queued") {
+    items.push({
+      text: "↑ queued",
+      title:
+        (r.upload_detail ? r.upload_detail + " · " : "") +
+        "Upload is waiting its turn - it needs the render queue running.",
+    });
+  } else if (r.upload_state === "waiting") {
+    items.push({
+      text: "↑ waiting",
+      warn: true,
+      title:
+        r.upload_detail ||
+        "Upload is parked until YouTube accepts it again. It retries " +
+          "by itself; nothing to do.",
+    });
+  }
+  if (r.thumbnail_pending) {
+    items.push({
+      text: "🖼 queued",
+      title:
+        "YouTube hasn't accepted this thumbnail yet (usually its " +
+        "per-channel rate limit). A background worker keeps trying; " +
+        "the video shows its old image until then.",
+    });
+  } else if (r.thumbnail_refused) {
+    items.push({
+      text: "🖼 refused",
+      warn: true,
+      title:
+        "YouTube refused this thumbnail repeatedly and the retry " +
+        "worker gave up. Common cause: the channel isn't verified " +
+        "(youtube.com/verify). Press 🖼 to regenerate and try again.",
+    });
+  }
+  if (!items.length) return null;
+  return (
+    <>
+      {items.map((it) => (
+        <span
+          key={it.text}
+          title={it.title}
+          style={{
+            fontSize: 10,
+            padding: "1px 6px",
+            borderRadius: 3,
+            border: "1px solid",
+            borderColor: it.warn ? "var(--warn, #d29922)" : "var(--border)",
+            color: it.warn ? "var(--warn, #d29922)" : "var(--text-dim)",
+            background: it.warn ? "rgba(210, 153, 34, 0.10)" : "transparent",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {it.text}
+        </span>
+      ))}
+    </>
+  );
+}
+
 export function TeamFullRendersPanel({ team }: Props) {
   const [renders, setRenders] = useState<FullRenderDto[]>([]);
   const [status, setStatus] = useState<YouTubeStatusDto | null>(null);
@@ -553,6 +628,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                     <span className="muted" style={{ fontSize: 11 }}>
                       {displayName(r.tournament)}
                     </span>
+                    <PendingBadges r={r} />
                   </div>
                   <div className="row-meta" style={{ marginTop: 2 }}>
                     {/* Opens the player, not a download: the usual

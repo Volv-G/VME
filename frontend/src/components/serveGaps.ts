@@ -10,13 +10,24 @@ import type { EventDto } from "../types/api";
  * changes, an injury) - so the list flags it and says how long, leaving
  * the judgement to the user.
  */
-// 15s, not 10: measured over a full match (134 serves), the median gap
-// from the previous event to the next serve is 11s - a score is logged
-// when the rally ends, and the celebration, rotation and walk to the
-// line genuinely take that long. A 10s threshold flagged 55% of serves,
-// which makes the warning mean "this is a serve". 15s flags the top
-// ~13%.
-export const SERVE_GAP_WARN_SECONDS = 15;
+// Measured over 286 serves across three matches (Liberty 2026-09-03,
+// Mercer Island 2026-09-09, Bellevue 2026-09-10). Median gap from the
+// previous event to the next serve is 8-11s: a score is logged when
+// the rally ends, and the celebration, rotation and walk to the line
+// genuinely take that long.
+//
+//   threshold   flagged
+//      10s      126 (44%)
+//      12s       73 (26%)
+//      15s       18 (6%)
+//      20s        1 (0%)
+//
+// 12s by request: it catches gaps 15s misses, at the cost of more
+// noise. Note the spread between matches - 12s flags 39% of Liberty
+// but 14% of Mercer Island, because Liberty's scores were logged
+// several seconds later in the rally. The threshold is really
+// measuring tagging latency, so expect it to feel different per match.
+export const SERVE_GAP_WARN_SECONDS = 12;
 
 /**
  * Gap in seconds, keyed by event id, for every `ball_served` whose

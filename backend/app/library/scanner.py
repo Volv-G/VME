@@ -92,6 +92,12 @@ class FullRenderInfo:
     # rate limit) - the local file exists but the published video still
     # shows something else, and the UI must not imply otherwise.
     thumbnail_synced: bool = False
+    # How many times the background sync worker has been refused for
+    # this file. Surfaced so the UI can say "queued for retry" while
+    # retries remain and "refused" once the worker has given up -
+    # otherwise a permanently-rejected thumbnail looks identical to one
+    # that's about to be pushed.
+    thumbnail_attempts: int = 0
 
 
 @dataclass
@@ -405,6 +411,9 @@ def _build_render_info(
         player_label=player_label,
         has_thumbnail=path.with_suffix(path.suffix + ".thumbnail.jpg").is_file(),
         thumbnail_synced=bool(sidecar and sidecar.get("thumbnail_synced")),
+        thumbnail_attempts=int(
+            (sidecar or {}).get("thumbnail_attempts") or 0
+        ),
     )
 
 

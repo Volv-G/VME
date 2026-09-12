@@ -41,6 +41,42 @@ class QuotaExceeded(RuntimeError):
     """
 
 
+class RateLimited(RuntimeError):
+    """The API refused a call because we're going too fast right now.
+
+    Google has several burst buckets that are separate from the daily
+    quota pool and are documented nowhere useful: uploads per channel
+    per window, thumbnails per channel per window, plain per-user rate.
+    They refill in minutes to hours, and the correct response is always
+    the same - come back later with the same request. Distinct from
+    `QuotaExceeded` (a whole day) and from a real failure (fix
+    something), because the upload queue treats all three differently.
+    """
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Does this HttpError mean "too fast, try again later"?
+
+    Explicitly NOT `quotaExceeded`: that one is a day-long wait and has
+    its own exception. `uploadRateLimitExceeded` arrives as a 403 with
+    the reason in the body rather than a 429, which is why the text is
+    checked as well as the status.
+    """
+    if _is_quota_error(exc):
+        return False
+    if getattr(getattr(exc, "resp", None), "status", 0) == 429:
+        return True
+    text = str(exc)
+    return any(
+        reason in text
+        for reason in (
+            "uploadRateLimitExceeded",
+            "rateLimitExceeded",
+            "userRateLimitExceeded",
+        )
+    )
+
+
 def _is_quota_error(exc: Exception) -> bool:
     """Does this HttpError mean "daily quota gone"?
 
@@ -353,7 +389,7 @@ def set_thumbnail(video_id: str, image_path: Path) -> None:
             # Separate, undocumented bucket from the upload quota, and it
             # refills over hours. Nothing to fix - the local image is
             # already correct, it just has to be pushed again later.
-            raise RuntimeError(
+            raise RateLimited(
                 "YouTube is rate-limiting thumbnail uploads right now "
                 "(too many in a short window). The local thumbnail was "
                 "updated - push it again in a few hours."
@@ -504,6 +540,16 @@ def upload_video(
                     "The YouTube API daily quota ran out mid-upload. It "
                     f"resets {quota.format_reset()} - the queue will retry "
                     "then."
+                ) from exc
+            if _is_rate_limit_error(exc):
+                # A burst bucket, not the daily pool. The bytes we sent
+                # are lost (no resumable handle survives the process),
+                # but the answer is simply "later" - the caller parks
+                # the job rather than failing it.
+                raise RateLimited(
+                    "YouTube is rate-limiting uploads on this channel right "
+                    "now (too many videos in a short window). The upload "
+                    "will be retried automatically."
                 ) from exc
             if 500 <= status_code < 600 and retries < MAX_RETRIES:
                 retries += 1

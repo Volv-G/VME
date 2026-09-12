@@ -241,6 +241,18 @@ export interface FullRenderDto {
    *  client is in Google Cloud Console's "Testing" publishing state. */
   youtube_privacy_status?: string | null;
   youtube_requested_privacy_status?: string | null;
+  /** Live state of an outstanding upload job for this file: "queued"
+   *  (waiting for the render queue), "uploading", or "waiting" (parked
+   *  until the daily quota resets or YouTube stops throttling). Absent
+   *  when nothing is outstanding. */
+  upload_state?: "queued" | "uploading" | "waiting" | null;
+  /** The upload job's own message, so a row can say why it's waiting. */
+  upload_detail?: string;
+  /** A local thumbnail YouTube hasn't accepted, still being retried by
+   *  the background worker. */
+  thumbnail_pending?: boolean;
+  /** Same, but the worker gave up - needs a manual re-push. */
+  thumbnail_refused?: boolean;
 }
 
 /** Whether the backend can upload to YouTube right now.
