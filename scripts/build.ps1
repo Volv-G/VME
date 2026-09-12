@@ -18,6 +18,26 @@ if (-not (Test-Path (Join-Path $frontend "node_modules"))) {
     Pop-Location
 }
 
+# Backend lint FIRST, and only the checks that catch code which cannot
+# possibly run: undefined names, redefinitions, unreachable-by-syntax.
+# A NameError in a rarely-exercised branch of an API handler shipped
+# once and only surfaced as a 500 in production; `python -c import app`
+# doesn't catch it because the branch never executes at import time.
+# Style issues are deliberately NOT gated - this must never be the
+# reason a deploy is blocked.
+$ruff = Join-Path $root "backend\.venv\Scripts\python.exe"
+if (Test-Path $ruff) {
+    Write-Host "Checking backend for undefined names..." -ForegroundColor Cyan
+    Push-Location (Join-Path $root "backend")
+    try {
+        & $ruff -E -m ruff check --select F821,F811,F502,F522,F524 app scripts
+        if ($LASTEXITCODE -ne 0) { throw "backend check failed" }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 Write-Host "Building frontend..." -ForegroundColor Cyan
 Push-Location $frontend
 try {
