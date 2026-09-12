@@ -15,12 +15,15 @@ Mercer Island 2026-09-09, 134 rallies each):
 
 What ends a rally
 -----------------
-The first of `kill` / `ace` / `score` after the serve. In this data set
-the score is only logged explicitly when the OPPONENT wins the point -
-our own points come as a Kill or an Ace, which carry the score update
-themselves. Both matches: 105-114 rallies ended on `score`, 11-17 on
-`kill`, 9-12 on `ace`, and exactly 3 serves had no outcome logged at
-all (mis-tagged serves), which fall back to a fixed window.
+The first of `kill` / `ace` / `score` / `replay` after the serve. In
+this data set the score is only logged explicitly when the OPPONENT
+wins the point - our own points come as a Kill or an Ace, which carry
+the score update themselves. Both matches: 105-114 rallies ended on
+`score`, 11-17 on `kill`, 9-12 on `ace`, and exactly 3 serves had no
+outcome logged at all (mis-tagged serves), which fall back to a fixed
+window. A `replay` ends the rally with no point at all: the ball was
+served and played, then the referee ordered it over, so the footage
+from there to the re-serve is dead time like any other.
 
 Popups from the dead time
 -------------------------
@@ -64,11 +67,15 @@ logger = logging.getLogger(__name__)
 # a set; it opens a rally exactly like any other serve.
 SERVE_TYPES = frozenset({"ball_served", "first_serve"})
 
-# Event type names that close a play, i.e. "the point is decided". NOT
-# `set_end` / `game_end`: those are bookkeeping logged after the last
-# point's own score event, so treating them as enders would clip the
-# final rally of every set short.
-POINT_TYPES = frozenset({"kill", "ace", "score", "score_correction"})
+# Event type names that close a play. Mostly "the point is decided",
+# plus `replay`: a replayed rally ends without a point, and the wait
+# for the re-serve is exactly the dead time this render exists to cut.
+# NOT `set_end` / `game_end`: those are bookkeeping logged after the
+# last point's own score event, so treating them as enders would clip
+# the final rally of every set short.
+POINT_TYPES = frozenset(
+    {"kill", "ace", "score", "score_correction", "replay"}
+)
 
 # Event type names that mark a set boundary - the only joins that get a
 # fade instead of a hard cut.

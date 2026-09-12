@@ -5,12 +5,13 @@ import type { EventDto } from "../types/api";
  * boundary rules (see `backend/app/render/batch.py`): a rally opens at a
  * `ball_served` and closes at the first event that ends the point.
  *
- * Only three things end a point: our Kill, our Ace, or a `score` (which
+ * Three things end a point: our Kill, our Ace, or a `score` (which
  * covers every point the OPPONENT wins - there's no Kill of ours to
- * find). Set and game ends are bookkeeping that follow the last point's
- * score, not rally enders.
+ * find). A `replay` ends the rally too, without a point: the referee
+ * ordered it served again. Set and game ends are bookkeeping that
+ * follow the last point's score, not rally enders.
  */
-const RALLY_END_TYPES = new Set(["kill", "ace", "score"]);
+const RALLY_END_TYPES = new Set(["kill", "ace", "score", "replay"]);
 
 export interface RallyRegion {
   /** Global frame of the serve that opened the rally. */

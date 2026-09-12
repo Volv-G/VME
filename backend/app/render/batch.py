@@ -34,7 +34,7 @@ from ..domain.events.player import (
     PlayerEvent,
 )
 from ..domain.events.scoring import ScoreEvent
-from ..domain.events.serve import BallServedEvent
+from ..domain.events.serve import BallServedEvent, ReplayEvent
 from ..domain.events.timeline import CutStartEvent
 from ..domain.match import Match
 from ..domain.roster import NamingConfig, Roster
@@ -69,10 +69,14 @@ MAX_RALLY_TAIL_SECONDS = 12.0
 # Events that end a rally. `score` matters most: a rally the OPPONENT
 # wins produces no Kill/Ace of ours, so without it the window ran on
 # until the next logged serve - which can be a set break away.
+# `replay` ends one too: the referee killed the rally and it will be
+# served again, so nothing after it belongs to the clip even though no
+# point was awarded.
 _RALLY_END_TYPES = (
     KillEvent,
     AceEvent,
     ScoreEvent,
+    ReplayEvent,
     SetEndEvent,
     GameEndEvent,
 )
