@@ -81,6 +81,16 @@ _RALLY_END_TYPES = (
     GameEndEvent,
 )
 
+# How far past a FocusOut to keep looking for the player's action.
+# A focus span is drawn live, with a finger on a key: the user marks
+# the end when the play looks over, and then tags the Kill/Dig a moment
+# later - so the event that names the clip lands just AFTER the span,
+# not inside it. 5s covers the gap between "that's the end of it" and
+# "that was a kill by 12" without reaching into the next rally (the
+# median serve-to-serve gap is 8-11s, and a serve stops the scan
+# regardless).
+FOCUS_LOOKAHEAD_SECONDS = 5.0
+
 # Action label used for a focus span where the player has no tagged
 # event in the span or the surrounding rally. The span still renders -
 # the user bracketed that moment on purpose - it just lands in the
@@ -343,7 +353,13 @@ def focused_from_match(
         # user deliberately bracketed that moment, so dropping it loses
         # work.
         action = _first_action_for_player(
-            indexed, start, end, in_ev.team, in_ev.player_number, fallback
+            indexed,
+            start,
+            end,
+            in_ev.team,
+            in_ev.player_number,
+            fallback,
+            lookahead=int(round(FOCUS_LOOKAHEAD_SECONDS * fps)),
         )
         if action is None:
             action = GENERIC_FOCUS_ACTION
@@ -419,11 +435,12 @@ def _first_action_for_player(
     player_team,  # Team enum; typed loosely to avoid forward ref churn
     player_number: int,
     fallback_half: int,
+    lookahead: int = 0,
 ) -> Optional[str]:
     """Action label for a focus span, or None if the player did nothing
     tagged nearby.
 
-    Two passes, in priority order:
+    Three passes, in priority order:
 
     1. Inside the marked span `[focus_in, focus_out]`. The user drew
        those bounds around the play, so anything they tagged in there is
@@ -432,7 +449,13 @@ def _first_action_for_player(
        would otherwise attribute such a focus to the PREVIOUS rally
        (the next `ball_served` closes the window before the play even
        starts) and miss the Ace/Kill that follows.
-    2. The rally containing the FocusIn, using the same `_rally_bounds`
+    2. The `lookahead` frames after FocusOut, stopping at the next
+       serve. Tagging lags the play: the user closes the span when the
+       rally looks over and types the action a beat later, which puts
+       the naming event just outside the bracket they drew. Bounded by
+       the next serve so a late scan can never borrow the next rally's
+       action.
+    3. The rally containing the FocusIn, using the same `_rally_bounds`
        heuristic highlights use, so a focused clip's action label matches
        whatever the highlight clip for that rally would carry. Covers a
        tight focus span that ends before the player's action was logged.
@@ -455,6 +478,19 @@ def _first_action_for_player(
     found = _scan(focus_in_global, focus_out_global)
     if found is not None:
         return found
+
+    if lookahead > 0:
+        limit = focus_out_global + lookahead
+        # Don't cross into the next rally: a serve after the span means
+        # whatever follows belongs to a different play, however close it
+        # is in time.
+        for ev, g in indexed:
+            if focus_out_global < g <= limit and isinstance(ev, BallServedEvent):
+                limit = g - 1
+                break
+        found = _scan(focus_out_global + 1, limit)
+        if found is not None:
+            return found
 
     rally_start, rally_end = _rally_bounds(
         indexed, focus_in_global, fallback_half
