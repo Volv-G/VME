@@ -87,6 +87,16 @@ MERGE_GAP_SECONDS = 1.5
 REEL_MAX_LEAD_SECONDS = 5.0
 REEL_MAX_TAIL_SECONDS = 5.0
 
+# Two tagged events this close together are one moment, not two, and the
+# reel shows them as a single continuous segment. Measured between the
+# EVENTS, not between their windows: with the caps above, two events 5 s
+# apart in the same rally already produce overlapping windows, but the
+# same two events either side of a rally boundary get their windows
+# clipped at the point and the next serve - leaving a gap wide enough to
+# survive `MERGE_GAP_SECONDS` and split a single continuous bit of play
+# into two chapters with a jump cut between them.
+SAME_MOMENT_SECONDS = 5.0
+
 
 @dataclass
 class ReelSegment:
@@ -102,6 +112,11 @@ class ReelSegment:
     end_frame: int
     actions: list[str] = field(default_factory=list)
     match_timestamp: str = ""
+    # Global frames of the tagged events this segment was built from, in
+    # order. Kept because merging decisions are about how far apart the
+    # ACTIONS are, which a start/end pair can no longer tell you once a
+    # window has been padded, capped and extended.
+    event_frames: list[int] = field(default_factory=list)
 
     @property
     def frames(self) -> int:
@@ -139,23 +154,49 @@ class ReelSpec:
 
 
 def _merge_segments(
-    segments: list[ReelSegment], merge_gap_frames: int
+    segments: list[ReelSegment],
+    merge_gap_frames: int,
+    same_moment_frames: int = 0,
 ) -> list[ReelSegment]:
     """Coalesce overlapping / near-adjacent spans, unioning their actions.
 
     Input must be sorted by `start_frame`. Two player events in one rally
     yield the same rally window twice; without this the reel would replay
     the rally per event and the chapter list would be full of duplicates.
+
+    Merging happens on either of two grounds:
+
+    * the windows touch (within `merge_gap_frames`) - a sub-second sliver
+      of footage between two clips reads as a glitch; or
+    * the tagged events are within `same_moment_frames` of each other,
+      whatever their windows ended up looking like. A dig and the kill it
+      set up are one piece of play; showing them as two chapters with a
+      cut in between misrepresents what happened.
+
+    The merged segment covers everything from the first start to the last
+    end, including any footage between the two windows - continuous play
+    is the point.
     """
     merged: list[ReelSegment] = []
     for seg in segments:
-        if merged and seg.start_frame - merged[-1].end_frame <= merge_gap_frames:
-            prev = merged[-1]
-            prev.end_frame = max(prev.end_frame, seg.end_frame)
-            for action in seg.actions:
-                if action not in prev.actions:
-                    prev.actions.append(action)
-            continue
+        prev = merged[-1] if merged else None
+        if prev is not None:
+            close_windows = seg.start_frame - prev.end_frame <= merge_gap_frames
+            close_events = (
+                same_moment_frames > 0
+                and prev.event_frames
+                and seg.event_frames
+                and seg.event_frames[0] - prev.event_frames[-1]
+                <= same_moment_frames
+            )
+            if close_windows or close_events:
+                prev.end_frame = max(prev.end_frame, seg.end_frame)
+                prev.start_frame = min(prev.start_frame, seg.start_frame)
+                prev.event_frames.extend(seg.event_frames)
+                for action in seg.actions:
+                    if action not in prev.actions:
+                        prev.actions.append(action)
+                continue
         merged.append(seg)
     return merged
 
@@ -218,6 +259,7 @@ def reels_from_match(
     reel_lead = int(round(REEL_MAX_LEAD_SECONDS * fps))
     reel_tail = int(round(REEL_MAX_TAIL_SECONDS * fps))
     merge_gap = int(round(MERGE_GAP_SECONDS * fps))
+    same_moment = int(round(SAME_MOMENT_SECONDS * fps))
     # ceil, not round: rounding down would land under the minimum.
     target_frames = int(math.ceil(CHAPTER_TARGET_SECONDS * fps))
     total = match.total_frames()
@@ -258,6 +300,7 @@ def reels_from_match(
                 end_frame=end,
                 actions=[ev.type_name],
                 match_timestamp=naming.format_match_timestamp(g, fps),
+                event_frames=[g],
             )
         )
 
@@ -266,11 +309,11 @@ def reels_from_match(
         grouped.items(), key=lambda kv: (kv[0][0].value, kv[0][1])
     ):
         segments.sort(key=lambda s: s.start_frame)
-        segments = _merge_segments(segments, merge_gap)
+        segments = _merge_segments(segments, merge_gap, same_moment)
         segments = _extend_to_minimum(segments, target_frames, total)
         # Extending can make neighbours touch - merge once more so the
         # reel never replays the same footage twice in a row.
-        segments = _merge_segments(segments, merge_gap)
+        segments = _merge_segments(segments, merge_gap, same_moment)
 
         vars_ = naming.build_reel_vars(
             team=team,
