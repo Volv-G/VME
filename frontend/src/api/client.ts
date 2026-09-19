@@ -588,6 +588,18 @@ export const api = {
   async deleteJob(jobId: string): Promise<void> {
     await fetchJson<unknown>(`/jobs/${jobId}`, { method: "DELETE" });
   },
+  /** Forget finished jobs. `statuses` defaults to all terminal ones;
+   *  pending/running jobs are never removed (cancel those instead). */
+  async clearJobs(
+    team: string,
+    statuses?: ("done" | "failed" | "cancelled")[]
+  ): Promise<{ removed: number }> {
+    const q = new URLSearchParams({ team });
+    if (statuses?.length) q.set("statuses", statuses.join(","));
+    return fetchJson<{ removed: number }>(`/jobs/clear?${q.toString()}`, {
+      method: "POST",
+    });
+  },
   async listTeamJobs(team: string): Promise<RenderJobDto[]> {
     return fetchJson<RenderJobDto[]>(`/teams/${enc(team)}/jobs`);
   },

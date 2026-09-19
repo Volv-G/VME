@@ -408,6 +408,37 @@ class JobManager:
         self.wake.set()
         return True
 
+    def clear_terminal(
+        self,
+        team: Optional[str] = None,
+        statuses: Optional[set[JobStatus]] = None,
+    ) -> list[str]:
+        """Forget finished jobs, returning the ids removed.
+
+        Only terminal jobs are eligible, whatever is asked for: a PENDING
+        job is work the user still wants, and a RUNNING one is work in
+        progress that the registry is the only record of. `statuses`
+        narrows further (e.g. only FAILED) and is intersected with the
+        terminal set rather than trusted.
+
+        `team=None` clears across every team. That is deliberate but not
+        the default any caller should reach for casually - the UI always
+        passes a team.
+        """
+        wanted = _TERMINAL_STATUSES & (statuses or _TERMINAL_STATUSES)
+        with self._lock:
+            doomed = [
+                j.id
+                for j in self._jobs.values()
+                if j.status in wanted and (team is None or j.team == team)
+            ]
+            for job_id in doomed:
+                self._jobs.pop(job_id, None)
+                self._listeners.pop(job_id, None)
+        if doomed:
+            self._notify_changed()
+        return doomed
+
     def delete(self, job_id: str) -> bool:
         """Remove a terminal job from the registry. 4xx if still live."""
         job = self._jobs.get(job_id)

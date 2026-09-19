@@ -447,6 +447,33 @@ def list_team_jobs(team: str) -> list[dict]:
     return [j.to_dict() for j in JOBS.list_team_jobs(team)]
 
 
+@router.post("/jobs/clear")
+def clear_jobs(team: str | None = None, statuses: str | None = None) -> dict:
+    """Drop finished jobs from the queue history.
+
+    `statuses` is a comma-separated subset of done/failed/cancelled;
+    omitted means all three. Pending and running jobs are never removed
+    here no matter what is asked - cancel them first, which is a
+    different decision and has its own endpoint.
+
+    Declared BEFORE `/jobs/{job_id}` so FastAPI doesn't match "clear" as
+    a job id.
+    """
+    wanted: set[JobStatus] | None = None
+    if statuses:
+        wanted = set()
+        for raw in statuses.split(","):
+            name = raw.strip().lower()
+            if not name:
+                continue
+            try:
+                wanted.add(JobStatus(name))
+            except ValueError:
+                raise HTTPException(400, f"Unknown job status {raw!r}") from None
+    removed = JOBS.clear_terminal(team=team, statuses=wanted)
+    return {"removed": len(removed), "ids": removed}
+
+
 @router.get("/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
     job = JOBS.get(job_id)

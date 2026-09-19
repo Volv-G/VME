@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { FullRenderDto, YouTubeStatusDto } from "../types/api";
 import { displayName } from "../util/names";
@@ -26,6 +26,16 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+/** Stable identity for a render row: unique, and the same string the
+ *  per-row busy indicator already keys on. */
+function rowId(r: FullRenderDto): string {
+  return `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
+}
+
+function leafOf(r: FullRenderDto): string {
+  return r.filename.split("/").pop() || r.filename;
 }
 
 function formatAge(unixSeconds: number): string {
@@ -137,6 +147,20 @@ export function TeamFullRendersPanel({ team }: Props) {
   // copy button only appears once a folder is configured, because
   // without one the action can only fail.
   const [mediaServerPath, setMediaServerPath] = useState<string | null>(null);
+  // Rows ticked for a bulk action, by `rowId`. Ids rather than indices:
+  // the list is re-fetched every 5s, and an index would silently point
+  // at a different render after a delete or a new render landing.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Progress of a bulk action. Also acts as the "a bulk run is in
+  // flight" flag that disables every other control - a delete racing a
+  // bulk upload over the same rows is not worth supporting.
+  const [bulk, setBulk] = useState<{
+    label: string;
+    done: number;
+    total: number;
+  } | null>(null);
+  // Anchor for shift-click range selection, in VISIBLE-row order.
+  const lastClickedRef = useRef<number | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -163,6 +187,20 @@ export function TeamFullRendersPanel({ team }: Props) {
     }, POLL_MS);
     return () => clearInterval(t);
   }, [reload, refreshStatus]);
+
+  // Drop selected ids that no longer exist. The list is re-fetched
+  // every 5s, and a render can vanish under the selection (deleted
+  // here, deleted elsewhere, or a job that rewrote the folder). Keeping
+  // a dead id would let a later bulk action 404 on a row the user can't
+  // even see.
+  useEffect(() => {
+    setSelected((prev) => {
+      if (!prev.size) return prev;
+      const live = new Set(renders.map(rowId));
+      const next = new Set([...prev].filter((id) => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [renders]);
 
   // Roster is fetched once (not polled): the media-server path changes
   // when the user edits team settings, which remounts this panel.
@@ -314,6 +352,133 @@ export function TeamFullRendersPanel({ team }: Props) {
     }
   }
 
+  // ---- Bulk actions ---------------------------------------------------
+
+  /** Run `fn` over `rows` one at a time, collecting failures.
+   *
+   *  Sequential on purpose. Deletes and thumbnail regeneration do real
+   *  disk/CPU work, thumbnail pushes hit a per-channel rate limit that
+   *  parallelism turns into 429s, and a half-applied bulk action is far
+   *  easier to reason about when the failures are in row order. One
+   *  row's failure never stops the rest - the whole point of selecting
+   *  twelve reels is not to babysit them.
+   */
+  async function runBulk(
+    label: string,
+    rows: FullRenderDto[],
+    fn: (r: FullRenderDto) => Promise<string | null>,
+    opts: { skipped?: number; keepSelection?: boolean } = {}
+  ) {
+    if (!rows.length) return;
+    setErr(null);
+    setNote(null);
+    setBulk({ label, done: 0, total: rows.length });
+    const problems: string[] = [];
+    for (const r of rows) {
+      setBusyId(rowId(r));
+      try {
+        const problem = await fn(r);
+        if (problem) problems.push(`${leafOf(r)}: ${problem}`);
+      } catch (e) {
+        problems.push(`${leafOf(r)}: ${String(e)}`);
+      }
+      setBulk((b) => (b ? { ...b, done: b.done + 1 } : b));
+    }
+    setBusyId(null);
+    setBulk(null);
+    if (!opts.keepSelection) setSelected(new Set());
+    await reload();
+    const ok = rows.length - problems.length;
+    const skipped = opts.skipped
+      ? `, ${opts.skipped} skipped`
+      : "";
+    if (problems.length) {
+      // A partial failure is a failure. Name the rows that didn't make
+      // it - "3 of 12 failed" with no names means re-checking twelve.
+      setErr(
+        `${label}: ${problems.length} of ${rows.length} failed.\n` +
+          problems.join("\n")
+      );
+      setNote({ text: `${label}: ${ok} succeeded${skipped}.`, ok: false });
+    } else {
+      setNote({ text: `${label}: ${ok} succeeded${skipped}.`, ok: true });
+    }
+  }
+
+  async function bulkUpload(rows: FullRenderDto[]) {
+    // Already-uploaded rows are skipped rather than refused: selecting a
+    // whole match day and pressing upload should do the remaining ones,
+    // not error because one is done.
+    const todo = rows.filter((r) => !r.youtube_video_id);
+    const skipped = rows.length - todo.length;
+    if (!todo.length) {
+      setNote({
+        text: "Every selected render is already on YouTube.",
+        ok: true,
+      });
+      return;
+    }
+    await runBulk(
+      "Queue uploads",
+      todo,
+      async (r) => {
+        await api.enqueueYouTubeUpload(team, r.tournament, r.date, r.match, {
+          filename: r.filename,
+        });
+        return null;
+      },
+      { skipped }
+    );
+  }
+
+  async function bulkThumbnails(rows: FullRenderDto[]) {
+    await runBulk("Regenerate thumbnails", rows, async (r) => {
+      const res = await api.regenerateThumbnail(
+        team,
+        r.tournament,
+        r.date,
+        r.match,
+        r.filename
+      );
+      setThumbVersion((v) => ({ ...v, [rowId(r)]: Date.now() }));
+      // A refused push is a failure even though the local image was
+      // written - the published video still shows the old one.
+      return res.pushed || !res.video_id ? null : res.message;
+    });
+  }
+
+  async function bulkMediaServer(rows: FullRenderDto[]) {
+    await runBulk("Copy to media server", rows, async (r) => {
+      await api.copyToMediaServer(team, r.tournament, r.date, r.match, r.filename);
+      return null;
+    });
+  }
+
+  async function bulkDelete(rows: FullRenderDto[]) {
+    const bytes = rows.reduce((n, r) => n + r.size_bytes, 0);
+    const onYouTube = rows.filter((r) => r.youtube_video_id).length;
+    if (
+      !confirm(
+        `Delete ${rows.length} render${rows.length === 1 ? "" : "s"} ` +
+          `(${formatBytes(bytes)})?\n\n` +
+          `The files and their thumbnail / poster / timestamp sidecars are ` +
+          `removed from disk. Copies already on the media server are not ` +
+          `touched.` +
+          (onYouTube
+            ? `\n\n${onYouTube} of them ${
+                onYouTube === 1 ? "is" : "are"
+              } on YouTube. Those videos stay up, but you won't be able to ` +
+              `re-upload or re-thumbnail them without rendering again.`
+            : "")
+      )
+    )
+      return;
+    await runBulk("Delete", rows, async (r) => {
+      await api.deleteRender(team, r.tournament, r.date, r.match, r.filename);
+      return null;
+    });
+  }
+
   async function upload(r: FullRenderDto) {
     if (!status?.configured) return;
     const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
@@ -354,6 +519,47 @@ export function TeamFullRendersPanel({ team }: Props) {
   const visible = currentDate
     ? renders.filter((r) => r.date === currentDate)
     : [];
+
+  // Selection is only ever over the visible day: a bulk delete that
+  // also took rows from a day you can't see would be indefensible.
+  const visibleIds = visible.map(rowId);
+  const selectedRows = visible.filter((r) => selected.has(rowId(r)));
+  const allVisibleSelected =
+    visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+
+  function toggleRow(index: number, shift: boolean) {
+    const id = visibleIds[index];
+    const turningOn = !selected.has(id);
+    // Shift extends from the last row clicked, the way every file list
+    // does it - twelve reels from one match are always contiguous.
+    const anchor =
+      shift && lastClickedRef.current !== null ? lastClickedRef.current : index;
+    const lo = Math.min(anchor, index);
+    const hi = Math.max(anchor, index);
+    const next = new Set(selected);
+    for (let i = lo; i <= hi; i++) {
+      if (turningOn) next.add(visibleIds[i]);
+      else next.delete(visibleIds[i]);
+    }
+    lastClickedRef.current = index;
+    setSelected(next);
+  }
+
+  // Changing day clears the selection. Carrying it across would leave
+  // ticked rows off-screen, and a bulk delete whose scope you cannot see
+  // is not something to be clever about.
+  function goToDate(d: string | undefined) {
+    if (!d) return;
+    setSelected(new Set());
+    lastClickedRef.current = null;
+    setActiveDate(d);
+  }
+
+  function selectWhere(pred: (r: FullRenderDto) => boolean) {
+    const next = new Set(selected);
+    for (const r of visible) if (pred(r)) next.add(rowId(r));
+    setSelected(next);
+  }
 
   // Build a per-row download URL the same way the per-match panel does:
   // segment-encoded so nested filenames survive FastAPI's `{path}`
@@ -478,7 +684,7 @@ export function TeamFullRendersPanel({ team }: Props) {
           }}
         >
           <button
-            onClick={() => setActiveDate(dates[dateIndex - 1])}
+            onClick={() => goToDate(dates[dateIndex - 1])}
             disabled={dateIndex <= 0}
             title="Newer match day"
             style={{ padding: "2px 8px" }}
@@ -489,7 +695,7 @@ export function TeamFullRendersPanel({ team }: Props) {
               day at a time to reach a specific match would be tedious. */}
           <select
             value={currentDate}
-            onChange={(e) => setActiveDate(e.target.value)}
+            onChange={(e) => goToDate(e.target.value)}
             style={{ flex: 1, minWidth: 0 }}
           >
             {dates.map((d) => (
@@ -499,7 +705,7 @@ export function TeamFullRendersPanel({ team }: Props) {
             ))}
           </select>
           <button
-            onClick={() => setActiveDate(dates[dateIndex + 1])}
+            onClick={() => goToDate(dates[dateIndex + 1])}
             disabled={dateIndex < 0 || dateIndex >= dates.length - 1}
             title="Older match day"
             style={{ padding: "2px 8px" }}
@@ -512,6 +718,139 @@ export function TeamFullRendersPanel({ team }: Props) {
         </div>
       )}
 
+      {/* Selection toolbar. Always present (not only once something is
+          ticked) so the checkboxes are discoverable; the actions appear
+          with a selection, because a row of dead buttons reads as
+          broken. */}
+      {visible.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            flexWrap: "wrap",
+            marginBottom: 8,
+            paddingBottom: 6,
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          <label
+            style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}
+            title="Select or clear every render on this match day"
+          >
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              ref={(el) => {
+                // Mixed state needs the DOM property; React has no prop
+                // for it.
+                if (el)
+                  el.indeterminate =
+                    !allVisibleSelected && selectedRows.length > 0;
+              }}
+              onChange={() =>
+                setSelected(
+                  allVisibleSelected ? new Set() : new Set(visibleIds)
+                )
+              }
+              disabled={!!bulk}
+            />
+            All
+          </label>
+          {/* One click for the case this list exists for: a match day is
+              one full render plus a reel per player. */}
+          <button
+            onClick={() => selectWhere((r) => r.kind === "reel")}
+            disabled={!!bulk || !visible.some((r) => r.kind === "reel")}
+            title="Add every player reel on this day to the selection"
+            style={{ padding: "1px 8px", fontSize: 11 }}
+          >
+            + reels
+          </button>
+          <button
+            onClick={() => selectWhere((r) => !r.youtube_video_id)}
+            disabled={!!bulk || !visible.some((r) => !r.youtube_video_id)}
+            title="Add everything not yet on YouTube to the selection"
+            style={{ padding: "1px 8px", fontSize: 11 }}
+          >
+            + not uploaded
+          </button>
+
+          {bulk ? (
+            <span className="row-meta" style={{ marginLeft: "auto" }}>
+              {bulk.label}: {bulk.done} / {bulk.total}…
+            </span>
+          ) : selectedRows.length > 0 ? (
+            <>
+              <span
+                className="row-meta"
+                style={{ marginLeft: "auto", whiteSpace: "nowrap" }}
+              >
+                {selectedRows.length} selected ·{" "}
+                {formatBytes(
+                  selectedRows.reduce((n, r) => n + r.size_bytes, 0)
+                )}
+              </span>
+              <button
+                onClick={() => bulkThumbnails(selectedRows)}
+                title={
+                  "Regenerate thumbnails for the selected renders (and " +
+                  "replace them on YouTube where the render is uploaded)."
+                }
+                style={{ padding: "2px 8px" }}
+              >
+                🖼
+              </button>
+              {mediaServerPath && (
+                <button
+                  onClick={() => bulkMediaServer(selectedRows)}
+                  title={`Copy the selected renders and their images to ${mediaServerPath}`}
+                  style={{ padding: "2px 8px" }}
+                >
+                  📺
+                </button>
+              )}
+              <button
+                onClick={() => bulkDelete(selectedRows)}
+                title="Delete the selected renders from disk"
+                style={{ padding: "2px 8px" }}
+              >
+                🗑
+              </button>
+              <button
+                onClick={() => bulkUpload(selectedRows)}
+                disabled={!status?.configured}
+                title={
+                  !status?.configured
+                    ? status?.reason ||
+                      "YouTube uploads are not configured for this server"
+                    : "Queue an upload for each selected render that isn't " +
+                      "on YouTube yet. The queue parks whatever doesn't fit " +
+                      "in today's quota and resumes by itself."
+                }
+                style={{ padding: "2px 8px" }}
+              >
+                📤
+              </button>
+              <button
+                onClick={() => setSelected(new Set())}
+                title="Clear selection"
+                style={{ padding: "2px 8px" }}
+              >
+                ×
+              </button>
+            </>
+          ) : (
+            <span
+              className="row-meta"
+              style={{ marginLeft: "auto", whiteSpace: "nowrap" }}
+            >
+              tick rows for bulk actions (shift-click for a range)
+            </span>
+          )}
+        </div>
+      )}
+
       {renders.length === 0 ? (
         <p className="muted" style={{ margin: 0 }}>
           No renders yet. Run a full render or player reels from a match
@@ -519,7 +858,7 @@ export function TeamFullRendersPanel({ team }: Props) {
         </p>
       ) : (
         <div className="list">
-          {visible.map((r) => {
+          {visible.map((r, rowIndex) => {
             const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
             const uploaded = !!r.youtube_video_id;
             const ytUrl = uploaded
@@ -540,8 +879,22 @@ export function TeamFullRendersPanel({ team }: Props) {
               <div
                 key={id}
                 className="list-row"
-                style={{ alignItems: "center" }}
+                style={{
+                  alignItems: "center",
+                  background: selected.has(id)
+                    ? "rgba(88, 166, 255, 0.08)"
+                    : undefined,
+                }}
               >
+                <input
+                  type="checkbox"
+                  checked={selected.has(id)}
+                  disabled={!!bulk}
+                  onChange={() => {}}
+                  onClick={(e) => toggleRow(rowIndex, e.shiftKey)}
+                  title="Select for a bulk action (shift-click to extend)"
+                  style={{ flex: "0 0 auto" }}
+                />
                 {/* Only show the image when it is what viewers see: for
                     an uploaded video that means YouTube accepted it.
                     Otherwise the row would advertise a thumbnail the
@@ -706,7 +1059,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                       </a>
                       <button
                         onClick={() => regenerateThumbnail(r)}
-                        disabled={busyId === id}
+                        disabled={busyId === id || !!bulk}
                         title={
                           "Regenerate the thumbnail from the current team " +
                           "colors, logos and names, and replace it on " +
@@ -718,7 +1071,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                       </button>
                       <button
                         onClick={() => forgetUpload(r)}
-                        disabled={busyId === id}
+                        disabled={busyId === id || !!bulk}
                         title={
                           "Forget this upload record so the render can be " +
                           "uploaded again (use after deleting the video on " +
@@ -731,7 +1084,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                       {mediaServerPath && (
                         <button
                           onClick={() => copyToMediaServer(r)}
-                          disabled={busyId === id}
+                          disabled={busyId === id || !!bulk}
                           title={`Copy this render and its images to ${mediaServerPath}`}
                           style={{ padding: "1px 6px", fontSize: 11 }}
                         >
@@ -745,7 +1098,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                       </a>
                       <button
                         onClick={() => remove(r)}
-                        disabled={busyId === id}
+                        disabled={busyId === id || !!bulk}
                         title={
                           "Delete this render from disk. The YouTube video " +
                           "is not touched."
@@ -802,7 +1155,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <button
                     onClick={() => regenerateThumbnail(r)}
-                    disabled={busyId === id}
+                    disabled={busyId === id || !!bulk}
                     title={
                       "Generate the YouTube thumbnail for this render from " +
                       "the current team colors, logos and names."
@@ -814,7 +1167,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                   {mediaServerPath && (
                     <button
                       onClick={() => copyToMediaServer(r)}
-                      disabled={busyId === id}
+                      disabled={busyId === id || !!bulk}
                       title={`Copy this render and its images to ${mediaServerPath}`}
                       style={{ padding: "2px 8px" }}
                     >
@@ -826,7 +1179,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                   </a>
                   <button
                     onClick={() => remove(r)}
-                    disabled={busyId === id}
+                    disabled={busyId === id || !!bulk}
                     title="Delete this render from disk"
                     style={{ padding: "2px 8px" }}
                   >
@@ -834,7 +1187,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                   </button>
                   <button
                     onClick={() => upload(r)}
-                    disabled={!status?.configured || busyId === id}
+                    disabled={!status?.configured || busyId === id || !!bulk}
                     title={
                       !status?.configured
                         ? status?.reason ||

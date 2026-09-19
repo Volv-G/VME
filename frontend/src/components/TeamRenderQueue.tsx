@@ -111,6 +111,51 @@ export function TeamRenderQueue({ team }: Props) {
     }
   }
 
+  /** Forget finished jobs in one go.
+   *
+   *  A match day is 14+ jobs, and every one of them stays in the list
+   *  forever once it's done - so the queue widget ends up being mostly
+   *  history with today's work buried in it. Deleting them one 🗑 at a
+   *  time is the kind of chore that just doesn't get done.
+   *
+   *  `failedOnly` exists because the two cases are different: clearing
+   *  successes is tidying, while clearing failures is saying "I've read
+   *  these". Nothing queued or running is touched either way - the
+   *  backend refuses regardless of what we ask for. */
+  async function clearFinished(failedOnly: boolean) {
+    const victims = failedOnly ? failed : finished;
+    if (!victims.length) return;
+    if (
+      !confirm(
+        `Remove ${victims.length} finished job${
+          victims.length === 1 ? "" : ""
+        } from this list?\n\n` +
+          `Only the queue history is cleared. Rendered files, uploads and ` +
+          `anything still queued or running are untouched.`
+      )
+    )
+      return;
+    try {
+      await api.clearJobs(
+        team,
+        failedOnly ? ["failed"] : ["done", "failed", "cancelled"]
+      );
+      await reload();
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+
+  // Terminal jobs, i.e. everything the list is keeping purely as
+  // history.
+  const finished = jobs.filter(
+    (j) =>
+      j.status === "done" ||
+      j.status === "failed" ||
+      j.status === "cancelled"
+  );
+  const failed = jobs.filter((j) => j.status === "failed");
+
   return (
     <div className="card">
       <div className="card-header">
@@ -156,6 +201,42 @@ export function TeamRenderQueue({ team }: Props) {
       </div>
 
       {err && <div className="error">{err}</div>}
+
+      {finished.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            marginBottom: 8,
+          }}
+        >
+          <span className="row-meta" style={{ flex: 1 }}>
+            {finished.length} finished job{finished.length === 1 ? "" : "s"} in
+            this list
+            {failed.length > 0 ? ` (${failed.length} failed)` : ""}
+          </span>
+          {failed.length > 0 && (
+            <button
+              onClick={() => clearFinished(true)}
+              title="Remove only the failed jobs from the history"
+              style={{ padding: "2px 8px", fontSize: 11 }}
+            >
+              Clear failed
+            </button>
+          )}
+          <button
+            onClick={() => clearFinished(false)}
+            title={
+              "Remove every done / failed / cancelled job from this list. " +
+              "Queued and running jobs stay, and no files are deleted."
+            }
+            style={{ padding: "2px 8px", fontSize: 11 }}
+          >
+            Clear finished
+          </button>
+        </div>
+      )}
 
       {jobs.length === 0 ? (
         <p className="muted" style={{ margin: 0 }}>
