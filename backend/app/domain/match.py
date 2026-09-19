@@ -86,6 +86,13 @@ class Match:
     clips: list[Clip] = field(default_factory=list)
     events: list[MatchEvent] = field(default_factory=list)
     opponent_roster: Roster = field(default_factory=Roster)
+    # Per-match override of how much footage a player-reel segment keeps
+    # around a tagged action, in seconds. `None` means "use the defaults"
+    # (`render.reels.REEL_MAX_LEAD_SECONDS` / `REEL_MAX_TAIL_SECONDS`) -
+    # stored as null rather than a copy of the default so changing the
+    # default later actually reaches matches nobody has customized.
+    reel_lead_seconds: Optional[float] = None
+    reel_tail_seconds: Optional[float] = None
     schema_version: int = SCHEMA_VERSION
 
     # ---- Clip operations -------------------------------------------------
@@ -245,6 +252,8 @@ class Match:
             # to your channel and doesn't influence your file
             # naming). Strips those keys so match.json stays clean.
             "opponent_roster": self.opponent_roster.to_dict(include_admin=False),
+            "reel_lead_seconds": self.reel_lead_seconds,
+            "reel_tail_seconds": self.reel_tail_seconds,
         }
 
     @classmethod
@@ -256,6 +265,8 @@ class Match:
             clips=[Clip.from_dict(c) for c in data.get("clips", [])],
             events=[event_from_dict(e) for e in data.get("events", [])],
             opponent_roster=Roster.from_dict(data.get("opponent_roster", {})),
+            reel_lead_seconds=_opt_float(data.get("reel_lead_seconds")),
+            reel_tail_seconds=_opt_float(data.get("reel_tail_seconds")),
             schema_version=int(data.get("schema_version", SCHEMA_VERSION)),
         )
         m._sort_events()
@@ -271,6 +282,22 @@ class Match:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2)
+
+
+def _opt_float(value: Any) -> Optional[float]:
+    """Float, or None for null / blank / unparseable.
+
+    Tolerant on purpose: these fields are hand-editable in match.json,
+    and a typo there should fall back to the default rather than make
+    the whole match unloadable.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        logger.warning("ignoring non-numeric reel padding value %r", value)
+        return None
 
 
 def _event_references_clip(event: MatchEvent, clip_id: str) -> bool:

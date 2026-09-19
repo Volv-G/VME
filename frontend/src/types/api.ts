@@ -151,6 +151,14 @@ export interface MatchDto {
   events: EventDto[];
   home_roster: RosterDto;
   opponent_roster: RosterDto;
+  /** Player-reel padding around a tagged action, in seconds. `null`
+   *  means this match uses the server defaults below. */
+  reel_lead_seconds: number | null;
+  reel_tail_seconds: number | null;
+  /** The defaults in force, so the UI can show them as placeholders
+   *  instead of hardcoding numbers that live on the backend. */
+  reel_lead_default: number;
+  reel_tail_default: number;
 }
 
 export interface RenderJobDto {

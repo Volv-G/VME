@@ -307,6 +307,11 @@ export function MatchEditorPage() {
           hasClips={data.clips.length > 0}
           currentFrame={currentFrame}
           fps={data.fps}
+          reelLeadSeconds={data.reel_lead_seconds}
+          reelTailSeconds={data.reel_tail_seconds}
+          reelLeadDefault={data.reel_lead_default}
+          reelTailDefault={data.reel_tail_default}
+          onMatchPatched={setData}
         />
       </Modal>
     </div>

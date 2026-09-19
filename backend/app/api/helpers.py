@@ -11,6 +11,7 @@ from ..domain.events.timeline import ClipTransitionEvent
 from ..domain.game_state import GameState
 from ..domain.match import Match
 from ..library import paths, scanner
+from ..render import reels
 from .schemas import (
     ClipOut,
     EventOut,
@@ -94,6 +95,10 @@ def serialize_match(
         events=[serialize_event(m, e) for e in m.events],
         home_roster=_serialize_roster(scanner.load_team_roster(team)),
         opponent_roster=_serialize_roster(m.opponent_roster),
+        reel_lead_seconds=m.reel_lead_seconds,
+        reel_tail_seconds=m.reel_tail_seconds,
+        reel_lead_default=reels.REEL_MAX_LEAD_SECONDS,
+        reel_tail_default=reels.REEL_MAX_TAIL_SECONDS,
     )
 
 

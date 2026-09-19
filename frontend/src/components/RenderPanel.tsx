@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { displayName } from "../util/names";
 import { RenderPlayerModal } from "./RenderPlayerModal";
 import type {
+  MatchDto,
   RenderFileDto,
   RenderJobDto,
   YouTubeStatusDto,
@@ -77,8 +78,9 @@ const QUEUE_KINDS: {
     label: "Player reels (one video per player)",
     jobLabel: "reels",
     blurb:
-      "One video per player with all of their plays and a chapter list, " +
-      "ready to upload. Separate from highlights - both can be run.",
+      "One video per player with all of their plays and a clickable " +
+      "timestamp per play, ready to upload. Separate from highlights - " +
+      "both can be run.",
   },
 ];
 
@@ -137,6 +139,15 @@ interface Props {
   currentFrame: number;
   /** Match FPS - used to display preview window length in seconds. */
   fps: number;
+  /** Per-match player-reel padding, `null` when the match uses the
+   *  server defaults (which arrive alongside). */
+  reelLeadSeconds: number | null;
+  reelTailSeconds: number | null;
+  reelLeadDefault: number;
+  reelTailDefault: number;
+  /** Called with the updated match after the padding is saved, so the
+   *  page state stays the single source of truth. */
+  onMatchPatched: (m: MatchDto) => void;
 }
 
 const DEFAULT_PREVIEW_SECONDS = 30;
@@ -153,6 +164,11 @@ export function RenderPanel({
   match,
   hasClips,
   currentFrame,
+  reelLeadSeconds,
+  reelTailSeconds,
+  reelLeadDefault,
+  reelTailDefault,
+  onMatchPatched,
   fps,
 }: Props) {
   const [err, setErr] = useState<string | null>(null);
@@ -165,6 +181,16 @@ export function RenderPanel({
   // needed a tooltip nobody reads to say what it produces. One choice
   // plus a visible description of it says more in less space.
   const [queueKind, setQueueKind] = useState<QueueKind>("full");
+  // Reel padding boxes, as typed. Kept as strings so an emptied box is
+  // distinguishable from a zero - empty means "use the default", and a
+  // number input that coerces "" to 0 would silently set 0 s of lead.
+  const [leadText, setLeadText] = useState<string>(
+    reelLeadSeconds === null ? "" : String(reelLeadSeconds)
+  );
+  const [tailText, setTailText] = useState<string>(
+    reelTailSeconds === null ? "" : String(reelTailSeconds)
+  );
+  const [savingPad, setSavingPad] = useState(false);
   // YouTube readiness check. Fetched once on mount; controls whether
   // the per-render "Upload" button is enabled.
   const [ytStatus, setYtStatus] = useState<YouTubeStatusDto | null>(null);
@@ -382,6 +408,73 @@ export function RenderPanel({
     }, QUEUED_NOTICE_MS);
   }
 
+  // Re-sync the boxes when the match reloads under us (another tab, or
+  // the reset button below).
+  useEffect(() => {
+    setLeadText(reelLeadSeconds === null ? "" : String(reelLeadSeconds));
+  }, [reelLeadSeconds]);
+  useEffect(() => {
+    setTailText(reelTailSeconds === null ? "" : String(reelTailSeconds));
+  }, [reelTailSeconds]);
+
+  /** Persist a reel-padding box on blur.
+   *
+   *  Empty sends an explicit `null`, which the backend reads as "reset
+   *  to the default" - that is why the field is three-valued on the
+   *  wire rather than just a number. */
+  async function savePad(field: "lead" | "tail", raw: string) {
+    const current = field === "lead" ? reelLeadSeconds : reelTailSeconds;
+    const trimmed = raw.trim();
+    let value: number | null;
+    if (trimmed === "") {
+      value = null;
+    } else {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n < 0 || n > 60) {
+        setErr(`Reel padding must be a number between 0 and 60 seconds.`);
+        // Put the stored value back so the box never shows something
+        // the server didn't accept.
+        if (field === "lead")
+          setLeadText(current === null ? "" : String(current));
+        else setTailText(current === null ? "" : String(current));
+        return;
+      }
+      value = n;
+    }
+    if (value === current) return;
+    setErr(null);
+    setSavingPad(true);
+    try {
+      const updated = await api.patchMatch(team, tournament, date, match, {
+        [field === "lead" ? "reel_lead_seconds" : "reel_tail_seconds"]: value,
+      });
+      onMatchPatched(updated);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setSavingPad(false);
+    }
+  }
+
+  /** Reset both boxes in ONE request. Two sequential patches would race
+   *  each other through `onMatchPatched`, and the second response could
+   *  land carrying the first field's old value. */
+  async function resetPad() {
+    setErr(null);
+    setSavingPad(true);
+    try {
+      const updated = await api.patchMatch(team, tournament, date, match, {
+        reel_lead_seconds: null,
+        reel_tail_seconds: null,
+      });
+      onMatchPatched(updated);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setSavingPad(false);
+    }
+  }
+
   async function cancelJob(id: string) {
     try {
       await api.cancelRender(id);
@@ -564,6 +657,64 @@ Clear the record anyway? The video on YouTube is not ` +
           Enqueue
         </button>
       </div>
+      {/* Reel padding lives with the reel option, not in a settings
+          page: it is the one knob whose effect you judge by watching a
+          reel, so it belongs where you queue the next one. */}
+      {queueKind === "player_reels" && (
+        <div
+          className="toolbar"
+          style={{ marginTop: 8, alignItems: "center", gap: 6, fontSize: 12 }}
+        >
+          <span className="muted">Keep</span>
+          <input
+            type="number"
+            min={0}
+            max={60}
+            step={0.5}
+            value={leadText}
+            placeholder={String(reelLeadDefault)}
+            onChange={(e) => setLeadText(e.target.value)}
+            onBlur={(e) => void savePad("lead", e.target.value)}
+            disabled={savingPad}
+            style={{ width: 56 }}
+            title={
+              "Seconds of footage before each tagged action. Empty = " +
+              `default (${reelLeadDefault}s). The rally still wins when ` +
+              "it is shorter - this never reaches past the serve."
+            }
+          />
+          <span className="muted">s before and</span>
+          <input
+            type="number"
+            min={0}
+            max={60}
+            step={0.5}
+            value={tailText}
+            placeholder={String(reelTailDefault)}
+            onChange={(e) => setTailText(e.target.value)}
+            onBlur={(e) => void savePad("tail", e.target.value)}
+            disabled={savingPad}
+            style={{ width: 56 }}
+            title={
+              "Seconds of footage after each tagged action. Empty = " +
+              `default (${reelTailDefault}s). The rally still wins when ` +
+              "it ends sooner."
+            }
+          />
+          <span className="muted">s after each play</span>
+          {(reelLeadSeconds !== null || reelTailSeconds !== null) && (
+            <button
+              onClick={() => void resetPad()}
+              disabled={savingPad}
+              title={`Back to the defaults (${reelLeadDefault}s / ${reelTailDefault}s)`}
+              style={{ padding: "1px 8px", fontSize: 11 }}
+            >
+              reset
+            </button>
+          )}
+        </div>
+      )}
+
       <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
         {QUEUE_KINDS.find((k) => k.kind === queueKind)?.blurb} Queued renders
         start when the queue is running - start it from the team dashboard.

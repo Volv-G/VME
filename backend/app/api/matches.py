@@ -94,6 +94,20 @@ def patch_match(
         m.date = body.date
     if body.fps is not None:
         m.fps = body.fps
+    # Three-valued: absent leaves it alone, a number sets it, an explicit
+    # null resets to the server default. `model_fields_set` is the only
+    # way to tell "null" from "not mentioned", and without the
+    # distinction a customized match could never go back to default.
+    for attr in ("reel_lead_seconds", "reel_tail_seconds"):
+        if attr not in body.model_fields_set:
+            continue
+        value = getattr(body, attr)
+        if value is not None and (value < 0 or value > 60):
+            raise HTTPException(
+                400,
+                f"{attr} must be between 0 and 60 seconds (got {value})",
+            )
+        setattr(m, attr, value)
     if body.opponent_roster is not None:
         m.opponent_roster = Roster(
             team_name=body.opponent_roster.team_name,

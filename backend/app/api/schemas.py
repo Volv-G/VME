@@ -235,6 +235,15 @@ class MatchOut(BaseModel):
     events: list[EventOut]
     home_roster: RosterOut
     opponent_roster: RosterOut
+    # Per-match player-reel padding, in seconds. None = server defaults
+    # (see `render/reels.py`); the client shows those as placeholders so
+    # an empty box reads as "default", not "zero".
+    reel_lead_seconds: Optional[float] = None
+    reel_tail_seconds: Optional[float] = None
+    # The defaults in force, so the UI can label the empty state without
+    # hardcoding numbers that live on the backend.
+    reel_lead_default: float = 0.0
+    reel_tail_default: float = 0.0
 
 
 class CreateTournamentIn(BaseModel):
@@ -260,6 +269,12 @@ class UpdateMatchIn(BaseModel):
     date: Optional[str] = None
     fps: Optional[float] = None
     opponent_roster: Optional[RosterOut] = None
+    # Reel padding is three-valued: absent (leave alone), a number (set),
+    # or an explicit null (reset to the default). The handler reads
+    # `model_fields_set` to tell absent from null - without that there
+    # would be no way to un-customize a match.
+    reel_lead_seconds: Optional[float] = None
+    reel_tail_seconds: Optional[float] = None
 
 
 class ReorderClipsIn(BaseModel):

@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 # footage reads as a glitch, and two chapters 0.4 s apart are useless.
 MERGE_GAP_SECONDS = 1.5
 
-# Hard distance from the TAGGED EVENT that a reel segment may reach,
+# Default distance from the TAGGED EVENT that a reel segment may reach,
 # applied after the rally bounds and their padding. Tighter than the
 # highlight caps (20 s lead / 12 s tail) on purpose: a highlight clip is
 # one play watched deliberately, while a reel is 10-20 plays in a row,
@@ -65,11 +65,17 @@ MERGE_GAP_SECONDS = 1.5
 # they are tighter - this only caps them, it never reaches past the
 # serve or the point into neighbouring rallies.
 #
-# Symmetric at 5 s, unlike the rally caps: those are asymmetric because
-# a tagged action sits near the END of its rally, but that asymmetry is
-# exactly the lead-in a reel doesn't want.
-REEL_MAX_LEAD_SECONDS = 5.0
-REEL_MAX_TAIL_SECONDS = 5.0
+# Strongly asymmetric, and for the same reason the rally caps are: an
+# action is tagged when it FINISHES, so everything that makes it worth
+# watching - the pass, the set, the approach - is behind it, while what
+# follows is a ball on the floor. 10 s covers a whole rally's build-up;
+# 2 s is the point landing.
+#
+# Overridable per match (`Match.reel_lead_seconds` / `reel_tail_seconds`)
+# because tagging habits differ: someone who tags on contact needs less
+# lead than someone who tags when the whistle goes.
+REEL_MAX_LEAD_SECONDS = 10.0
+REEL_MAX_TAIL_SECONDS = 2.0
 
 # Two tagged events this close together are one moment, not two, and the
 # reel shows them as a single continuous segment. Measured between the
@@ -211,8 +217,18 @@ def reels_from_match(
     fallback = int(round(FALLBACK_HALF_WINDOW_SECONDS * fps))
     max_lead = int(round(MAX_RALLY_LEAD_SECONDS * fps))
     max_tail = int(round(MAX_RALLY_TAIL_SECONDS * fps))
-    reel_lead = int(round(REEL_MAX_LEAD_SECONDS * fps))
-    reel_tail = int(round(REEL_MAX_TAIL_SECONDS * fps))
+    lead_seconds = (
+        match.reel_lead_seconds
+        if match.reel_lead_seconds is not None
+        else REEL_MAX_LEAD_SECONDS
+    )
+    tail_seconds = (
+        match.reel_tail_seconds
+        if match.reel_tail_seconds is not None
+        else REEL_MAX_TAIL_SECONDS
+    )
+    reel_lead = int(round(lead_seconds * fps))
+    reel_tail = int(round(tail_seconds * fps))
     merge_gap = int(round(MERGE_GAP_SECONDS * fps))
     same_moment = int(round(SAME_MOMENT_SECONDS * fps))
     total = match.total_frames()
