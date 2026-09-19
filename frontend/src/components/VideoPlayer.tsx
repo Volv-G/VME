@@ -145,52 +145,66 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
 
   // When the active clip changes, apply any pending seek after src loads,
   // then optionally resume playback.
-  useEffect(() => {
+  //
+  // Bound as a React prop (`onLoadedMetadata`), NOT via addEventListener in
+  // an effect. The listener version lost the race: changing `src` starts
+  // loading at commit time, while a passive effect runs after paint, so a
+  // clip whose metadata was already in the browser cache could fire
+  // `loadedmetadata` into a gap where no handler was attached. The pending
+  // seek then never ran and `isSwitching` never cleared - the <video> stayed
+  // hidden behind the black container and playback appeared to freeze at the
+  // clip boundary. React attaches prop handlers before the element can emit
+  // anything, which removes the race entirely.
+  function handleLoadedMetadata() {
     const v = videoRef.current;
-    if (!v) return;
-    function onLoaded() {
-      const v = videoRef.current;
-      if (!v) return;
-      if (pendingSeekRef.current !== null) {
-        const f = pendingSeekRef.current;
-        pendingSeekRef.current = null;
-        targetFrameRef.current = f;
-        v.currentTime = timeForFrame(f, activeClip.fps || fps);
-        // Reveal happens on the matching 'seeked' below.
-      } else {
-        // No seek requested for this clip switch; safe to reveal immediately.
-        setSwitching(false);
-      }
-      if (playOnLoadRef.current) {
-        playOnLoadRef.current = false;
-        v.playbackRate = playbackRateRef.current;
-        void v.play();
-      }
+    if (!v || !activeClip) return;
+    if (pendingSeekRef.current !== null) {
+      const f = pendingSeekRef.current;
+      pendingSeekRef.current = null;
+      targetFrameRef.current = f;
+      const t = timeForFrame(f, activeClip.fps || fps);
+      // If the element is somehow already there, no 'seeked' will fire
+      // (the spec aborts a seek to the current position), so reveal now
+      // rather than waiting for an event that isn't coming.
+      if (Math.abs(v.currentTime - t) < 1e-6) setSwitching(false);
+      else v.currentTime = t;
+    } else {
+      // No seek requested for this clip switch; safe to reveal immediately.
+      setSwitching(false);
     }
-    v.addEventListener("loadedmetadata", onLoaded);
-    return () => v.removeEventListener("loadedmetadata", onLoaded);
-  }, [activeClipIdx, activeClip, fps]);
+    if (playOnLoadRef.current) {
+      playOnLoadRef.current = false;
+      v.playbackRate = playbackRateRef.current;
+      void v.play().catch(() => {
+        // Autoplay refusal or an aborted load: don't strand the user
+        // behind a hidden video with no way back.
+        setSwitching(false);
+      });
+    }
+  }
 
-  // Clear pending target + reveal the player after seek/play completes, so
-  // the next manual step reads a fresh frame from currentTime.
+  // Safety net for the reveal. Every path above ends in a 'seeked' or a
+  // 'play', but a stalled network, a decode error or a browser that
+  // swallows one of those events would otherwise leave the player hidden
+  // forever with no indication why. Revealing a possibly-wrong frame is
+  // strictly better than a black rectangle.
   useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    const onSeeked = () => {
-      targetFrameRef.current = null;
+    if (!isSwitching) return;
+    const t = window.setTimeout(() => {
+      if (!isSwitchingRef.current) return;
+      console.warn(
+        "VideoPlayer: clip switch did not complete within 4s; revealing " +
+          "anyway (readyState=" +
+          (videoRef.current?.readyState ?? -1) +
+          ", networkState=" +
+          (videoRef.current?.networkState ?? -1) +
+          ")"
+      );
+      pendingSeekRef.current = null;
       setSwitching(false);
-    };
-    const onPlay = () => {
-      targetFrameRef.current = null;
-      setSwitching(false);
-    };
-    v.addEventListener("seeked", onSeeked);
-    v.addEventListener("play", onPlay);
-    return () => {
-      v.removeEventListener("seeked", onSeeked);
-      v.removeEventListener("play", onPlay);
-    };
-  }, [activeClipIdx]);
+    }, 4000);
+    return () => window.clearTimeout(t);
+  }, [isSwitching]);
 
   // RAF loop reporting current frame. Suppressed while we're mid-clip-switch
   // so we don't report stale frame-0-of-new-clip positions to the parent
@@ -201,11 +215,20 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     function tick() {
       if (stop) return;
       const v = videoRef.current;
-      if (v && activeClip && onFrameRef.current && !isSwitchingRef.current) {
-        const localFrame =
-          targetFrameRef.current ?? frameFromTime(v.currentTime, activeClip.fps || fps);
-        const global = clipOffset(clips, activeClipIdx) + localFrame;
-        onFrameRef.current(global);
+      if (v && activeClip && !isSwitchingRef.current) {
+        if (v.ended && !endedGuardRef.current) {
+          // Guarded so a run of frames at the end can't queue several
+          // switches for the same boundary.
+          endedGuardRef.current = true;
+          handleEnded();
+        }
+        if (onFrameRef.current) {
+          const localFrame =
+            targetFrameRef.current ??
+            frameFromTime(v.currentTime, activeClip.fps || fps);
+          const global = clipOffset(clips, activeClipIdx) + localFrame;
+          onFrameRef.current(global);
+        }
       }
       raf = requestAnimationFrame(tick);
     }
@@ -221,6 +244,17 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       setIsPlaying(false);
     }
   }
+
+  // Backstop for a missing 'ended'. Browsers don't always fire it when a
+  // media element reaches the end of a stream served by range requests -
+  // playback just stops on the last frame, which reads as "the player got
+  // stuck at the clip boundary". Polling `ended` costs nothing (the RAF
+  // loop already runs) and makes the advance depend on state rather than
+  // on an event arriving.
+  const endedGuardRef = useRef(false);
+  useEffect(() => {
+    endedGuardRef.current = false;
+  }, [activeClipIdx]);
 
   // Compute the current global frame from in-flight target (preferred) or
   // the actual displayed currentTime, then add deltaFrames in global space and
@@ -355,8 +389,25 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
               ref={videoRef}
               src={api.clipStreamUrl(team, tournament, date, match, activeClip.id)}
               controls={false}
-              onPlay={() => setIsPlaying(true)}
+              onPlay={() => {
+                targetFrameRef.current = null;
+                setSwitching(false);
+                setIsPlaying(true);
+              }}
               onPause={() => setIsPlaying(false)}
+              onSeeked={() => {
+                targetFrameRef.current = null;
+                setSwitching(false);
+              }}
+              onLoadedMetadata={handleLoadedMetadata}
+              onError={() => {
+                console.warn(
+                  "VideoPlayer: <video> error on clip",
+                  activeClip?.filename,
+                  videoRef.current?.error
+                );
+                setSwitching(false);
+              }}
               onEnded={handleEnded}
               preload="metadata"
               draggable={false}

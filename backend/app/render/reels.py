@@ -72,6 +72,21 @@ _DURATION_EPSILON = 1e-3
 # footage reads as a glitch, and two chapters 0.4 s apart are useless.
 MERGE_GAP_SECONDS = 1.5
 
+# Hard distance from the TAGGED EVENT that a reel segment may reach,
+# applied after the rally bounds and their padding. Tighter than the
+# highlight caps (20 s lead / 12 s tail) on purpose: a highlight clip is
+# one play watched deliberately, while a reel is 10-20 plays in a row,
+# and the rally lead-in that gives a single clip context becomes 3
+# minutes of serve-receive in a reel. The rally bounds still win when
+# they are tighter - this only caps them, it never reaches past the
+# serve or the point into neighbouring rallies.
+#
+# Symmetric at 5 s, unlike the rally caps: those are asymmetric because
+# a tagged action sits near the END of its rally, but that asymmetry is
+# exactly the lead-in a reel doesn't want.
+REEL_MAX_LEAD_SECONDS = 5.0
+REEL_MAX_TAIL_SECONDS = 5.0
+
 
 @dataclass
 class ReelSegment:
@@ -200,6 +215,8 @@ def reels_from_match(
     fallback = int(round(FALLBACK_HALF_WINDOW_SECONDS * fps))
     max_lead = int(round(MAX_RALLY_LEAD_SECONDS * fps))
     max_tail = int(round(MAX_RALLY_TAIL_SECONDS * fps))
+    reel_lead = int(round(REEL_MAX_LEAD_SECONDS * fps))
+    reel_tail = int(round(REEL_MAX_TAIL_SECONDS * fps))
     merge_gap = int(round(MERGE_GAP_SECONDS * fps))
     # ceil, not round: rounding down would land under the minimum.
     target_frames = int(math.ceil(CHAPTER_TARGET_SECONDS * fps))
@@ -221,6 +238,18 @@ def reels_from_match(
         )
         start = max(0, start - pad_before)
         end = min(total, end + pad_after)
+        # Never more than a few seconds either side of the action the
+        # segment exists for. Applied last so it caps the padding too:
+        # the rally bounds decide where the play is, this decides how
+        # much of it a reel is willing to spend.
+        #
+        # Note `_extend_to_minimum` can still grow a segment past this
+        # afterwards - YouTube discards the entire chapter list if any
+        # chapter is under 10 s, so a 10 s cap plus an 11 s chapter
+        # floor means short plays end up at 11 s. That rule is not
+        # negotiable; this cap is.
+        start = max(start, g - reel_lead)
+        end = min(end, g + reel_tail + 1)
         if end <= start:
             continue
         grouped.setdefault((ev.team, ev.player_number), []).append(
