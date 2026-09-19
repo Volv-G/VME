@@ -1,18 +1,24 @@
-"""Background dispatcher that runs queued render jobs one at a time.
+"""Background dispatchers that run queued jobs, one at a time per lane.
 
 Lifecycle:
-  - `start()` spawns a daemon thread that loops forever until `stop()`
+  - `start()` spawns one daemon thread PER LANE, looping until `stop()`
     is called (typically at app shutdown).
-  - The loop waits on `JOBS.wake` (an event), with a periodic timeout so
-    it self-heals if a wake signal is ever missed.
-  - When woken, it checks if the global queue is `active` and there's a
-    pending job. If both, it runs the job synchronously in this thread
-    before looking for the next one.
+  - Each loop waits on that lane's `JOBS.wake` event, with a periodic
+    timeout so it self-heals if a wake signal is ever missed.
+  - When woken, a worker checks whether ITS lane is `active` and has a
+    pending job in it. If both, it runs the job synchronously in its own
+    thread before looking for the next one.
 
-Concurrency: exactly one worker thread. Renders are GPU/disk-heavy, so
-parallelism rarely helps the *total* throughput and often makes the
-machine unusable. The single-worker invariant is what lets the user keep
-editing comfortably while a render is running.
+Concurrency: exactly one worker per lane, and today exactly two lanes
+(`render` and `upload`). Renders stay serialized because they are
+GPU/disk-heavy - parallelism rarely improves total throughput and often
+makes the machine unusable to edit on. Uploads get their own thread
+because they are network-bound and, far more importantly, because they
+park: a YouTube upload waiting out a quota reset or the channel
+video-count cap can sit for hours, and in a shared queue that is hours
+of renders not happening. The lanes are independent in both directions -
+stopping uploads because YouTube is refusing you no longer stops
+rendering.
 """
 
 from __future__ import annotations
@@ -21,7 +27,7 @@ import logging
 import threading
 
 from ..render.renderer import RenderCancelled
-from .manager import JOBS
+from .manager import JOBS, LANES
 from .render_job import run_render
 
 logger = logging.getLogger(__name__)
@@ -34,7 +40,10 @@ _WAKE_TIMEOUT_S = 5.0
 
 
 class Dispatcher:
-    def __init__(self) -> None:
+    """Worker for a single lane."""
+
+    def __init__(self, lane: str) -> None:
+        self.lane = lane
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -43,10 +52,10 @@ class Dispatcher:
             return
         self._stop.clear()
         self._thread = threading.Thread(
-            target=self._loop, name="render-dispatcher", daemon=True
+            target=self._loop, name=f"{self.lane}-dispatcher", daemon=True
         )
         self._thread.start()
-        logger.info("render dispatcher started")
+        logger.info("%s dispatcher started", self.lane)
 
     def stop(self, join_timeout: float = 2.0) -> None:
         self._stop.set()
@@ -63,8 +72,8 @@ class Dispatcher:
             # Fast path: if the queue is active and there's work to do,
             # do it immediately - no waiting between jobs. This is what
             # lets a backlog of N jobs drain back-to-back.
-            if JOBS.is_active():
-                job = JOBS.next_pending()
+            if JOBS.is_active(self.lane):
+                job = JOBS.next_pending(self.lane)
                 if job is not None:
                     self._run_one(job)
                     continue
@@ -73,8 +82,11 @@ class Dispatcher:
             # Clear the wake flag BEFORE re-checking, then re-check after
             # the clear. Without that re-check we'd lose any wake signal
             # delivered between clear and wait (set/clear race).
-            JOBS.wake.clear()
-            if JOBS.is_active() and JOBS.next_pending() is not None:
+            JOBS.wake.event(self.lane).clear()
+            if (
+                JOBS.is_active(self.lane)
+                and JOBS.next_pending(self.lane) is not None
+            ):
                 continue
             self._sleep_until_event()
 
@@ -89,7 +101,8 @@ class Dispatcher:
             return
 
         logger.info(
-            "dispatcher running job %s (%s / %s)",
+            "%s dispatcher running job %s (%s / %s)",
+            self.lane,
             job.id,
             job.team,
             job.match,
@@ -103,7 +116,26 @@ class Dispatcher:
             JOBS.mark_failed(job.id, str(exc))
 
     def _sleep_until_event(self) -> None:
-        JOBS.wake.wait(timeout=_WAKE_TIMEOUT_S)
+        JOBS.wake.event(self.lane).wait(timeout=_WAKE_TIMEOUT_S)
 
 
-DISPATCHER = Dispatcher()
+class DispatcherGroup:
+    """All lane workers, started and stopped together.
+
+    The lanes are independent while running; only their process
+    lifecycle is shared, so `main.py` keeps a single start/stop pair.
+    """
+
+    def __init__(self) -> None:
+        self.dispatchers = {lane: Dispatcher(lane) for lane in LANES}
+
+    def start(self) -> None:
+        for d in self.dispatchers.values():
+            d.start()
+
+    def stop(self, join_timeout: float = 2.0) -> None:
+        for d in self.dispatchers.values():
+            d.stop(join_timeout=join_timeout)
+
+
+DISPATCHER = DispatcherGroup()

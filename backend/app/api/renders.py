@@ -8,6 +8,10 @@ Queue control lives at the top level (`/queue/start`, `/queue/stop`,
 `/queue/state`) because the queue is global - one team's start affects
 the whole machine. The per-team list endpoint (`/teams/{team}/jobs`) is
 the natural feed for the team-dashboard queue widget.
+
+There are two lanes (`render` and `upload`) with independent switches;
+`?lane=` selects one, and omitting it acts on both, which is what a
+client that predates the split expects from a single Start button.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
-from ..jobs.manager import JOBS, JobStatus
+from ..jobs.manager import JOBS, LANES, JobStatus
 from ..jobs.render_job import kick_off_immediate
 from ..config import VIDEO_EXTENSIONS
 from ..library import paths, scanner
@@ -397,24 +401,33 @@ def copy_render_to_media_server(
 # ---- Queue control --------------------------------------------------------
 
 
+def _validate_lane(lane: str | None) -> str | None:
+    if lane in (None, "", "all"):
+        return None
+    if lane not in LANES:
+        raise HTTPException(400, f"Unknown queue lane {lane!r}; expected {LANES}")
+    return lane
+
+
 @router.post("/queue/start")
-def queue_start() -> dict:
-    """Resume the dispatcher: pending jobs start running FIFO."""
-    JOBS.set_active(True)
+def queue_start(lane: str | None = None) -> dict:
+    """Resume a lane (or both): its pending jobs start running FIFO."""
+    JOBS.set_active(True, _validate_lane(lane))
     return JOBS.queue_summary()
 
 
 @router.post("/queue/stop")
-def queue_stop() -> dict:
-    """Pause the dispatcher. The currently running job (if any) finishes;
-    no new pending job will be picked up until /queue/start."""
-    JOBS.set_active(False)
+def queue_stop(lane: str | None = None) -> dict:
+    """Pause a lane (or both). The currently running job (if any)
+    finishes; no new pending job in that lane is picked up until
+    /queue/start."""
+    JOBS.set_active(False, _validate_lane(lane))
     return JOBS.queue_summary()
 
 
 @router.get("/queue/state")
 def queue_state() -> dict:
-    """Lightweight summary: active flag + pending/running counts."""
+    """Lightweight summary: per-lane active flag + pending/running."""
     return JOBS.queue_summary()
 
 

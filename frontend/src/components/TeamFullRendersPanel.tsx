@@ -56,7 +56,8 @@ function PendingBadges({ r }: { r: FullRenderDto }) {
       text: "↑ queued",
       title:
         (r.upload_detail ? r.upload_detail + " · " : "") +
-        "Upload is waiting its turn - it needs the render queue running.",
+        "Upload is waiting its turn - it needs the Uploads lane " +
+        "running (team home page). Rendering is a separate lane.",
     });
   } else if (r.upload_state === "waiting") {
     items.push({
@@ -65,7 +66,8 @@ function PendingBadges({ r }: { r: FullRenderDto }) {
       title:
         r.upload_detail ||
         "Upload is parked until YouTube accepts it again. It retries " +
-          "by itself; nothing to do.",
+          "by itself as long as the Uploads lane is running; renders " +
+          "are not held up by it.",
     });
   }
   if (r.thumbnail_pending) {

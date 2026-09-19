@@ -80,9 +80,9 @@ def load() -> None:
             jobs.append(RenderJob.from_dict(raw))
         except (KeyError, ValueError, TypeError) as exc:
             logger.warning("skipping malformed job entry: %s (%s)", raw, exc)
-    # Active flag is intentionally ignored on load: queue starts paused
-    # after every restart so the user has explicit control. The field is
-    # still written for forward-compat / debugging.
+    # Active flags are intentionally ignored on load: every lane starts
+    # paused after a restart so the user has explicit control. The fields
+    # are still written for forward-compat / debugging.
     JOBS.load_from(jobs, active=False)
 
 
@@ -101,7 +101,9 @@ def save() -> None:
         jobs = list(JOBS.list_jobs())
         jobs = _prune(jobs)
         payload = {
+            # Written for debugging only - never restored (see load()).
             "active": JOBS.is_active(),
+            "active_lanes": JOBS.active_lanes(),
             "jobs": [j.to_dict() for j in jobs],
         }
         try:

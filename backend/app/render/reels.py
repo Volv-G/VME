@@ -5,31 +5,29 @@ Highlights stay one-file-per-play (good for local review and for dropping
 a single clip into a message); reels exist because uploading 48 files per
 match to YouTube is impractical - both against the per-day
 `videos.insert` bucket and for whoever has to watch them. One reel per
-player per match turns 48 uploads into ~12, each with a chapter list so a
-viewer can still jump to an individual play.
+player per match turns 48 uploads into ~12, each with a timestamp index
+so a viewer can still jump to an individual play.
 
 Span construction reuses the highlight rally bounds (see
-`batch.highlights_from_match`) and then applies three reel-specific
-passes:
+`batch.highlights_from_match`) and then merges overlapping / adjacent
+spans: two player events in the same rally (Dig then Kill) produce two
+identical rally windows, and a reel must show that rally once, labelled
+with both actions.
 
-1. **Merge** overlapping / adjacent spans. Two player events in the same
-   rally (Dig then Kill) produce two identical rally windows; a reel must
-   show that rally once, labelled with both actions.
-2. **Extend short spans** toward `MIN_CHAPTER_SECONDS`. An ace rally can
-   be 4-5 s, and YouTube ignores a chapter list entirely if ANY chapter
-   is under 10 s. Extending (rather than dropping) keeps the play and
-   adds lead-in context; it never trims.
-3. **Decide whether chapters are legal at all.** YouTube requires >= 3
-   chapters, the first at 00:00, and every chapter >= 10 s. A player with
-   two plays in a match can't have chapters - so the description falls
-   back to a plain timestamp list, which YouTube still auto-links into
-   seekable links even when the chapter UI doesn't appear.
+No chapters. Reels used to be padded out to an 11 s floor because
+YouTube discards an entire chapter list if ANY chapter is under 10 s,
+and also demands at least 3 chapters starting at 00:00 - conditions a
+real reel fails more often than it meets (a player with two plays can
+never satisfy them). Paying for that with a second of dead footage on
+every play of every reel, to *sometimes* get a chapter bar, was a bad
+trade. The description still carries the timestamp list, which YouTube
+auto-links into seekable links regardless of the chapter rules - which
+is the part that actually got used.
 """
 
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -52,20 +50,6 @@ from .batch import (
 
 logger = logging.getLogger(__name__)
 
-
-# YouTube's chapter rules (all must hold or the chapter bar doesn't
-# appear): at least this many chapters, the first one starting exactly at
-# 00:00, and no chapter shorter than MIN_CHAPTER_SECONDS.
-MIN_CHAPTERS = 3
-MIN_CHAPTER_SECONDS = 10.0
-# What short segments are actually extended to. Deliberately above the
-# 10 s rule: at 59.94 fps a "10 s" span rounds to 599 frames = 9.993 s,
-# which would fail the very check we're extending to satisfy. The extra
-# second also absorbs the frame or two a cut region can shave off a span.
-CHAPTER_TARGET_SECONDS = 11.0
-# Float slack when validating durations, so a segment that is 10.0000s
-# minus one ULP isn't reported as too short.
-_DURATION_EPSILON = 1e-3
 
 # Spans closer together than this are merged into one segment rather than
 # being cut apart and put back together - a sub-second gap of match
@@ -201,35 +185,6 @@ def _merge_segments(
     return merged
 
 
-def _extend_to_minimum(
-    segments: list[ReelSegment], target_frames: int, total_frames: int
-) -> list[ReelSegment]:
-    """Grow any segment shorter than `target_frames`, centered on itself.
-
-    Needed because YouTube drops the whole chapter list if a single
-    chapter is under 10 s, and a clean ace (serve -> point) can be 4 s.
-    Growth is clamped to the match bounds, and re-merged afterwards in
-    case the extension made two segments touch.
-    """
-    for seg in segments:
-        deficit = target_frames - seg.frames
-        if deficit <= 0:
-            continue
-        before = deficit // 2
-        after = deficit - before
-        new_start = max(0, seg.start_frame - before)
-        # Push whatever we couldn't take from the front onto the back
-        # (and vice versa) so a play near frame 0 still reaches the
-        # minimum length.
-        shortfall = before - (seg.start_frame - new_start)
-        new_end = min(total_frames, seg.end_frame + after + shortfall)
-        shortfall = after + shortfall - (new_end - seg.end_frame)
-        if shortfall > 0:
-            new_start = max(0, new_start - shortfall)
-        seg.start_frame, seg.end_frame = new_start, new_end
-    return segments
-
-
 def reels_from_match(
     match: Match,
     home_roster: Roster,
@@ -260,8 +215,6 @@ def reels_from_match(
     reel_tail = int(round(REEL_MAX_TAIL_SECONDS * fps))
     merge_gap = int(round(MERGE_GAP_SECONDS * fps))
     same_moment = int(round(SAME_MOMENT_SECONDS * fps))
-    # ceil, not round: rounding down would land under the minimum.
-    target_frames = int(math.ceil(CHAPTER_TARGET_SECONDS * fps))
     total = match.total_frames()
 
     indexed = list(_indexed_events(match))
@@ -283,13 +236,9 @@ def reels_from_match(
         # Never more than a few seconds either side of the action the
         # segment exists for. Applied last so it caps the padding too:
         # the rally bounds decide where the play is, this decides how
-        # much of it a reel is willing to spend.
-        #
-        # Note `_extend_to_minimum` can still grow a segment past this
-        # afterwards - YouTube discards the entire chapter list if any
-        # chapter is under 10 s, so a 10 s cap plus an 11 s chapter
-        # floor means short plays end up at 11 s. That rule is not
-        # negotiable; this cap is.
+        # much of it a reel is willing to spend. With the chapter floor
+        # gone this is the only thing deciding segment length, so a
+        # segment is now exactly as long as the play it shows.
         start = max(start, g - reel_lead)
         end = min(end, g + reel_tail + 1)
         if end <= start:
@@ -309,10 +258,6 @@ def reels_from_match(
         grouped.items(), key=lambda kv: (kv[0][0].value, kv[0][1])
     ):
         segments.sort(key=lambda s: s.start_frame)
-        segments = _merge_segments(segments, merge_gap, same_moment)
-        segments = _extend_to_minimum(segments, target_frames, total)
-        # Extending can make neighbours touch - merge once more so the
-        # reel never replays the same footage twice in a row.
         segments = _merge_segments(segments, merge_gap, same_moment)
 
         vars_ = naming.build_reel_vars(
@@ -357,15 +302,15 @@ def reels_from_match(
 
 
 # ---------------------------------------------------------------------------
-# Chapters / description
+# Timestamp index for the description
 # ---------------------------------------------------------------------------
 
 
 def _timecode(seconds: float) -> str:
-    """`mm:ss` (or `h:mm:ss`) - the format YouTube parses as a chapter.
+    """`mm:ss` (or `h:mm:ss`) - the format YouTube turns into a link.
 
-    Minutes are zero-padded so the first line reads exactly `00:00`,
-    which is what YouTube's chapter documentation requires.
+    Minutes are zero-padded for alignment in the description; YouTube
+    links `0:07` and `00:07` alike.
     """
     total = int(seconds)
     h, rem = divmod(total, 3600)
@@ -376,71 +321,38 @@ def _timecode(seconds: float) -> str:
 
 
 @dataclass
-class ChapterList:
-    """Chapter lines plus whether YouTube will actually honor them."""
+class TimestampList:
+    """The per-play timestamp lines that go in a reel's description."""
 
     lines: list[str]
-    valid: bool
-    reason: str = ""
 
     def as_text(self) -> str:
         return "\n".join(self.lines)
 
 
-def build_chapters(
+def build_timestamps(
     spans: list[tuple[int, int, int]],
     segments: list[ReelSegment],
     fps: float,
-) -> ChapterList:
-    """Chapter lines for a rendered reel.
+) -> TimestampList:
+    """Timestamp lines for a rendered reel.
 
     `spans` are the `(out_start, out_end, segment_index)` triples returned
     by `MatchRenderer.segment_offsets()`, so timecodes reflect what
     actually made it into the file. The segment index matters: a span
     that fell entirely inside a cut region is missing from the list, and
-    pairing positionally would then label every later chapter with the
+    pairing positionally would then label every later line with the
     wrong play.
 
-    Validity is reported rather than enforced: the caller still writes
-    the timestamp list (YouTube auto-links bare timestamps in a
-    description even when the chapter bar is suppressed), it just knows
-    not to promise chapters.
+    Nothing is validated. These are links in a description, not chapters,
+    so there is no minimum count, no 00:00 requirement and no minimum
+    duration to satisfy - a two-play reel gets two working links.
     """
     lines: list[str] = []
-    durations: list[float] = []
-    for out_start, out_end, seg_index in spans:
+    for out_start, _out_end, seg_index in spans:
         seg = segments[seg_index]
         lines.append(
             f"{_timecode(out_start / fps)} {seg.label()}"
             + (f" ({seg.match_timestamp})" if seg.match_timestamp else "")
         )
-        durations.append((out_end - out_start) / fps)
-
-    if not lines:
-        return ChapterList(lines=[], valid=False, reason="no segments")
-    if len(lines) < MIN_CHAPTERS:
-        return ChapterList(
-            lines=lines,
-            valid=False,
-            reason=(
-                f"only {len(lines)} chapter(s); YouTube needs at least "
-                f"{MIN_CHAPTERS}"
-            ),
-        )
-    if spans[0][0] != 0:
-        return ChapterList(
-            lines=lines,
-            valid=False,
-            reason="first chapter does not start at 00:00",
-        )
-    short = [d for d in durations if d < MIN_CHAPTER_SECONDS - _DURATION_EPSILON]
-    if short:
-        return ChapterList(
-            lines=lines,
-            valid=False,
-            reason=(
-                f"{len(short)} chapter(s) shorter than {MIN_CHAPTER_SECONDS:g}s "
-                f"(shortest {min(short):.1f}s)"
-            ),
-        )
-    return ChapterList(lines=lines, valid=True)
+    return TimestampList(lines=lines)

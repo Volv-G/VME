@@ -6,10 +6,23 @@ the global queue is active. This lets the user line up several renders
 across matches and start them all at once from the team dashboard - the
 match editor stays responsive while editing.
 
+There are TWO independent lanes, each with its own worker thread and its
+own start/stop switch (see `LANES`):
+
+  - `render` - everything that encodes video. Serialized on purpose: a
+    render saturates the GPU and the disk, so running two makes both
+    slower and the machine unusable to edit on.
+  - `upload`  - YouTube uploads. Network-bound, and routinely parked for
+    HOURS waiting on a quota reset or the channel's video-count cap.
+    Sharing a lane with renders meant a single deferred upload could sit
+    at the head of the queue while a day of renders waited behind it,
+    and that stopping uploads (the thing you actually want when YouTube
+    is refusing you) also stopped rendering.
+
 The manager owns:
   - the job registry (id -> RenderJob)
-  - the global `active` flag (queue running or paused)
-  - a `threading.Event` the dispatcher waits on
+  - a per-lane `active` flag (that lane running or paused)
+  - a per-lane `threading.Event` the matching dispatcher waits on
   - per-job SSE listener queues
   - a `state_changed` hook invoked on every state change so the
     persistence layer can write to disk without coupling here.
@@ -40,6 +53,43 @@ class JobStatus(str, Enum):
 # Non-terminal statuses (the job is either queued or being worked on).
 _LIVE_STATUSES = {JobStatus.PENDING, JobStatus.RUNNING}
 _TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
+
+
+# ---- Lanes -----------------------------------------------------------------
+
+RENDER_LANE = "render"
+UPLOAD_LANE = "upload"
+LANES = (RENDER_LANE, UPLOAD_LANE)
+
+# Job kinds that belong to the upload lane. `media_server_copy` stays in
+# the render lane: it is a local file copy that competes for the same
+# disk a render is writing to, and it can't be parked for hours the way
+# a YouTube upload can.
+_UPLOAD_KINDS = {"youtube_upload"}
+
+
+def lane_for_kind(kind: str) -> str:
+    """Which lane runs a job of this kind."""
+    return UPLOAD_LANE if kind in _UPLOAD_KINDS else RENDER_LANE
+
+
+class LaneWakes:
+    """One wake event per lane, with a `set()` that wakes them all.
+
+    A single shared Event cannot serve two workers: whichever one gets
+    there first clears it, and the other never sees the signal. Callers
+    that don't care which lane (a new job, a cancel) just call `set()`.
+    """
+
+    def __init__(self, lanes: tuple[str, ...]) -> None:
+        self._events = {lane: threading.Event() for lane in lanes}
+
+    def set(self) -> None:
+        for ev in self._events.values():
+            ev.set()
+
+    def event(self, lane: str) -> threading.Event:
+        return self._events[lane]
 
 
 @dataclass
@@ -182,12 +232,13 @@ class JobManager:
         self._jobs: dict[str, RenderJob] = {}
         self._listeners: dict[str, list[asyncio.Queue]] = {}
         self._lock = threading.Lock()
-        # Global queue switch. Dispatcher only picks pending jobs while True.
-        self._active: bool = False
-        # Set whenever something changes that the dispatcher might care
-        # about (new job, queue activated, cancel). Cleared by the
+        # Per-lane queue switches. A dispatcher only picks up pending
+        # jobs in its own lane, and only while that lane is True.
+        self._active: dict[str, bool] = {lane: False for lane in LANES}
+        # Set whenever something changes that a dispatcher might care
+        # about (new job, lane activated, cancel). Cleared by each
         # dispatcher when it goes back to waiting.
-        self.wake = threading.Event()
+        self.wake = LaneWakes(LANES)
         # Persistence hook installed by main.py at startup. Called with no
         # args after every state change; defaults to no-op so unit tests
         # don't need to wire persistence.
@@ -255,8 +306,12 @@ class JobManager:
         out.sort(key=lambda j: j.created_at, reverse=True)
         return out
 
-    def next_pending(self) -> Optional[RenderJob]:
+    def next_pending(self, lane: Optional[str] = None) -> Optional[RenderJob]:
         """Oldest non-immediate pending job (FIFO), or None when drained.
+
+        `lane` restricts the search to one lane; `None` means any lane
+        and exists for callers that just want to know whether anything
+        is waiting.
 
         Immediate jobs run via their own thread (see `kick_off_immediate`
         in `render_job.py`); the dispatcher must not pick them up or it
@@ -275,6 +330,7 @@ class JobManager:
             if j.status == JobStatus.PENDING
             and not j.immediate
             and j.defer_until <= now
+            and (lane is None or lane_for_kind(j.kind) == lane)
         ]
         if not candidates:
             return None
@@ -365,21 +421,46 @@ class JobManager:
         self._notify_changed()
         return True
 
-    # ---- Global queue switch --------------------------------------------
+    # ---- Per-lane queue switches ----------------------------------------
 
-    def is_active(self) -> bool:
-        return self._active
+    def is_active(self, lane: str = RENDER_LANE) -> bool:
+        return self._active.get(lane, False)
 
-    def set_active(self, active: bool) -> None:
-        if self._active == active:
-            return
-        self._active = active
-        logger.info("render queue %s", "started" if active else "stopped")
+    def set_active(self, active: bool, lane: Optional[str] = None) -> None:
+        """Start/stop one lane, or every lane when `lane` is None."""
+        lanes = LANES if lane is None else (lane,)
+        for name in lanes:
+            if self._active.get(name) == active:
+                continue
+            self._active[name] = active
+            logger.info(
+                "%s queue %s", name, "started" if active else "stopped"
+            )
         self._notify_changed()
-        # Wake dispatcher so it picks up the new state promptly.
+        # Wake the dispatchers so they pick up the new state promptly.
         self.wake.set()
 
+    def active_lanes(self) -> dict[str, bool]:
+        return dict(self._active)
+
+    def lane_summary(self, lane: str) -> dict[str, Any]:
+        jobs = [j for j in self._jobs.values() if lane_for_kind(j.kind) == lane]
+        return {
+            "active": self._active.get(lane, False),
+            "pending": sum(1 for j in jobs if j.status == JobStatus.PENDING),
+            "running": sum(1 for j in jobs if j.status == JobStatus.RUNNING),
+            "total": len(jobs),
+        }
+
     def queue_summary(self) -> dict[str, Any]:
+        """Per-lane state, plus whole-queue totals.
+
+        The top-level `active` is the RENDER lane specifically, not an
+        aggregate: it is what the old single-queue clients meant by the
+        field, and answering "is something active somewhere" would make a
+        stopped render queue look running because an upload lane is on.
+        """
+        lanes = {name: self.lane_summary(name) for name in LANES}
         pending = sum(
             1 for j in self._jobs.values() if j.status == JobStatus.PENDING
         )
@@ -387,10 +468,11 @@ class JobManager:
             1 for j in self._jobs.values() if j.status == JobStatus.RUNNING
         )
         return {
-            "active": self._active,
+            "active": self._active.get(RENDER_LANE, False),
             "pending": pending,
             "running": running,
             "total": len(self._jobs),
+            "lanes": lanes,
         }
 
     # ---- Persistence wiring ---------------------------------------------
@@ -416,7 +498,7 @@ class JobManager:
         # Queue active state is intentionally NOT persisted - the user has
         # to explicitly start it after a restart so we never auto-render
         # on a crash loop. (Pass-through arg kept for symmetry / future.)
-        self._active = active
+        self._active = {lane: active for lane in LANES}
         logger.info(
             "loaded %d job(s) from persistence (active=%s)",
             len(jobs),

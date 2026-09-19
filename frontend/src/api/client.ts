@@ -5,6 +5,7 @@ import type {
   FullRenderDto,
   MatchDto,
   MatchSummary,
+  QueueLane,
   QueueStateDto,
   RenderFileDto,
   RenderJobDto,
@@ -593,11 +594,15 @@ export const api = {
   async getQueueState(): Promise<QueueStateDto> {
     return fetchJson<QueueStateDto>(`/queue/state`);
   },
-  async startQueue(): Promise<QueueStateDto> {
-    return fetchJson<QueueStateDto>(`/queue/start`, { method: "POST" });
+  /** Start one lane, or both when `lane` is omitted. */
+  async startQueue(lane?: QueueLane): Promise<QueueStateDto> {
+    const q = lane ? `?lane=${lane}` : "";
+    return fetchJson<QueueStateDto>(`/queue/start${q}`, { method: "POST" });
   },
-  async stopQueue(): Promise<QueueStateDto> {
-    return fetchJson<QueueStateDto>(`/queue/stop`, { method: "POST" });
+  /** Stop one lane, or both when `lane` is omitted. */
+  async stopQueue(lane?: QueueLane): Promise<QueueStateDto> {
+    const q = lane ? `?lane=${lane}` : "";
+    return fetchJson<QueueStateDto>(`/queue/stop${q}`, { method: "POST" });
   },
   jobEventsUrl(jobId: string): string {
     return `${BASE}/jobs/${jobId}/events`;

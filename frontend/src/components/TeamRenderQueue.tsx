@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { QueueStateDto, RenderJobDto } from "../types/api";
+import type { QueueLane, QueueStateDto, RenderJobDto } from "../types/api";
 import { JobRow } from "./RenderPanel";
 import { displayName } from "../util/names";
 
@@ -12,14 +12,35 @@ interface Props {
 // sync without per-job SSE here.
 const POLL_MS = 2000;
 
+// One control per lane. Rendering and uploading are independent workers
+// (see `app/jobs/dispatcher.py`), so they get independent buttons: an
+// upload parked for hours on a YouTube quota reset must not be a reason
+// to leave rendering stopped, and stopping uploads while YouTube refuses
+// them must not stop rendering.
+const LANES: { lane: QueueLane; label: string; hint: string }[] = [
+  {
+    lane: "render",
+    label: "Rendering",
+    hint: "Encodes run one at a time - a render owns the GPU and the disk.",
+  },
+  {
+    lane: "upload",
+    label: "Uploads",
+    hint:
+      "YouTube uploads. These can park for hours waiting on a quota " +
+      "reset or the channel upload cap; they retry on their own as long " +
+      "as this lane is running.",
+  },
+];
+
 /**
- * Team-scoped render queue with start/stop control.
+ * Team-scoped job queue with per-lane start/stop control.
  *
- * The queue itself is global (one worker shared across all teams), but
- * this widget filters jobs by the current team so the dashboard stays
- * focused on the user's current context. Start/Stop affect the global
- * worker regardless - we still surface them here because this is the
- * place the user lives between editing sessions.
+ * The queue itself is global (one worker per lane, shared across all
+ * teams), but this widget filters jobs by the current team so the
+ * dashboard stays focused on the user's current context. Start/Stop
+ * affect the global workers regardless - we still surface them here
+ * because this is the place the user lives between editing sessions.
  */
 export function TeamRenderQueue({ team }: Props) {
   const [jobs, setJobs] = useState<RenderJobDto[]>([]);
@@ -62,10 +83,10 @@ export function TeamRenderQueue({ team }: Props) {
     };
   }, [reload]);
 
-  async function toggle() {
+  async function toggle(lane: QueueLane, active: boolean) {
     try {
-      if (state?.active) await api.stopQueue();
-      else await api.startQueue();
+      if (active) await api.stopQueue(lane);
+      else await api.startQueue(lane);
       await reload();
     } catch (e) {
       setErr(String(e));
@@ -90,30 +111,47 @@ export function TeamRenderQueue({ team }: Props) {
     }
   }
 
-  const active = state?.active ?? false;
-  const pending = state?.pending ?? 0;
-  const running = state?.running ?? 0;
-
   return (
     <div className="card">
       <div className="card-header">
-        <h2>Render queue</h2>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <span className="muted" style={{ fontSize: 12 }}>
-            {running} running · {pending} pending
-          </span>
-          <button
-            className={active ? "danger" : "primary"}
-            onClick={toggle}
-            disabled={!active && pending === 0 && running === 0}
-            title={
-              active
-                ? "Pause the dispatcher. The running job (if any) finishes; nothing else starts."
-                : "Resume the dispatcher and run pending jobs FIFO."
-            }
-          >
-            {active ? "Stop queue" : "Start queue"}
-          </button>
+        <h2>Job queue</h2>
+        <div
+          style={{
+            display: "flex",
+            gap: 14,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          {LANES.map(({ lane, label, hint }) => {
+            const s = state?.lanes?.[lane];
+            const active = s?.active ?? false;
+            const pending = s?.pending ?? 0;
+            const running = s?.running ?? 0;
+            return (
+              <div
+                key={lane}
+                style={{ display: "flex", gap: 6, alignItems: "center" }}
+                title={hint}
+              >
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {label}: {running} running · {pending} pending
+                </span>
+                <button
+                  className={active ? "danger" : "primary"}
+                  onClick={() => toggle(lane, active)}
+                  disabled={!active && pending === 0 && running === 0}
+                  title={
+                    active
+                      ? `Pause ${label.toLowerCase()}. The running job (if any) finishes; nothing else starts. The other lane keeps going.`
+                      : `Run pending ${label.toLowerCase()} jobs FIFO. The other lane is unaffected.`
+                  }
+                >
+                  {active ? `Stop ${label.toLowerCase()}` : `Start ${label.toLowerCase()}`}
+                </button>
+              </div>
+            );
+          })}
         </div>
       </div>
 

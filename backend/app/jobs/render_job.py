@@ -22,7 +22,7 @@ from ..render.batch import (
     highlights_from_match,
 )
 from ..render.overlays.scoreboard import TeamBranding
-from ..render.reels import build_chapters, reels_from_match
+from ..render.reels import build_timestamps, reels_from_match
 from ..render.renderer import MatchRenderer, RenderCancelled, RenderProgress
 from ..render.settings import apply_container_extension
 from ..render.thumbnail import (
@@ -290,7 +290,7 @@ def run_render(job: RenderJob) -> None:
       - "highlights" / "focused_highlights" -> batch path producing one
         file per detected span (see `app/render/batch.py`).
       - "player_reels" -> one file per PLAYER, all of their plays
-        concatenated, plus a chapter sidecar (see `app/render/reels.py`).
+        concatenated, plus a timestamp sidecar (see `app/render/reels.py`).
         Deliberately separate from "highlights": both can be run on the
         same match and neither replaces the other.
     """
@@ -674,13 +674,14 @@ def _run_player_reels(
     """Render one reel per player: all of that player's plays in one file.
 
     Each reel is a single encode of several source ranges concatenated
-    (`MatchRenderer.render(source_frame_ranges=...)`), so chapter offsets
+    (`MatchRenderer.render(source_frame_ranges=...)`), so the timestamps
     are exact and there's no intermediate concat step.
 
     Alongside every reel we write a `<reel>.chapters.txt` sidecar holding
     the timestamp list. The YouTube upload path appends it to the video
-    description, which is what makes a 12-minute reel navigable instead
-    of forcing 11 separate uploads.
+    description, where YouTube turns each line into a seekable link -
+    which is what makes a multi-minute reel navigable instead of forcing
+    11 separate uploads.
     """
     home_roster = scanner.load_team_roster(job.team)
     home, away = _team_branding(job, m, home_roster)
@@ -784,7 +785,7 @@ def _run_player_reels(
                     )
                 raise
 
-            _write_chapter_sidecar(r, spec, output_path, fps)
+            _write_timestamp_sidecar(r, spec, output_path, fps)
             generate_thumbnail(
                 job.team,
                 job.tournament,
@@ -803,42 +804,33 @@ def _run_player_reels(
     JOBS.mark_done(job.id, first_output or "")
 
 
-def _write_chapter_sidecar(renderer, spec, output_path: Path, fps: float) -> None:
+def _write_timestamp_sidecar(renderer, spec, output_path: Path, fps: float) -> None:
     """Write `<reel>.chapters.txt` next to a rendered reel.
 
     Offsets come from the renderer so they match the file exactly (a
     segment that fell entirely inside a cut region isn't in the output
     and must not shift every later timestamp).
 
-    The list is written even when YouTube won't honor it as chapters
-    (fewer than 3 plays, or a play shorter than the 10 s minimum):
-    bare timestamps in a description are still auto-linked into seekable
-    links, so they remain useful. The reason is recorded as a comment
-    line so the user can see why the chapter bar is missing.
+    The contents are a plain timestamp index, not YouTube chapters -
+    see `reels.py` for why chapters were dropped. The FILENAME keeps the
+    `.chapters.txt` suffix on purpose: every reel already on disk has one,
+    `read_chapter_sidecar` and `delete_render` both know the name, and
+    renaming it would orphan the descriptions of past uploads for no
+    gain.
     """
     try:
         spans = renderer.segment_offsets(spec.source_ranges())
-        chapters = build_chapters(spans, spec.segments, fps)
-        if not chapters.lines:
+        stamps = build_timestamps(spans, spec.segments, fps)
+        if not stamps.lines:
             return
-        body = chapters.as_text()
-        if not chapters.valid:
-            body += (
-                "\n\n# NOTE: YouTube will not show a chapter bar for this "
-                f"reel ({chapters.reason}); the timestamps above still work "
-                "as clickable links in the description."
-            )
-            logger.info(
-                "reel %s: chapters not YouTube-valid (%s)",
-                output_path.name,
-                chapters.reason,
-            )
         output_path.with_suffix(output_path.suffix + ".chapters.txt").write_text(
-            body + "\n", encoding="utf-8"
+            stamps.as_text() + "\n", encoding="utf-8"
         )
     except Exception:
-        # A missing chapter file must never fail an otherwise good render.
-        logger.warning("could not write chapter sidecar for %s", output_path, exc_info=True)
+        # A missing sidecar must never fail an otherwise good render.
+        logger.warning(
+            "could not write timestamp sidecar for %s", output_path, exc_info=True
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1262,12 +1254,12 @@ def _attach_thumbnail(job: Optional[RenderJob], file_path: Path, video_id: str) 
 
 
 def read_chapter_sidecar(file_path: Path) -> str:
-    """Chapter/timestamp lines for a render, or "" when there are none.
+    """Timestamp lines for a render, or "" when there are none.
 
-    Comment lines (the "why no chapter bar" operator note written by
-    `_write_chapter_sidecar`) are stripped - they're not for viewers.
-    Public because the upload-enqueue endpoint needs them to expand the
-    `{chapters}` placeholder.
+    Comment lines are stripped: older sidecars carry a "why no chapter
+    bar" operator note from when reels tried to satisfy YouTube's chapter
+    rules, and that note was never meant for viewers. Public because the
+    upload-enqueue endpoint needs the lines to expand `{chapters}`.
     """
     sidecar = file_path.with_suffix(file_path.suffix + ".chapters.txt")
     if not sidecar.is_file():

@@ -198,12 +198,28 @@ export interface RenderJobDto {
 }
 
 /** Aggregate state of the global render queue. */
-export interface QueueStateDto {
-  /** True when the dispatcher is processing pending jobs. */
+/** The two independent worker lanes. */
+export type QueueLane = "render" | "upload";
+
+export interface QueueLaneStateDto {
+  /** True when this lane's dispatcher is processing its pending jobs. */
   active: boolean;
   pending: number;
   running: number;
   total: number;
+}
+
+export interface QueueStateDto {
+  /**
+   * The RENDER lane's active flag, not an aggregate - uploads run in a
+   * separate lane that can be on while rendering is off.
+   */
+  active: boolean;
+  /** Counts across both lanes. */
+  pending: number;
+  running: number;
+  total: number;
+  lanes: Record<QueueLane, QueueLaneStateDto>;
 }
 
 export interface RenderFileDto {
