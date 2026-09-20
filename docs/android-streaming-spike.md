@@ -173,24 +173,43 @@ the feature honest: it removes drudgery, it does not remove tagging.
 It also gives rally boundaries for free, which is what `condensed` and
 the serve-gap warnings are built on.
 
-### The hard part: time base
+### Time base — solvable, with one thing to verify
 
 The export carries **wall-clock** timestamps. VME stores events as
-`clip_id` + `local_frame`. Bridging them needs an anchor, and there are
-two candidates:
+`clip_id` + `local_frame`. Bridging them needs an anchor:
 
 1. `Clip.start_recording_time` — VME already ffprobes `creation_time`
-   per clip for the auto-cuts heuristic. If both clocks were right,
-   the mapping is pure arithmetic.
-2. A single manual alignment point: the user picks one exported event
-   (first serve is the obvious one) and scrubs to it in the editor; the
-   difference is stored as a per-match offset.
+   per clip for the auto-cuts heuristic.
+2. A stored per-match `import_offset_seconds`, adjustable by hand.
 
-**Assume (2) is required.** DSLR clocks are routinely wrong by minutes
-and nobody sets them; phone clocks are NTP-correct. Design for a stored
-`import_offset_seconds` on the match, seeded from (1) when both
-timestamps exist and adjustable by hand. Getting this wrong puts every
-imported event at the wrong moment, which is worse than having none.
+**The DSLR clock is now synced to the phone, so (1) is the primary path
+and the mapping is arithmetic.** (2) becomes a correction affordance
+rather than a required step — build the offset field into the schema
+from day one even if the UI for it comes later, because retrofitting a
+per-match offset after events are already placed is the annoying
+version of this problem.
+
+Still worth knowing before trusting the arithmetic:
+
+- **Verify `creation_time` means what we think once.** ffprobe's
+  `creation_time` is the *start* of recording on most cameras, but some
+  write the file-close time instead — which would put the anchor one
+  clip-length out, consistently, and look like a large fixed offset.
+  VME's existing fallback (`mtime - duration`) exists precisely because
+  this metadata is unreliable. One clapper test settles it: tap a score
+  event at a visually identifiable instant, import, check where it
+  lands.
+- **Timezone and DST.** Store UTC in the export, convert once at
+  import. `creation_time` is UTC; camera-local metadata is not always.
+- **Human tap latency is real and is NOT clock error.** The operator
+  taps a second or two *after* the ball lands. That's a systematic late
+  bias on every score event, and it's the kind of thing the offset field
+  can absorb — but only if it's understood as a separate correction
+  from clock skew, since a future live-scoring device would have a
+  different bias.
+- **Re-check after a battery pull.** DSLRs commonly lose the clock when
+  the battery is out long enough. The importer's dry run is the place
+  this gets caught, which is another reason it defaults on.
 
 Also note the stream and the card are *different recordings*: the
 stream starts before the first whistle and runs continuously, while the
