@@ -90,26 +90,30 @@ reinstall and read logcat with the adapter still attached.
 3. Phone and PC must be on the **same Wi-Fi**, and not a guest network
    that isolates clients.
 
-**Then, on the PC:**
+**Then, on the PC.** Tap **Pair device with pairing code** on the phone
+and leave that popup on screen — the pairing service exists only while
+it is open — then, with the 6 digits it shows:
 
 ```
-android\deploy.cmd find                                REM shows IP:PORT
-android\deploy.cmd pair    192.168.1.50:37123 123456   REM once per phone
-android\deploy.cmd connect 192.168.1.50:41987          REM after each reboot
-android\deploy.cmd                                     REM build+install+run+log
+android\deploy.cmd pair <those 6 digits>   REM once per phone
+android\deploy.cmd connect                 REM again after each reboot
+android\deploy.cmd                         REM build+install+run+log
 ```
 
-For the pairing step, tap **Pair device with pairing code** on the
-phone — it shows a 6-digit code and an address. Keep that popup open;
-the pairing service only exists while it is on screen.
+No addresses to type: both are discovered over mDNS.
+`android\deploy.cmd find` shows what it can see and what to do next.
 
-> **The two ports are different.** The popup's port is for `pair`; the
-> main Wireless debugging screen shows another for `connect`. Using the
-> wrong one is the usual reason pairing looks broken. `deploy.cmd find`
-> labels them: `_adb-tls-pairing` vs `_adb-tls-connect`.
+> **Why no address argument.** A phone advertises *two* services on
+> *different* ports — `_adb-tls-pairing`, only while the popup is open,
+> and `_adb-tls-connect`, whenever wireless debugging is on. Giving adb
+> the connect port when it wanted the pairing one fails with
+> `protocol fault (couldn't read status message)`, which names neither
+> the cause nor the fix. Passing `HOST:PORT` by hand still works (for
+> networks that block mDNS), and that mistake is detected and explained
+> rather than merely documented.
 
-Pairing is once per phone; `connect` is needed again after a reboot, or
-whenever the phone changes the port, which it does freely.
+Pairing is once per phone. `connect` is needed again after a reboot, or
+whenever the phone changes its port, which it does freely.
 
 ### Or a cable, for the first install
 

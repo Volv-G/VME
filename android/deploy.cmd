@@ -3,9 +3,11 @@ setlocal EnableDelayedExpansion
 rem VME streamer spike - deploy to a phone.
 rem
 rem   deploy.cmd                    build, install, launch, then tail the log
-rem   deploy.cmd find               discover phones advertising wireless debugging
-rem   deploy.cmd pair HOST:PORT CODE   wireless debugging, one time per phone
-rem   deploy.cmd connect HOST:PORT     wireless debugging, each reboot
+rem   deploy.cmd find               show phones advertising wireless debugging
+rem   deploy.cmd pair CODE          pair, discovering the address over mDNS
+rem   deploy.cmd pair HOST:PORT CODE    pair with an address typed by hand
+rem   deploy.cmd connect            connect, discovering the address
+rem   deploy.cmd connect HOST:PORT  connect to an address typed by hand
 rem   deploy.cmd log                tail the spike log only
 rem   deploy.cmd devices            what adb can see
 rem   deploy.cmd apk                just print the APK path (for a manual copy)
@@ -32,40 +34,13 @@ if not exist "%ADB%" (
 
 cd /d "%~dp0"
 
-if /i "%~1"=="pair" (
-    if "%~3"=="" echo   usage: deploy.cmd pair HOST:PORT CODE  ^(both from the phone's Wireless debugging screen^) & exit /b 1
-    "%ADB%" pair %2 %3
-    exit /b %ERRORLEVEL%
-)
-
-if /i "%~1"=="connect" (
-    if "%~2"=="" echo   usage: deploy.cmd connect HOST:PORT & exit /b 1
-    "%ADB%" connect %2
-    exit /b %ERRORLEVEL%
-)
+if /i "%~1"=="pair"    goto :do_pair
+if /i "%~1"=="connect" goto :do_connect
+if /i "%~1"=="find"    goto :do_find
+if /i "%~1"=="log"     goto :tail
 
 if /i "%~1"=="devices" (
     "%ADB%" devices -l
-    exit /b %ERRORLEVEL%
-)
-
-if /i "%~1"=="find" (
-    rem Phones advertise wireless debugging over mDNS, so the IP and port
-    rem can be discovered instead of squinted at on the phone screen. Two
-    rem service types show up and they are NOT interchangeable:
-    rem   _adb-tls-pairing  only while the pairing popup is open  -> pair
-    rem   _adb-tls-connect  once paired, whenever the toggle is on -> connect
-    echo.
-    echo === discovered services
-    echo    _adb-tls-pairing entries are for 'deploy.cmd pair'
-    echo    _adb-tls-connect entries are for 'deploy.cmd connect'
-    echo.
-    "%ADB%" mdns services
-    echo.
-    echo    Nothing listed? The phone must be on the SAME Wi-Fi network,
-    echo    with Wireless debugging switched on. Some networks block mDNS
-    echo    between clients - in that case read the address off the phone
-    echo    and pass it by hand.
     exit /b %ERRORLEVEL%
 )
 
@@ -74,8 +49,6 @@ if /i "%~1"=="apk" (
     echo %APK%
     exit /b 0
 )
-
-if /i "%~1"=="log" goto :tail
 
 rem ---- default: build, install, launch, tail -----------------------------
 
@@ -88,17 +61,16 @@ if errorlevel 1 (
     echo.
     echo   No device. Either:
     echo.
+    echo     Wireless    - Developer options ^> Wireless debugging ^> on.
+    echo                   Open 'Pair device with pairing code', then:
+    echo                     deploy.cmd pair 123456      ^(the phone's code^)
+    echo                     deploy.cmd connect
+    echo                   Addresses are discovered for you. Pairing is once
+    echo                   per phone; connect again after a reboot.
+    echo.
     echo     USB cable   - enable Developer options then USB debugging,
     echo                   plug in, and accept the RSA prompt on the phone.
-    echo.
-    echo     Wireless    - Developer options ^> Wireless debugging ^> on.
-    echo                   Then, with 'Pair device with pairing code' open:
-    echo                     deploy.cmd find                  ^(shows IP:PORT^)
-    echo                     deploy.cmd pair  IP:PAIRPORT CODE
-    echo                     deploy.cmd connect IP:PORT
-    echo                   ^(the two ports differ; the pairing one is on the
-    echo                    popup, the other on the main screen. Pairing is
-    echo                    once per phone, connect is after every reboot.^)
+    echo                   ^(Remember the capture adapter wants that port.^)
     echo.
     echo     Sideload    - copy this file to the phone and tap it:
     echo                     %APK%
@@ -135,3 +107,143 @@ exit /b %ERRORLEVEL%
 echo === building
 call build.cmd assembleDebug
 exit /b %ERRORLEVEL%
+
+rem ---- wireless debugging ------------------------------------------------
+rem
+rem Phones advertise two mDNS services and they are NOT interchangeable:
+rem
+rem   _adb-tls-pairing  present only while the pairing popup is open -> pair
+rem   _adb-tls-connect  present whenever wireless debugging is on    -> connect
+rem
+rem They sit on different ports, and handing adb the wrong one fails with
+rem "protocol fault (couldn't read status message)", which names neither the
+rem cause nor the fix. So the address is discovered rather than typed, and
+rem using the wrong service is detected and explained instead of being
+rem documented and hoped about.
+
+:do_find
+echo.
+echo === phones advertising wireless debugging
+"%ADB%" mdns services
+call :lookup pairing PAIRADDR
+call :lookup connect CONNADDR
+echo.
+if defined PAIRADDR (
+    echo   pairing popup open at !PAIRADDR!
+    echo     run:  deploy.cmd pair CODE      ^(the 6 digits on the popup^)
+) else (
+    echo   No pairing service. That is normal unless the
+    echo   'Pair device with pairing code' popup is open right now.
+)
+if defined CONNADDR (
+    echo   wireless debugging at !CONNADDR!
+    echo     run:  deploy.cmd connect        ^(only works once paired^)
+)
+if not defined CONNADDR if not defined PAIRADDR (
+    echo   Nothing found. The phone must be on the SAME Wi-Fi network with
+    echo   Wireless debugging switched on. Some networks block mDNS between
+    echo   clients; if so, read the address off the phone and pass it in.
+)
+echo.
+exit /b 0
+
+:do_pair
+set "ARG2=%~2"
+set "CODE=%~3"
+
+rem One argument is the code; find the address ourselves.
+if "%CODE%"=="" (
+    set "CODE=%ARG2%"
+    set "ARG2="
+)
+if "%CODE%"=="" (
+    echo.
+    echo   usage: deploy.cmd pair CODE
+    echo   The code is the 6 digits shown by 'Pair device with pairing code'.
+    echo.
+    exit /b 1
+)
+
+call :lookup pairing PAIRADDR
+call :lookup connect CONNADDR
+
+if not "%ARG2%"=="" (
+    rem Catch the common mistake: the address off the main Wireless
+    rem debugging screen, which is the connect service, not pairing.
+    if "%ARG2%"=="!CONNADDR!" (
+        echo.
+        echo   !ARG2! is the CONNECT service, not the pairing one.
+        echo   They are different ports. Pairing is advertised only while the
+        echo   'Pair device with pairing code' popup is open.
+        if defined PAIRADDR echo   Pairing is currently at !PAIRADDR! - just run: deploy.cmd pair %CODE%
+        echo.
+        exit /b 1
+    )
+    set "PAIRADDR=%ARG2%"
+)
+
+if not defined PAIRADDR (
+    echo.
+    echo   No pairing service found.
+    echo   On the phone: Developer options ^> Wireless debugging ^>
+    echo   'Pair device with pairing code'. Leave that popup ON SCREEN -
+    echo   the pairing service exists only while it is open - then re-run:
+    echo     deploy.cmd pair %CODE%
+    echo.
+    exit /b 1
+)
+
+echo   pairing with !PAIRADDR!
+"%ADB%" pair !PAIRADDR! %CODE%
+set "RC=!ERRORLEVEL!"
+if not "!RC!"=="0" (
+    echo.
+    echo   Pairing failed. Usual causes, in order:
+    echo     - the popup was dismissed ^(the code and port both expire with it^)
+    echo     - the code was mistyped, or came from a previous popup
+    echo     - PC and phone are on different networks or VLANs
+    echo.
+    exit /b !RC!
+)
+echo.
+echo   Paired. Now run:  deploy.cmd connect
+exit /b 0
+
+:do_connect
+set "CONNADDR=%~2"
+if "%CONNADDR%"=="" call :lookup connect CONNADDR
+if not defined CONNADDR (
+    echo.
+    echo   No device advertising wireless debugging.
+    echo   Turn on Developer options ^> Wireless debugging, or pass the
+    echo   address from that screen:  deploy.cmd connect HOST:PORT
+    echo.
+    exit /b 1
+)
+echo   connecting to !CONNADDR!
+"%ADB%" connect !CONNADDR!
+set "RC=!ERRORLEVEL!"
+rem adb connect exits 0 even when it prints "failed to connect", so ask
+rem adb what it actually has rather than trusting the exit code.
+"%ADB%" get-state >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo   Not connected. If this phone has never been paired with this PC,
+    echo   pair first - connect alone is not enough:
+    echo     deploy.cmd pair CODE
+    echo.
+    exit /b 1
+)
+echo   connected. Now run:  deploy.cmd
+exit /b 0
+
+rem :lookup <pairing^|connect> <varname>
+rem Reads `adb mdns services`, whose columns are:
+rem   <instance>  _adb-tls-<kind>._tcp  <host:port>
+:lookup
+set "_want=_adb-tls-%~1._tcp"
+set "%~2="
+for /f "tokens=1,2,3" %%a in ('"%ADB%" mdns services 2^>nul') do (
+    if "%%b"=="!_want!" if not defined %~2 set "%~2=%%c"
+)
+exit /b 0
