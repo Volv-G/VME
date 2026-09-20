@@ -23,6 +23,8 @@ import { analyzeCuts } from "./cutAnalysis";
 //      15s       18 (6%)
 //      20s        1 (0%)
 //
+// (Those counts predate cut_end resetting the clock; see MARKER_TYPES.)
+//
 // 12s by request: it catches gaps 15s misses, at the cost of more
 // noise. Note the spread between matches - 12s flags 39% of Liberty
 // but 14% of Mercer Island, because Liberty's scores were logged
@@ -30,12 +32,29 @@ import { analyzeCuts } from "./cutAnalysis";
 // measuring tagging latency, so expect it to feel different per match.
 export const SERVE_GAP_WARN_SECONDS = 12;
 
-// Markers, not things that happened in the match. A cut_start dropped
-// in front of a serve is the user saying "skip this", not evidence that
+// Markers, not things that happened in the match. A cut_start dropped in
+// front of a serve is the user saying "skip this", not evidence that
 // anything was logged there, so it must not reset the clock - otherwise
 // marking dead time hides the warning about that very dead time, which
-// is backwards.
-const MARKER_TYPES = new Set(["cut_start", "cut_end", "clip_transition"]);
+// is backwards. A `clip_transition` is a join between two files; no time
+// passes at it.
+//
+// `cut_end` is NOT in this set, and the asymmetry is the point. It marks
+// where retained footage resumes, so measuring past it measures footage
+// that has already been dealt with: a serve 3s after a cut_end was
+// reported as a 20s gap because the clock was still running from before
+// the cut. Worse, the span then contained cut markers, so the one-click
+// fix refused - the warning couldn't even be acted on.
+//
+// Measured over all 11 matches in the library, 3838 events: 279 warnings
+// of which 51 could not be acted on, down to 235 of which 0 cannot. So
+// it removes 44 false warnings AND every refusal, while the number of
+// ACTIONABLE gaps goes UP (228 -> 235) and the footage they would remove
+// goes up with it (30.8 -> 31.8 min).
+//
+// The safeguard above survives because only the END resets: an unclosed
+// cut_start still can't silence anything.
+const MARKER_TYPES = new Set(["cut_start", "clip_transition"]);
 
 /**
  * Breathing room left at each end of a one-click cut.
@@ -77,7 +96,8 @@ export interface ServeGap {
  *
  * Two things are excluded from "the preceding event":
  *
- * - Cut markers and clip transitions, per `MARKER_TYPES`.
+ * - `cut_start` and clip transitions, per `MARKER_TYPES`. A `cut_end`
+ *   counts: retained footage resumes there.
  * - Footage inside a COMPLETE cut region, which is subtracted from the
  *   measured gap: that time is removed from the render, so it isn't
  *   dead time in the finished video and there is nothing to warn about.
