@@ -43,6 +43,16 @@ adapter, DSLR. Nothing below questions the rig.
   3. No scoreboard at all in v1; stream clean video.
   Decide this before step 3; it changes what the app is.
 
+  Option 1 is now the clear favourite, because those taps are also the
+  export (see next section). The widget pays for itself twice: it
+  drives the overlay *and* it produces the match record.
+
+- **VME integration is an export/import file, not a live API.** The app
+  writes a match record; VME imports it as a match with events already
+  in place. No network dependency in the gym, no OAuth on the phone, no
+  partial-sync states to reason about, and the app stays useful when
+  the backend is unreachable — which is most of the time in a gym.
+
 ---
 
 ## Step 0 — UVC capture spike (do this first, one evening)
@@ -137,11 +147,106 @@ and only replace the capture app.
 
 ---
 
+## Step 1b — the export/import bridge (independent of everything above)
+
+This can be built and shipped **before, after, or entirely without** the
+streaming app, because it's a file format plus an importer. It is also
+the part with the clearest payoff per hour spent.
+
+### What it prepopulates, honestly
+
+Nobody taps `kill` / `dig` / `block` while operating a camera. What a
+courtside operator *can* realistically produce is the **scoreboard
+spine**:
+
+- `score` (and `score_correction`)
+- `set_end`, `game_start`, `game_end`
+- `first_serve` / `ball_served` if the widget makes it one tap
+- `substitution` and timeouts if they're entered at all
+
+That's precisely the tedious half in VME — score bookkeeping is the
+part that has to be right and is no fun to reconstruct — while the
+action tags (`kill`, `ace`, `dig`, `highlight`, focus spans) stay a
+deliberate post-match pass. Being clear about this split is what keeps
+the feature honest: it removes drudgery, it does not remove tagging.
+
+It also gives rally boundaries for free, which is what `condensed` and
+the serve-gap warnings are built on.
+
+### The hard part: time base
+
+The export carries **wall-clock** timestamps. VME stores events as
+`clip_id` + `local_frame`. Bridging them needs an anchor, and there are
+two candidates:
+
+1. `Clip.start_recording_time` — VME already ffprobes `creation_time`
+   per clip for the auto-cuts heuristic. If both clocks were right,
+   the mapping is pure arithmetic.
+2. A single manual alignment point: the user picks one exported event
+   (first serve is the obvious one) and scrubs to it in the editor; the
+   difference is stored as a per-match offset.
+
+**Assume (2) is required.** DSLR clocks are routinely wrong by minutes
+and nobody sets them; phone clocks are NTP-correct. Design for a stored
+`import_offset_seconds` on the match, seeded from (1) when both
+timestamps exist and adjustable by hand. Getting this wrong puts every
+imported event at the wrong moment, which is worse than having none.
+
+Also note the stream and the card are *different recordings*: the
+stream starts before the first whistle and runs continuously, while the
+card may be split into several clips with gaps. The offset is to the
+global timeline, and clip gaps still have to be resolved through the
+existing clip/frame machinery.
+
+### Format sketch
+
+A single JSON file, using the **existing event type names** so the
+importer is thin:
+
+```jsonc
+{
+  "source": "vme-streamer/1.0",
+  "broadcast": { "video_id": "...", "started_at": "2026-09-10T18:31:22Z" },
+  "match": { "opponent": "Bellevue", "date": "2026-09-10" },
+  "events": [
+    { "type": "game_start", "at": "2026-09-10T18:33:04.120Z" },
+    { "type": "score", "at": "2026-09-10T18:33:41.880Z", "team": "home" }
+  ]
+}
+```
+
+### Importer
+
+`POST .../matches/{match}/import` with:
+
+- **A dry run that is the default.** Report how many events of each
+  type, the wall-clock span, and where the first and last would land on
+  the current timeline — *before* touching `match.json`.
+- **Merge vs replace**, stated explicitly. Re-importing after fixing the
+  offset must not double every score.
+- Provenance on each imported event, so a later "undo the import" is
+  possible without guessing which events were hand-made.
+
+### Bonus: it may remove the backend from step 2 entirely
+
+If the only VME integration is a file, the app doesn't need to talk to
+the VME API at all in v1 — the stream key can be fetched once from
+YouTube Studio (or shown by the webapp and scanned as a QR) and stored.
+That deletes `POST /api/live/sessions`, the OAuth brokering, and every
+auth failure mode from the critical path of a match day.
+
+The backend-brokered version below is still the better end state (title,
+description, thumbnail and privacy all come from templates you already
+maintain), but it is now an **improvement, not a prerequisite**.
+
+---
+
 ## Step 2 — UVC → RTMPS → YouTube, no overlay
 
 Smallest thing that replaces both apps.
 
-**Backend** (`backend/app/api/live.py`, new):
+**Backend** (`backend/app/api/live.py`, new) — *optional, see step 1b;
+a hardcoded stream key is a legitimate v1*:
 
 - `POST /api/live/sessions` → creates the broadcast, returns ingest URL
   + stream key + `video_url`.
@@ -246,15 +351,23 @@ bandwidth, phone thermals, and UVC negotiation.
 ## Deferred ideas (explicitly out of scope, recorded so they aren't re-derived)
 
 These were attractive when the app was also going to be the tagger. It
-isn't. Revisit only if that changes.
+isn't, and the export/import bridge (step 1b) covers the useful part
+without any of them. Revisit only if live scoring ever reopens.
 
-- App emits `ball_served` / `kill` / `ace` / … to the match API, so
-  `match.json` arrives pre-tagged and reels render the same evening.
+- App POSTs events to the match API **live**. Superseded by the file
+  export: same data, no network dependency, no auth on the phone, no
+  half-synced match to reconcile.
+- Second scoring device on the rig's LAN via a local WebSocket hosted by
+  the phone.
+- Offline event queue on the phone, syncing to VME opportunistically.
+  (The export file *is* the offline queue, flushed once, by hand.)
+
+Still worth doing once the bridge exists, because the export carries
+the broadcast's `video_id` and `started_at`:
+
 - Auto-generated description timestamps linking into the archive with
   `&t=`, from `build_timestamps()` plus broadcast start wall-clock.
-- Second scoring device on the rig's LAN via a local WebSocket hosted by
-  the phone, so scoring survives losing internet.
-- Offline event queue on the phone, syncing to VME opportunistically.
+  This needs no live integration at all — just the imported events.
 
 ---
 
