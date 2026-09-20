@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { MatchDto } from "../types/api";
 import { ClipManager } from "../components/ClipManager";
+import { resolveClipFromGlobal } from "../components/clipFrames";
 import { ControlsPanel } from "../components/Controls/ControlsPanel";
 import { EventList } from "../components/EventList";
 import { Modal } from "../components/Modal";
@@ -143,6 +144,58 @@ export function MatchEditorPage() {
     setData(await api.deleteEvent(team, tournament, date, match, id));
     if (selectedEventId === id) setSelectedEventId(null);
   }
+  /** Create a cut_start/cut_end pair spanning [startFrame, endFrame].
+   *
+   * There is no batch event endpoint, so this is two POSTs. If the second
+   * fails the first is rolled back: a lone cut_start is an orphan that
+   * drops nothing at render time but does show up in red, and leaving the
+   * user to clean up after a failure they didn't cause is rude. The
+   * rollback is best-effort - if it also fails, the orphan badge is
+   * exactly the right way to surface that.
+   */
+  async function insertCut(startFrame: number, endFrame: number) {
+    if (!data) return;
+    const s = resolveClipFromGlobal(data.clips, startFrame);
+    const e = resolveClipFromGlobal(data.clips, endFrame);
+    if (!s || !e) return;
+    const prevIds = new Set(data.events.map((ev) => ev.id));
+    try {
+      const afterStart = await api.createEvent(team, tournament, date, match, {
+        type: "cut_start",
+        clip_id: s.clipId,
+        local_frame: s.localFrame,
+      });
+      const startId = afterStart.events.find((ev) => !prevIds.has(ev.id))?.id;
+      let updated;
+      try {
+        updated = await api.createEvent(team, tournament, date, match, {
+          type: "cut_end",
+          clip_id: e.clipId,
+          local_frame: e.localFrame,
+        });
+      } catch (err) {
+        if (startId !== undefined) {
+          try {
+            setData(
+              await api.deleteEvent(team, tournament, date, match, startId)
+            );
+          } catch {
+            setData(afterStart);
+          }
+        }
+        throw err;
+      }
+      setData(updated);
+      // Select the cut_start, not the cut_end: it's the edge the user is
+      // most likely to want to nudge, and it keeps the list parked at the
+      // top of the span rather than at the serve they were already looking
+      // at.
+      if (startId !== undefined) setSelectedEventId(startId);
+      setError(null);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
   /** Persist a team color edited from a team-card swatch.
    *
    * Home is a team-level property (roster.json, shared by every match),
@@ -259,6 +312,7 @@ export function MatchEditorPage() {
             onSelect={setSelectedEventId}
             onDelete={(id) => void deleteEvent(id)}
             onSeek={seek}
+            onInsertCut={insertCut}
             fps={data.fps}
             homeRoster={data.home_roster}
             opponentRoster={data.opponent_roster}

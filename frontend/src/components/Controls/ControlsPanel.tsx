@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { AutoCutsResultDto, ClipDto, MatchDto } from "../../types/api";
+import type { AutoCutsResultDto, MatchDto } from "../../types/api";
+import { resolveClipFromGlobal } from "../clipFrames";
 import { LineupGrid } from "./LineupGrid";
 import { RosterPicker } from "./RosterPicker";
 import { ScoreDisplay } from "./ScoreDisplay";
@@ -112,20 +113,6 @@ const MATCH_ACTIONS: ActionDef[] = [
     payload: { fade_frames: 30 },
   },
 ];
-
-function resolveClipFromGlobal(
-  clips: ClipDto[],
-  globalFrame: number
-): { clipId: string; localFrame: number } | null {
-  let acc = 0;
-  for (const c of clips) {
-    if (globalFrame < acc + c.frame_count) return { clipId: c.id, localFrame: globalFrame - acc };
-    acc += c.frame_count;
-  }
-  if (clips.length === 0) return null;
-  const last = clips[clips.length - 1];
-  return { clipId: last.id, localFrame: last.frame_count - 1 };
-}
 
 export function ControlsPanel({
   data,

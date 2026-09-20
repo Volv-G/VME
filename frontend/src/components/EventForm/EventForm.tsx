@@ -1,22 +1,12 @@
 import { useState } from "react";
 import { EVENT_TYPES, type EventType } from "../../types/api";
 import type { ClipDto } from "../../types/api";
+import { resolveClipFromGlobal } from "../clipFrames";
 
 interface Props {
   clips: ClipDto[];
   currentFrame: number;
   onCreate: (body: { type: string; clip_id?: string; local_frame?: number; payload?: Record<string, unknown> }) => Promise<void>;
-}
-
-function resolveClipFromGlobal(clips: ClipDto[], globalFrame: number) {
-  let acc = 0;
-  for (const c of clips) {
-    if (globalFrame < acc + c.frame_count) return { clipId: c.id, localFrame: globalFrame - acc };
-    acc += c.frame_count;
-  }
-  if (clips.length === 0) return null;
-  const last = clips[clips.length - 1];
-  return { clipId: last.id, localFrame: last.frame_count - 1 };
 }
 
 export function EventForm({ clips, currentFrame, onCreate }: Props) {

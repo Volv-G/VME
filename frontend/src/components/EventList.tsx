@@ -10,7 +10,7 @@ import type { EventDto, RosterDto } from "../types/api";
 import { EMPTY_STATE } from "./Controls/state";
 import { analyzeCuts } from "./cutAnalysis";
 import { analyzeFocus } from "./focusAnalysis";
-import { analyzeServeGaps } from "./serveGaps";
+import { GAP_CUT_PAD_SECONDS, analyzeServeGaps } from "./serveGaps";
 import { summarizeEvent } from "./eventSummary";
 import { eventIcon } from "./eventStyle";
 
@@ -22,6 +22,11 @@ interface Props {
   onSelect: (id: number) => void;
   onDelete: (id: number) => void;
   onSeek: (globalFrame: number) => void;
+  /**
+   * Insert a cut_start/cut_end pair over a global-frame span. Optional:
+   * without it the gap warnings stay informational labels.
+   */
+  onInsertCut?: (startFrame: number, endFrame: number) => Promise<void>;
   fps: number;
   homeRoster: RosterDto;
   opponentRoster: RosterDto;
@@ -36,6 +41,7 @@ export function EventList({
   onSelect,
   onDelete,
   onSeek,
+  onInsertCut,
   fps,
   homeRoster,
   opponentRoster,
@@ -63,6 +69,23 @@ export function EventList({
   // usually something wasn't logged. Warning, not error: real breaks
   // exist, so we show the gap and let the user judge.
   const serveGaps = useMemo(() => analyzeServeGaps(events, fps), [events, fps]);
+
+  // Serve id whose cut is being created, so the badge can't be
+  // double-clicked into two overlapping cut pairs while the POSTs are in
+  // flight (the list only re-analyzes once the match comes back).
+  const [cuttingId, setCuttingId] = useState<number | null>(null);
+  const insertCut = useCallback(
+    async (serveId: number, span: { start: number; end: number }) => {
+      if (!onInsertCut || cuttingId !== null) return;
+      setCuttingId(serveId);
+      try {
+        await onInsertCut(span.start, span.end);
+      } finally {
+        setCuttingId(null);
+      }
+    },
+    [onInsertCut, cuttingId]
+  );
 
   // Pre-compute summary strings so the empty-list check below still has a
   // search bar and the match count is consistent with what's rendered.
@@ -246,11 +269,17 @@ export function EventList({
         const summary = summaries[i];
         const isOrphan = orphanIds.has(ev.id);
         const gap = serveGaps.get(ev.id);
-        const gapLabel = gap === undefined ? null : `${gap.toFixed(1)}s`;
+        const gapLabel = gap === undefined ? null : `${gap.seconds.toFixed(1)}s`;
+        const canCut = !!gap?.cut && !!onInsertCut;
         const gapReason =
           gap === undefined
             ? ""
-            : `${gap.toFixed(1)}s since the previous event - check for a missing event before this serve`;
+            : `${gap.seconds.toFixed(1)}s since the previous event - check for a missing event before this serve` +
+              (canCut
+                ? `\nClick to cut from ${GAP_CUT_PAD_SECONDS}s after the previous event to ${GAP_CUT_PAD_SECONDS}s before this serve`
+                : gap.cut === null
+                  ? "\n(can't auto-cut: the gap already contains cut markers)"
+                  : "");
         const isMatch =
           lowerQuery !== "" && summary.toLowerCase().includes(lowerQuery);
         const orphanReason =
@@ -291,9 +320,26 @@ export function EventList({
               <div className="event-row-text" title={title}>
                 {isOrphan && <span className="orphan-badge" title={orphanReason}>!</span>}
                 {gapLabel && !isOrphan && (
-                  <span className="gap-badge" title={gapReason}>
-                    ⚠ {gapLabel}
-                  </span>
+                  canCut ? (
+                    <button
+                      type="button"
+                      className="gap-badge actionable"
+                      title={gapReason}
+                      disabled={cuttingId !== null}
+                      onClick={(e) => {
+                        // The row seeks on click; cutting shouldn't move
+                        // the playhead out from under the user.
+                        e.stopPropagation();
+                        void insertCut(ev.id, gap!.cut!);
+                      }}
+                    >
+                      {cuttingId === ev.id ? "…" : "✂"} {gapLabel}
+                    </button>
+                  ) : (
+                    <span className="gap-badge" title={gapReason}>
+                      ⚠ {gapLabel}
+                    </span>
+                  )
                 )}
                 <span className="event-row-icon" aria-hidden="true">
                   {eventIcon(ev.type)}
