@@ -1,6 +1,8 @@
 # Android streaming app — spike plan
 
-Status: **not started.** Parked for future execution.
+Status: **step 0 harness built, not yet run on hardware.**
+The harness is `android/` - see [its README](../android/README.md).
+Everything past step 1 is still parked.
 
 Goal: replace the current two-app match-day chain with one Android app
 that captures the DSLR over HDMI→USB, burns in the VME scoreboard, and
@@ -79,14 +81,35 @@ negotiation.
 
 ### Procedure
 
-1. Build and run the **UVCAndroid demo app** on the actual phone with
-   the actual adapter.
-2. Log the full `supportedSizeList` — every entry's width, height, fps
-   and `type`. Paste it into this file under "Findings".
-3. Run RootEncoder's `rotation` example → Video Source → **CameraUVC**.
-4. If negotiation fails, walk the list: MJPEG first, then lower
-   resolutions, then let the library pick (omit `setPreviewSize`
-   entirely — that resolved it for some reporters).
+Build `android/` and run it on the actual phone with the actual adapter.
+It replaces the "run two demo apps" plan with one harness whose buttons
+map onto the questions:
+
+1. **1 PROBE** - reads the USB descriptors directly, with no library in
+   the way, and prints every advertised format with its real frame
+   rates. It also says whether a USB **audio** interface exists at all.
+   Paste the output into "Findings".
+2. **2 PREVIEW** - opens the adapter through UVCAndroid and renders it.
+   This is the exit criterion below.
+3. **3 STREAM** - RTMPS, which is really step 2, but it is two more
+   lines once the camera is open.
+
+The probe comes first on purpose. When libuvc fails with
+`could not negotiate with camera: err = -51`, that message cannot tell
+you whether the adapter lacks the format or the library is mis-asking -
+and those have completely different fixes. The descriptors can.
+
+**One thing found while building the harness, before any hardware:**
+RootEncoder's `CameraUvcSource` calls bare `openCamera()`, and its
+`create()` *ignores* the width/height/fps passed to `prepareVideo` -
+those configure the encoder, not the camera. So the stock source streams
+whatever the adapter defaulted to, upscaled, with no way to ask for
+anything else. The harness ships its own `UvcVideoSource` that opens
+once to read `supportedSizeList`, then reopens with a chosen entry via
+`openCamera(Size)`, and never calls `setPreviewSize` - which per the
+UVCAndroid author (issue #1) is the wrong tool for choosing a format up
+front, and per issue #135 is what throws `Failed to set preview size`
+when a card advertises 1080p at 60fps only and you ask for 30.
 
 ### Also in the same evening: audio
 
@@ -94,12 +117,15 @@ HDMI capture audio arrives as a **separate USB audio (UAC) device**, not
 inside the UVC video stream. RootEncoder's `MicrophoneSource` will not
 pick it up by default.
 
-- Test `AudioRecord` with `setPreferredDevice()` on the
-  `AudioDeviceInfo.TYPE_USB_DEVICE` entry, or write a custom
-  `AudioSource`.
-- Confirm the adapter actually exposes an audio interface at all — some
-  cheap ones don't, in which case the audio has to come from the phone
-  mic (which for a gym is arguably fine, possibly better).
+The harness handles both halves of this: **1 PROBE** reports whether the
+adapter exposes an audio interface at all, and **2 PREVIEW** calls
+`MicrophoneSource.setPreferredDevice()` with the `TYPE_USB_DEVICE` entry
+if one exists, logging what it settled on. No custom `AudioSource`
+needed - the routing hook is already there and returns a `Boolean`.
+
+If there is no USB audio device, the phone mic is used and the log says
+so. For a gym that is arguably the better outcome anyway: crowd noise
+beats a line feed of nothing.
 
 ### What to record
 
