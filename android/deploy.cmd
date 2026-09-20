@@ -56,8 +56,16 @@ call :build || exit /b 1
 
 echo.
 echo === checking for a device
-"%ADB%" get-state >nul 2>&1
-if errorlevel 1 (
+call :pick_device
+if defined SERIAL echo   using !SERIAL!
+if not defined SERIAL (
+    if defined UNAUTHORIZED (
+        echo.
+        echo   Found !UNAUTHORIZED! but it has not authorised this PC.
+        echo   Unlock the phone and accept the 'Allow USB debugging' prompt.
+        echo.
+        exit /b 1
+    )
     echo.
     echo   No device. Either:
     echo.
@@ -82,7 +90,7 @@ echo.
 echo === installing
 rem -r reinstall, -t allow test builds, -g pre-grant runtime permissions so
 rem the harness does not stop to ask for the microphone.
-"%ADB%" install -r -t -g "%APK%"
+"%ADB%" -s !SERIAL! install -r -t -g "%APK%"
 if errorlevel 1 (
     echo.
     echo   Install failed. If it says INSTALL_FAILED_UPDATE_INCOMPATIBLE the
@@ -94,13 +102,21 @@ if errorlevel 1 (
 
 echo.
 echo === launching
-"%ADB%" shell monkey -p %PKG% -c android.intent.category.LAUNCHER 1 >nul 2>&1
+"%ADB%" -s !SERIAL! shell monkey -p %PKG% -c android.intent.category.LAUNCHER 1 >nul 2>&1
+goto :tail_with_serial
 
 :tail
+call :pick_device
+if not defined SERIAL (
+    echo   No device to read logs from. Run: deploy.cmd connect
+    exit /b 1
+)
+
+:tail_with_serial
 echo.
 echo === logcat ^(Ctrl+C to stop^)
-"%ADB%" logcat -c
-"%ADB%" logcat -s VMESpike:V UVCCamera:V libUVCCamera:V UVCPreview:V RootEncoder:V AndroidRuntime:E
+"%ADB%" -s !SERIAL! logcat -c
+"%ADB%" -s !SERIAL! logcat -s VMESpike:V UVCCamera:V libUVCCamera:V UVCPreview:V RootEncoder:V AndroidRuntime:E
 exit /b %ERRORLEVEL%
 
 :build
@@ -222,11 +238,14 @@ if not defined CONNADDR (
 )
 echo   connecting to !CONNADDR!
 "%ADB%" connect !CONNADDR!
-set "RC=!ERRORLEVEL!"
-rem adb connect exits 0 even when it prints "failed to connect", so ask
-rem adb what it actually has rather than trusting the exit code.
-"%ADB%" get-state >nul 2>&1
-if errorlevel 1 (
+rem adb connect exits 0 even when it prints "failed to connect", so ask adb
+rem what it actually has. Not get-state though: adb usually ALSO auto-
+rem connects to the same phone over mDNS, so the normal state after a
+rem successful connect is two transports to one handset, and get-state
+rem answers "more than one device/emulator" - failure-shaped output for a
+rem working setup.
+call :pick_device
+if not defined SERIAL (
     echo.
     echo   Not connected. If this phone has never been paired with this PC,
     echo   pair first - connect alone is not enough:
@@ -234,7 +253,24 @@ if errorlevel 1 (
     echo.
     exit /b 1
 )
-echo   connected. Now run:  deploy.cmd
+echo   connected as !SERIAL!. Now run:  deploy.cmd
+exit /b 0
+
+rem :pick_device - set SERIAL to the first usable device, or UNAUTHORIZED to
+rem a device that is refusing us. `adb devices` prints "<serial> <state>",
+rem with a header line that tokenises harmlessly.
+rem
+rem One phone can legitimately appear more than once - an explicit
+rem connect and adb's own mDNS auto-connect are separate transports to the
+rem same handset - so every later adb call is pinned with -s rather than
+rem left to guess.
+:pick_device
+set "SERIAL="
+set "UNAUTHORIZED="
+for /f "tokens=1,2" %%a in ('"%ADB%" devices 2^>nul') do (
+    if "%%b"=="device" if not defined SERIAL set "SERIAL=%%a"
+    if "%%b"=="unauthorized" if not defined UNAUTHORIZED set "UNAUTHORIZED=%%a"
+)
 exit /b 0
 
 rem :lookup <pairing^|connect> <varname>
