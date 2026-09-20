@@ -73,6 +73,15 @@ kotlin {
 }
 
 dependencies {
+    // Play Services authorization: the only supported way on Android to get a
+    // Google access token for a scope. Google's installed-app guide states
+    // that custom URI schemes are no longer supported on Android and that
+    // loopback redirects are deprecated for mobile, which rules out the
+    // AppAuth redirect flows with Google as the provider. It also hands back a
+    // short-lived access token and NO refresh token, which is exactly the
+    // property the spike doc demands: nothing long-lived to ship or leak.
+    implementation("com.google.android.gms:play-services-auth:21.3.0")
+
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity:1.9.3")
 

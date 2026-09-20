@@ -18,7 +18,66 @@ Buttons run in order. Each can fail independently, which is deliberate:
 |---|---|
 | **1 PREVIEW** | Can UVCAndroid open the adapter and produce frames? This is the **step 0 exit criterion**. |
 | **2 STREAM** | Does RTMPS to YouTube hold up? The **step 2 exit criterion**. The ingest URL is prefilled from `local.properties`. |
+| **3 GO LIVE** | Create a **titled** broadcast from the phone, bind it to the channel's stream key, and start streaming to it. Needs the one-time setup below. |
 | **COPY** | Whole log to the clipboard, and to a file under the app's external files dir. |
+
+## GO LIVE: creating the broadcast from the phone
+
+A persistent stream key makes YouTube auto-create a broadcast when bytes
+arrive - which inherits whatever title is saved on the stream, so a season
+ends up as a column of identically named videos. **3 GO LIVE** instead
+creates the broadcast first, with the title in the text field, and binds it
+to the key before streaming.
+
+The title is decided at the gym, which is the only place the opponent is
+reliably known.
+
+### What it does not need
+
+No OAuth client secret, and **no refresh token**. Play Services mints a
+short-lived access token on the device; it lasts about an hour and is never
+persisted. That is long enough, because the API is only used to *create* the
+broadcast - once RTMP bytes are flowing, YouTube authenticates them by the
+stream key alone, so a two-hour match outlives the token harmlessly.
+
+Google's installed-app guide rules out the alternatives: custom URI schemes
+are no longer supported on Android, and loopback redirects are deprecated for
+mobile, so AppAuth's usual redirect flows do not apply to Google here.
+
+### One-time setup: register an Android OAuth client
+
+Google identifies the app by its **package name and signing certificate**,
+not by a client id in the code - which is why there is no client id to leak.
+That registration has to exist, once per signing key:
+
+1. Google Cloud console -> the project that already holds the VME OAuth
+   client -> **APIs & Services -> Credentials**.
+2. **Create credentials -> OAuth client ID -> Android**.
+3. Package name: `works.vme.streamer`
+4. SHA-1 of the debug keystore:
+
+   ```
+   keytool -list -v -keystore %USERPROFILE%\.android\debug.keystore \
+       -alias androiddebugkey -storepass android -keypass android
+   ```
+
+   On this machine that is
+   `10:1F:04:59:36:4C:15:73:FA:2E:18:31:54:87:6C:48:01:B8:F6:EA`.
+   **The debug keystore is per machine** - building on a different computer
+   produces a different fingerprint and needs its own client entry.
+5. The Google account signing in must be a **test user** on the consent
+   screen if it is still in "Testing" status, and must own the channel.
+
+If this registration is missing or mismatched, Play Services fails with
+`ApiException: 10` (DEVELOPER_ERROR) and says nothing about why. The app
+translates that one case, because the raw message names neither the package
+nor the certificate.
+
+### Quota
+
+`liveStreams.list` is 1 unit, `liveBroadcasts.insert` 50, `bind` 50 - about
+**100 per match** against 10,000/day. A `videos.insert` upload costs 1600,
+so this is noise by comparison.
 
 There was a **PROBE** button that dumped raw USB descriptors with no
 library involved. It answered its question - this adapter advertises

@@ -21,6 +21,9 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.pedro.common.ConnectChecker
@@ -61,6 +64,17 @@ class MainActivity : ComponentActivity(), ConnectChecker {
     private lateinit var logView: TextView
     private lateinit var surfaceView: SurfaceView
     private lateinit var urlInput: EditText
+    private lateinit var titleInput: EditText
+
+    /**
+     * The access token from Play Services. Short-lived by design and never
+     * persisted: it is needed for the two API calls that create a broadcast,
+     * and after that YouTube authenticates the stream by its key alone. A
+     * token that outlives the moment it is used is a liability, not a feature.
+     */
+    private var accessToken: String? = null
+
+    private lateinit var consentLauncher: ActivityResultLauncher<IntentSenderRequest>
 
     private val target = UvcVideoSource.Target(width = 1920, height = 1080)
     private val uvcSource by lazy { UvcVideoSource(target, ::log) }
@@ -78,6 +92,16 @@ class MainActivity : ComponentActivity(), ConnectChecker {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Must be registered before onStart, hence here rather than lazily.
+        consentLauncher = registerForActivityResult(
+            ActivityResultContracts.StartIntentSenderForResult()
+        ) { result ->
+            YouTubeAuth.handleResult(this, result.data, ::log) { token ->
+                accessToken = token
+                goLiveWithToken(token)
+            }
+        }
+
         setContentView(buildUi())
 
         log("VME streamer spike harness")
@@ -117,6 +141,7 @@ class MainActivity : ComponentActivity(), ConnectChecker {
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         buttons.addView(button("1 PREVIEW") { startPreview() })
         buttons.addView(button("2 STREAM") { toggleStream() })
+        buttons.addView(button("3 GO LIVE") { goLive() })
         buttons.addView(button("COPY") { copyLog() })
         buttons.addView(button("CLEAR") { logView.text = "" })
         root.addView(HorizontalScrollView(this).apply { addView(buttons) })
@@ -131,6 +156,15 @@ class MainActivity : ComponentActivity(), ConnectChecker {
             setText(BuildConfig.STREAM_URL)
         }
         root.addView(urlInput)
+
+        titleInput = EditText(this).apply {
+            hint = "broadcast title (GO LIVE)"
+            inputType = InputType.TYPE_CLASS_TEXT
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            setText(defaultTitle())
+        }
+        root.addView(titleInput)
 
         surfaceView = SurfaceView(this)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -170,6 +204,78 @@ class MainActivity : ComponentActivity(), ConnectChecker {
         text = label
         gravity = Gravity.CENTER
         setOnClickListener { onClick() }
+    }
+
+    // ---- GO LIVE: create a titled broadcast, then stream to it ------------
+
+    /** Today's date, so two matches in one day are still tellable apart. */
+    private fun defaultTitle(): String =
+        "VME " + SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.US).format(Date())
+
+    /**
+     * One button, three steps: get a token, prepare the broadcast, stream.
+     *
+     * Deliberately not split into three buttons. At a gym the useful question
+     * is "are we live?", and a sequence that can be half-completed invites
+     * being half-completed.
+     */
+    private fun goLive() {
+        if (stream.isStreaming) {
+            log("already streaming - press 2 STREAM to stop first")
+            return
+        }
+        if (!stream.isOnPreview) {
+            log("open the camera first (1 PREVIEW), so we do not create a " +
+                "broadcast with nothing to send it")
+            return
+        }
+        val token = accessToken
+        if (token != null) {
+            goLiveWithToken(token)
+        } else {
+            YouTubeAuth.requestToken(this, consentLauncher, ::log) { fresh ->
+                accessToken = fresh
+                goLiveWithToken(fresh)
+            }
+        }
+    }
+
+    private fun goLiveWithToken(token: String) {
+        val title = titleInput.text.toString().ifBlank { defaultTitle() }
+        // Network on the main thread is an exception on Android, and these are
+        // three round trips to Google.
+        Thread {
+            try {
+                log("live: listing stream keys...")
+                val streams = YouTubeLive.listStreams(token)
+                streams.forEach { log("   ${it.title} (...${it.key.takeLast(4)})") }
+
+                // Prefer the key this build was configured with, when there is
+                // one: it is the difference between "the key we mean" and
+                // "whichever key came back first".
+                val tail = BuildConfig.STREAM_URL.takeLast(4).ifBlank { null }
+                val chosen = YouTubeLive.pickStream(streams, tail)
+                log("live: using \"${chosen.title}\" (...${chosen.key.takeLast(4)})")
+
+                log("live: creating broadcast \"$title\"...")
+                val broadcast = YouTubeLive.createBroadcast(
+                    token = token,
+                    title = title,
+                    description = "Streamed from the VME Android harness.",
+                    privacyStatus = "unlisted",
+                )
+                YouTubeLive.bind(token, broadcast.id, chosen.id)
+                log("live: bound. ${broadcast.watchUrl}")
+
+                val url = "${YouTubeLive.INGEST_PRIMARY}/${chosen.key}"
+                runOnUiThread {
+                    urlInput.setText(url)
+                    startStream(url)
+                }
+            } catch (exc: Exception) {
+                log("live: ${exc.message ?: exc.toString()}")
+            }
+        }.start()
     }
 
     // The USB permission prompt is not handled here. CameraHelper's
@@ -263,9 +369,16 @@ class MainActivity : ComponentActivity(), ConnectChecker {
             return
         }
         if (!stream.isOnPreview) {
-            log("not previewing yet - press 2 PREVIEW first so the camera is open")
+            log("not previewing yet - press 1 PREVIEW first so the camera is open")
             return
         }
+        startStream(url)
+    }
+
+    /** Start pushing to `url`. Shared by 2 STREAM and 3 GO LIVE. */
+    private fun startStream(url: String) {
+        // The key is the credential; it does not belong in a log that gets
+        // pasted into a document.
         log("startStream(${url.substringBeforeLast('/')}/***)")
         stream.startStream(url)
     }
