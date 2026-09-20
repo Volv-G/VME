@@ -143,6 +143,8 @@ beats a line feed of nothing.
 
 - Adapter chipset (MS2109-class = USB 2.0, typically 1080p30 MJPEG only,
   1080p5 uncompressed; MS2130/USB3-class = easier).
+  **Measured: USB 2.0 class behaviour exactly — 1080p MJPEG to 50fps,
+  1080p uncompressed only 10/5fps.**
 - Android version of the test device.
 - Whether preview worked, at what format/resolution/fps.
 - Whether USB audio enumerated and captured.
@@ -430,13 +432,65 @@ the broadcast's `video_id` and `started_at`:
 
 ## Findings
 
-_(fill in during step 0 / step 1)_
+### Step 0, PROBE — 2026-09-19. **The hardware is fine.**
 
-- Adapter chipset:
-- Test device + Android version:
-- `supportedSizeList`:
-- UVCAndroid demo result:
-- RootEncoder `CameraUvcSource` result:
-- USB audio device enumerated / captured:
+- **Test device:** Samsung Galaxy S24 (SM-S921U1), Android 16 (API 36).
+- **Adapter:** `345f:2130`, UltraSemi "Guermok USB2 Video", serial
+  44881096. Class MISC/IAD, **6 interfaces**: 2x video (UVC), 3x audio
+  (UAC), 1x HID.
+- **UVC video: YES. UAC audio: YES.** Both on the one adapter, which
+  settles the open question from the audio section below.
+- **22 advertised formats** parsed from 1204 descriptor bytes.
+
+The formats matter more than the count. MJPEG:
+
+| Resolution | fps offered |
+|---|---|
+| **1920x1080** | **50, 30, 25, 20, 10** |
+| 2560x1440 | 30, 10 |
+| 1600x1200, 1360x768, 1280x1024, 1280x960, 1280x720, 1024x768, 800x600, 720x576, 720x480 | 60, 50, 30, 20, 10 |
+
+Uncompressed (YUY2) exists at every one of those resolutions too, but
+**1080p only at 10 and 5 fps** — a textbook USB 2.0 bandwidth wall, and
+exactly why the source insists on MJPEG.
+
+**1080p MJPEG at 30fps is advertised outright**, so the feared
+UVCAndroid #135 scenario (1080p60-only, `err = -51`) does not apply to
+this adapter. The plan's target format is available as specified.
+
+- **USB audio:** `USB-Audio - Guermok USB2 Video`, id 371, **2 channels,
+  48000 Hz**. Stereo 48k confirmed, so no resampling and no need to fall
+  back to the phone mic.
+
+### Step 0, PREVIEW — first attempt failed, in my code, not the hardware
+
+`supportedSizeList` came back with all 22 entries and the library's
+default was `Size(2560x1440@30,type:7)` — 1440p, which is neither what
+the encoder wants nor what the bus should be asked for. So the source
+correctly decided to reopen at `Size(1920x1080@50,type:7)`... and the
+log ended at `device closed`. No preview, no exception.
+
+Cause: `CameraHelper.closeCamera()` and `openCamera()` both *post to an
+async handler*, and closing the camera also closes the device. The
+queued open then found `mUsbDevice` gone and silently did nothing.
+Open-then-reopen cannot work.
+
+Fix: `getSupportedSizeList()` needs only the **device**, not an open
+camera, so the format is now chosen in `onDeviceOpen` and the camera is
+opened exactly once with it. Also, `Size` carries a full `fpsList`, so
+the 1080p entry is requested at **30fps** rather than the 50 the library
+surfaces — the encoder is configured for 30, and on USB 2.0 the surplus
+frames are bandwidth spent to be thrown away.
+
+- **`MicrophoneSource.setPreferredDevice` returned `false`** — because it
+  was called before `prepareAudio` created the `AudioRecord`. It stores
+  the preference and re-applies it in `start()`, so this was a
+  misleading log line rather than a routing failure. Now called after
+  prepare.
+
+_(pending: preview result after the fix, then step 1)_
+
+- RootEncoder `CameraUvcSource` result: n/a — not used; see
+  `android/UvcVideoSource.kt` for why.
 - Dropout 30 s:
 - Dropout 3 min:

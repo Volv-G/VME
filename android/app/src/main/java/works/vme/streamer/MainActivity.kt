@@ -232,8 +232,6 @@ class MainActivity : ComponentActivity(), ConnectChecker {
             log("already previewing")
             return
         }
-        routeAudioToUsbIfPresent()
-
         // The encoder is configured here; the camera negotiates separately
         // inside UvcVideoSource. A mismatch between the two is expected and
         // is exactly what the log is for.
@@ -252,6 +250,9 @@ class MainActivity : ComponentActivity(), ConnectChecker {
                 "refused this configuration. Try 1280x720 or 3 Mbps.")
             return
         }
+        // Only now: setPreferredDevice needs the AudioRecord that
+        // prepareAudio creates, and before that it can only return false.
+        routeAudioToUsbIfPresent()
         stream.getStreamClient().setReTries(10)
 
         wantPreview = true
@@ -281,7 +282,18 @@ class MainActivity : ComponentActivity(), ConnectChecker {
         val ok = runCatching { micSource.setPreferredDevice(usb) }.getOrElse {
             log("audio: setPreferredDevice threw: $it"); false
         }
-        log("audio: routing to USB \"${usb.productName}\" -> $ok")
+        if (ok) {
+            log("audio: routed to USB \"${usb.productName}\"")
+        } else {
+            // Not necessarily a failure: MicrophoneSource stores the
+            // preference and re-applies it inside start(), after it has
+            // recreated the AudioRecord. Worth saying, because a bare
+            // "false" reads as broken when it usually is not.
+            log("audio: setPreferredDevice returned false for " +
+                "\"${usb.productName}\" - it is remembered and re-applied " +
+                "when the stream starts; check which device the audio " +
+                "actually comes from")
+        }
     }
 
     // ---- step 3: stream ---------------------------------------------------

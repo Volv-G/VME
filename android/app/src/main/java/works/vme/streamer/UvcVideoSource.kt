@@ -34,8 +34,14 @@ import com.serenegiant.usb.Size
  * whole. That matters because those cards often advertise 1080p at 60fps
  * only; asking for the same resolution at 30 is what throws.
  *
- * So: open once with defaults to get the list, then reopen with a chosen
- * entry. Never re-size a running preview.
+ * So the format is chosen in `onDeviceOpen`, before the camera is opened
+ * at all: `getSupportedSizeList()` needs only the *device*, not an open
+ * camera. A first version opened with defaults and then reopened, which
+ * cannot work - `closeCamera` and `openCamera` both post to the helper's
+ * async handler, and closing the camera also closes the device, so the
+ * queued open found `mUsbDevice` gone and silently did nothing. On real
+ * hardware that ended the log at "device closed" with no preview and no
+ * error.
  */
 class UvcVideoSource(
     private val target: Target,
@@ -51,6 +57,16 @@ class UvcVideoSource(
         val width: Int = 1920,
         val height: Int = 1080,
         /**
+         * Frames per second to request, if the chosen entry offers it in
+         * its `fpsList`.
+         *
+         * Worth insisting on: an HDMI adapter's default for 1080p MJPEG is
+         * often the highest it can name (50 or 60), and on a USB 2.0 bus
+         * that spends bandwidth on frames nobody asked for - the encoder
+         * is configured for 30, so the surplus is decoded and thrown away.
+         */
+        val fps: Int = 30,
+        /**
          * UVC frame type to prefer. 7 is MJPEG for this library's Size.type.
          * Null means no preference.
          *
@@ -64,13 +80,6 @@ class UvcVideoSource(
     private var cameraHelper: ICameraHelper? = null
     private var surface: Surface? = null
     private var running = false
-
-    /**
-     * Guards the reopen. Without it, closing and reopening inside
-     * onCameraOpen recurses forever - and a loop that hammers a USB
-     * device is much harder to diagnose than a bad format.
-     */
-    private var reopened = false
 
     /** What the camera actually ended up running at. */
     @Volatile
@@ -89,7 +98,6 @@ class UvcVideoSource(
         this.surfaceTexture = surfaceTexture
         if (isRunning()) return
         surface = Surface(surfaceTexture)
-        reopened = false
         cameraHelper = CameraHelper().apply { setStateCallback(stateCallback) }
         running = true
         log("UVC source started, waiting for device attach...")
@@ -123,14 +131,12 @@ class UvcVideoSource(
         }
 
         override fun onDeviceOpen(device: UsbDevice, isFirstOpen: Boolean) {
-            log("device open (first=$isFirstOpen), opening camera with defaults")
-            // Deliberately no Size here: the list is not readable until the
-            // camera has been opened once.
-            cameraHelper?.openCamera()
-        }
-
-        override fun onCameraOpen(device: UsbDevice) {
             val helper = cameraHelper ?: return
+            log("device open (first=$isFirstOpen)")
+
+            // The size list is readable now: getSupportedSizeList() only
+            // needs the device, not an open camera. So the format is chosen
+            // here and the camera is opened exactly once, with it.
             val sizes: List<Size> = try {
                 helper.supportedSizeList ?: emptyList()
             } catch (e: Exception) {
@@ -138,36 +144,35 @@ class UvcVideoSource(
                 emptyList()
             }
 
-            if (!reopened) {
-                log("supportedSizeList (${sizes.size} entries):")
-                sizes.forEach { log("   $it") }
-                val current = try {
-                    helper.previewSize
-                } catch (e: Exception) {
-                    log("getPreviewSize threw: $e"); null
-                }
-                log("default preview size: ${current ?: "(none)"}")
-
-                val pick = choose(sizes, current)
-                if (pick != null && pick !== current && pick.toString() != current?.toString()) {
-                    reopened = true
-                    log("reopening with $pick")
-                    try {
-                        helper.closeCamera()
-                        helper.openCamera(pick)
-                        // openCamera re-enters this callback; the rest happens
-                        // on that pass.
-                        return
-                    } catch (e: Exception) {
-                        // Falling through to preview at the default size is
-                        // better than no video at all - and the log records
-                        // that the preferred format was refused.
-                        log("reopen failed ($e) - continuing at default")
-                    }
-                } else {
-                    log("default is already the best available; not reopening")
-                }
+            if (sizes.isEmpty()) {
+                log("no advertised sizes - opening with library defaults")
+                helper.openCamera()
+                return
             }
+
+            log("supportedSizeList (${sizes.size} entries):")
+            sizes.forEach { log("   $it") }
+
+            val pick = choose(sizes)
+            if (pick == null) {
+                log("nothing usable in the list - opening with defaults")
+                helper.openCamera()
+                return
+            }
+
+            val wanted = atTargetFps(pick)
+            log("opening camera with $wanted")
+            try {
+                helper.openCamera(wanted)
+            } catch (e: Exception) {
+                // Something rather than nothing, with the refusal on record.
+                log("openCamera($wanted) threw: $e - retrying with defaults")
+                helper.openCamera()
+            }
+        }
+
+        override fun onCameraOpen(device: UsbDevice) {
+            val helper = cameraHelper ?: return
 
             negotiated = try {
                 helper.previewSize?.toString() ?: "(unknown)"
@@ -198,8 +203,8 @@ class UvcVideoSource(
      * the target, because upscaling a smaller capture is honest while
      * downscaling a larger one wastes USB bandwidth we may not have.
      */
-    private fun choose(sizes: List<Size>, current: Size?): Size? {
-        if (sizes.isEmpty()) return current
+    private fun choose(sizes: List<Size>): Size? {
+        if (sizes.isEmpty()) return null
         val preferred = target.preferType?.let { t -> sizes.filter { it.type == t } }
             ?.takeIf { it.isNotEmpty() }
             ?: sizes
@@ -221,6 +226,27 @@ class UvcVideoSource(
         val smallest = preferred.minByOrNull { it.width.toLong() * it.height }
         log("everything exceeds the target; taking smallest: $smallest")
         return smallest
+    }
+
+    /**
+     * Return the same entry at the target frame rate if it offers one.
+     *
+     * A `Size` carries both a single `fps` - whatever the library chose to
+     * surface, typically the highest - and the full `fpsList` from the
+     * descriptor. Asking for a rate that is not in that list is what
+     * produces "could not negotiate with camera", so this only ever picks
+     * from the list and otherwise leaves the entry untouched.
+     */
+    private fun atTargetFps(size: Size): Size {
+        val rates = size.fpsList ?: emptyList()
+        if (size.fps == target.fps) return size
+        if (!rates.contains(target.fps)) {
+            log("${size.width}x${size.height} does not offer ${target.fps}fps " +
+                "(has $rates) - taking it at ${size.fps}")
+            return size
+        }
+        log("requesting ${target.fps}fps instead of ${size.fps} (available: $rates)")
+        return Size(size.type, size.width, size.height, target.fps, rates)
     }
 
     private fun hex(v: Int) = String.format("%04x", v)
