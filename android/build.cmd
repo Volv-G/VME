@@ -11,7 +11,9 @@ rem   build.cmd install      assemble and push to the connected phone
 rem   build.cmd clean        wipe build outputs
 rem   build.cmd <task...>    any other gradle task, passed straight through
 
-set "TOOLCHAIN=%LOCALAPPDATA%\vme-android"
+rem Override with VME_ANDROID_TOOLCHAIN to match bootstrap.ps1 -ToolchainDir.
+if not defined VME_ANDROID_TOOLCHAIN set "VME_ANDROID_TOOLCHAIN=%LOCALAPPDATA%\vme-android"
+set "TOOLCHAIN=%VME_ANDROID_TOOLCHAIN%"
 set "JAVA_HOME=%TOOLCHAIN%\jdk-17"
 set "ANDROID_HOME=%TOOLCHAIN%\sdk"
 set "ANDROID_SDK_ROOT=%ANDROID_HOME%"

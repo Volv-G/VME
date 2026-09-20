@@ -23,7 +23,7 @@ Four buttons, in order. Each can fail independently, which is deliberate:
 
 ## Build
 
-Once, to install a self-contained toolchain (JDK 17, Android SDK 35+36,
+Once, to install a self-contained toolchain (JDK 17, Android SDK 36,
 build-tools, platform-tools, Gradle). **No admin rights needed** — it all
 lands in `%LOCALAPPDATA%\vme-android` and touches neither PATH nor the
 registry:
@@ -42,8 +42,17 @@ android\deploy.cmd           REM build + install + launch + tail logcat
 
 Android Studio also works — *File → Open* the `android/` folder — but it
 is not required, and the command line above is what has actually been
-exercised. To undo everything: `Remove-Item -Recurse -Force
+exercised, including once from scratch into an empty directory to prove
+the clean-machine path. To undo everything: `Remove-Item -Recurse -Force
 $env:LOCALAPPDATA\vme-android`.
+
+Set `VME_ANDROID_TOOLCHAIN` (and `bootstrap.ps1 -ToolchainDir`) to put
+the toolchain somewhere else — both scripts honour it.
+
+The bootstrap is re-runnable and skips what it already has. It is also
+the thing to run after pulling a change to the SDK or Gradle version;
+the Gradle version is read from `gradle-wrapper.properties` so there is
+only one place to edit it.
 
 ### Versions are not negotiable
 

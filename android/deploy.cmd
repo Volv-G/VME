@@ -15,7 +15,8 @@ rem the testing the cable cannot be plugged in at the same time. Pair over
 rem Wi-Fi once and you can rebuild, reinstall and read logcat while the
 rem adapter stays connected.
 
-set "TOOLCHAIN=%LOCALAPPDATA%\vme-android"
+if not defined VME_ANDROID_TOOLCHAIN set "VME_ANDROID_TOOLCHAIN=%LOCALAPPDATA%\vme-android"
+set "TOOLCHAIN=%VME_ANDROID_TOOLCHAIN%"
 set "ADB=%TOOLCHAIN%\sdk\platform-tools\adb.exe"
 set "PKG=works.vme.streamer"
 set "APK=%~dp0app\build\outputs\apk\debug\app-debug.apk"
