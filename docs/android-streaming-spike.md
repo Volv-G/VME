@@ -101,31 +101,37 @@ at the same time.
 It replaces the "run two demo apps" plan with one harness whose buttons
 map onto the questions:
 
-1. **1 PROBE** - reads the USB descriptors directly, with no library in
-   the way, and prints every advertised format with its real frame
-   rates. It also says whether a USB **audio** interface exists at all.
-   Paste the output into "Findings".
-2. **2 PREVIEW** - opens the adapter through UVCAndroid and renders it.
+1. **1 PREVIEW** - opens the adapter through UVCAndroid and renders it.
    This is the exit criterion below.
-3. **3 STREAM** - RTMPS, which is really step 2, but it is two more
+2. **2 STREAM** - RTMPS, which is really step 2, but it is two more
    lines once the camera is open.
 
-The probe comes first on purpose. When libuvc fails with
+There was a **PROBE** button first, which read the USB descriptors with
+no library in the way and printed every advertised format with its real
+frame rates. It came first on purpose: when libuvc fails with
 `could not negotiate with camera: err = -51`, that message cannot tell
 you whether the adapter lacks the format or the library is mis-asking -
 and those have completely different fixes. The descriptors can.
+
+It earned its keep on the first run (see Findings) and was then removed.
+If a different adapter misbehaves, restore `UsbProbe.kt` from commit
+`f0a48c2` before theorising.
 
 **One thing found while building the harness, before any hardware:**
 RootEncoder's `CameraUvcSource` calls bare `openCamera()`, and its
 `create()` *ignores* the width/height/fps passed to `prepareVideo` -
 those configure the encoder, not the camera. So the stock source streams
 whatever the adapter defaulted to, upscaled, with no way to ask for
-anything else. The harness ships its own `UvcVideoSource` that opens
-once to read `supportedSizeList`, then reopens with a chosen entry via
-`openCamera(Size)`, and never calls `setPreviewSize` - which per the
-UVCAndroid author (issue #1) is the wrong tool for choosing a format up
-front, and per issue #135 is what throws `Failed to set preview size`
-when a card advertises 1080p at 60fps only and you ask for 30.
+anything else. The harness ships its own `UvcVideoSource`.
+
+How that source picks a format took two wrong turns and one hardware run
+to settle - see Findings. Short version: the size list only exists once
+the camera is open, and close-then-reopen races itself, so the list is
+read in `onCameraOpen`, applied with `setPreviewSize`, and remembered so
+the *next* open can use `openCamera(Size)` directly. `setPreviewSize` is
+the tool the author warns about (issue #1 for choosing a format up
+front, #135 for `Failed to set preview size`), which is exactly why the
+remembered value exists: to need it at most once per adapter.
 
 ### Also in the same evening: audio
 
@@ -133,11 +139,16 @@ HDMI capture audio arrives as a **separate USB audio (UAC) device**, not
 inside the UVC video stream. RootEncoder's `MicrophoneSource` will not
 pick it up by default.
 
-The harness handles both halves of this: **1 PROBE** reports whether the
-adapter exposes an audio interface at all, and **2 PREVIEW** calls
-`MicrophoneSource.setPreferredDevice()` with the `TYPE_USB_DEVICE` entry
-if one exists, logging what it settled on. No custom `AudioSource`
-needed - the routing hook is already there and returns a `Boolean`.
+The harness calls `MicrophoneSource.setPreferredDevice()` with the
+`TYPE_USB_DEVICE` entry if one exists, logging what it settled on. No
+custom `AudioSource` needed - the routing hook is already there and
+returns a `Boolean`. **Settled on hardware:** this adapter does expose a
+UAC interface, and audio routes to it (Findings).
+
+One ordering trap: `setPreferredDevice` returns `false` if called before
+`prepareAudio`, because the `AudioRecord` it configures does not exist
+yet. It is not a failure - the preference is stored and re-applied in
+`start()` - but it reads like one in a log.
 
 If there is no USB audio device, the phone mic is used and the log says
 so. For a gym that is arguably the better outcome anyway: crowd noise
@@ -355,6 +366,81 @@ the OS doesn't kill the stream when the screen sleeps.
 
 A full match streamed from the rig through the VME app alone, archive
 intact, with SidelineHD not running.
+
+---
+
+## Step 2b — VME creates the broadcast, so matches are not all called the same thing
+
+The persistent stream key creates a broadcast automatically when the
+encoder connects, which is exactly the right behaviour at a gym: press
+one button, be live. The cost is that **every auto-created broadcast
+inherits the same title, description and visibility** from the stream's
+saved settings. Left alone, the channel fills with a column of
+identically-named videos - the precise opposite of what the render
+pipeline already does with per-match titles.
+
+Renaming afterwards works and is free. It is also manual, every match,
+forever, which is the kind of tax that gets skipped in a hurry and then
+never backfilled.
+
+### The shape that avoids distributing a credential
+
+Before the match, on the PC, VME:
+
+1. `liveBroadcasts.insert` - title and description from the **existing
+   templates**, `scheduledStartTime`, privacy, and
+   `contentDetails.enableAutoStart = true`.
+2. `liveStreams.list(mine=true)` - find the **existing persistent
+   stream**, the one whose key is already baked into the phone.
+3. `liveBroadcasts.bind` - point the new broadcast at that stream.
+4. `thumbnails.set` on the broadcast's video id, using the thumbnail
+   generator that already exists.
+
+The phone is not involved and **its key never changes**. That matters
+more than it looks: it keeps this consistent with the decision that the
+VME-to-streamer link is an offline file and not a live API, and it means
+no credential has to reach the phone over a gym network.
+
+At the gym: press **2 STREAM**. YouTube routes the bytes into the
+prepared broadcast, correctly titled, described and illustrated.
+
+### Details that will otherwise cost an evening
+
+- **`enableAutoStop = false`.** With auto-stop on, a dropout ends the
+  broadcast permanently and the reconnect has nowhere to go. Given that
+  a ~65 s dropout is already on record (see Findings), this is not
+  hypothetical.
+- **Audience must be declared.** `status.selfDeclaredMadeForKids` is
+  required; high-school sports is *not* made for kids. Omitting it is a
+  hard failure, not a warning.
+- **One broadcast per stream at a time.** Binding a new broadcast to a
+  stream that still has a live one attached will take it over. If a
+  match is cancelled, `liveBroadcasts.delete` the prepared one rather
+  than leaving it bound.
+- **Latency**: `contentDetails.latencyPreference = low`. Not `ultraLow`,
+  which disables DVR, and the archive is the point of step 4.
+
+### Quota
+
+`liveBroadcasts.insert`, `bind` and `thumbnails.set` are ~50 units each,
+so preparing a match costs roughly **150** against a 10,000/day ceiling.
+An upload via `videos.insert` costs **1600**. Verify these in the
+console the same way the upload costs need verifying - but the ratio is
+not close, and it is the argument for step 4: if the live archive is
+good enough, the expensive upload becomes optional.
+
+**Scope is already granted.** `backend/app/upload/youtube.py` requests
+`https://www.googleapis.com/auth/youtube` alongside `youtube.upload`,
+and the live token at `C:\Users\vladi\VME\youtube_token.json` carries
+both - checked, not assumed. No re-authorisation needed.
+
+### Exit criteria
+
+A match appears on the channel with the right title, description and
+thumbnail, without anyone opening YouTube Studio.
+
+**Do not build this until the dropout in Findings is understood.** A
+perfectly-titled broadcast that dies after a minute is not progress.
 
 ---
 

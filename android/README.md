@@ -11,15 +11,39 @@ learn now rather than mid-season.
 
 ## What it does
 
-Four buttons, in order. Each can fail independently, which is deliberate:
+Buttons run in order. Each can fail independently, which is deliberate:
 "it doesn't work" is not a finding.
 
 | Button | Answers |
 |---|---|
-| **1 PROBE** | What does the adapter actually advertise? VID/PID, UVC formats and frame rates read straight from the USB descriptors, and whether a USB **audio** interface exists at all. Uses no libraries, so it works even if everything below fails. |
-| **2 PREVIEW** | Can UVCAndroid open it and produce frames? This is the **step 0 exit criterion**. |
-| **3 STREAM** | Does RTMPS to YouTube hold up? The **step 2 exit criterion**. Paste an ingest URL first. |
+| **1 PREVIEW** | Can UVCAndroid open the adapter and produce frames? This is the **step 0 exit criterion**. |
+| **2 STREAM** | Does RTMPS to YouTube hold up? The **step 2 exit criterion**. The ingest URL is prefilled from `local.properties`. |
 | **COPY** | Whole log to the clipboard, and to a file under the app's external files dir. |
+
+There was a **PROBE** button that dumped raw USB descriptors with no
+library involved. It answered its question - this adapter advertises
+MJPEG 1080p at 30fps and carries a UAC audio interface - and was removed
+once preview worked. If a different adapter misbehaves, restore
+`UsbProbe.kt` from commit `f0a48c2`; guessing from `err = -51` is what
+it was built to avoid.
+
+## The stream URL
+
+Put it in `android/local.properties`, which is gitignored:
+
+```
+vme.streamUrl=rtmps://a.rtmps.youtube.com:443/live2/xxxx-xxxx-xxxx-xxxx
+```
+
+It is baked into `BuildConfig` and prefills the field, so nothing has to
+be typed on a phone keyboard. **Not** committed to a source file: this
+repo is public, and a stream key lets anyone broadcast to the channel.
+The field stays editable for one-off tests.
+
+From YouTube Studio: **Create -> Go live -> Stream** tab, then join the
+*Stream URL* and *Stream key* with a slash. That key is persistent -
+connecting to it creates a broadcast automatically, so there is no need
+to click "Go live" before each match.
 
 ## Build
 
@@ -118,8 +142,8 @@ whenever the phone changes its port, which it does freely.
 ### Or a cable, for the first install
 
 *Developer options → USB debugging*, plug in, accept the RSA prompt,
-then `android\deploy.cmd`. Fine for step 1 (**PROBE** needs the adapter,
-so this only works on a phone with two ports or a powered hub).
+then `android\deploy.cmd`. Only useful on a phone with two ports or a
+powered hub, since the adapter wants the same socket.
 
 ### Or no computer at all
 
@@ -158,18 +182,27 @@ frequently advertise 1080p at **60fps only** — so asking for 30 throws
 `openCamera(Size)` is the right call, with a `Size` taken whole from the
 enumerated list.
 
-So `UvcVideoSource` opens once with defaults to read the list, then
-reopens with a chosen entry, and never re-sizes a running preview. If that
-still fails, **1 PROBE** tells you whether the format was ever there —
-which is the difference between "buy a different adapter" and "the library
-is mis-negotiating".
+Two attempts got this wrong before hardware settled it. Closing and
+reopening cannot work: both calls post to an async handler and closing
+the camera also closes the *device*, so the queued open finds nothing.
+Choosing the format before opening cannot work either:
+`getSupportedSizeList()` returns null until `mUVCCamera` exists, which
+means until the camera is open.
+
+So `UvcVideoSource` opens with defaults, reads the list in
+`onCameraOpen` where it exists, applies the choice with
+`setPreviewSize`, **and remembers it** so the next open can pass it to
+`openCamera(Size)` directly. The remembering is a safety property:
+`CameraInternal` destroys the camera outright if `setPreviewSize` is
+refused, so the aim is to need it at most once per adapter.
 
 ## Expected failure modes, in order of likelihood
 
 1. **No USB audio interface.** Common on cheap MS2109-class adapters. Not
    fatal: the phone mic in a gym is arguably better than a line feed.
-2. **`err = -51` on preview.** Check the PROBE output first. If MJPEG
-   1080p is listed and preview still fails, it is the library.
+2. **`err = -51` on preview.** Restore `UsbProbe.kt` (see above) before
+   theorising. If MJPEG 1080p is listed in the descriptors and preview
+   still fails, it is the library, not the adapter.
 3. **1080p is uncompressed-only.** USB 2.0 cannot carry that above ~5fps.
    That is a hardware answer, not a software one.
 4. **`prepareVideo` returns false.** The phone's encoder refused 1080p30

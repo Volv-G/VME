@@ -1,17 +1,11 @@
 package works.vme.streamer
 
 import android.Manifest
-import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
-import android.hardware.usb.UsbDevice
-import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
@@ -44,18 +38,23 @@ import java.util.Locale
  * is buildable at all, and its only real output is the text in the log
  * pane, which goes into the Findings section of the spike doc.
  *
- * The four buttons run in order and each one can fail independently,
- * which is the point - "it doesn't work" is not a finding, but "the
- * descriptor advertises MJPEG 1080p60 only, and libuvc fails to
- * negotiate it" is.
+ * The buttons run in order and each can fail independently, which is the
+ * point - "it doesn't work" is not a finding, but "the descriptor
+ * advertises MJPEG 1080p60 only, and libuvc fails to negotiate it" is.
  *
- *   1 PROBE   - read USB descriptors and audio devices. No libraries
- *               involved, so it answers the hardware questions even if
- *               everything else fails.
- *   2 PREVIEW - open the adapter through UVCAndroid and render it.
+ *   1 PREVIEW - open the adapter through UVCAndroid and render it.
  *               This is the step 0 exit criterion.
- *   3 STREAM  - push to an RTMP(S) URL. The step 2 exit criterion.
+ *   2 STREAM  - push to an RTMP(S) URL. The step 2 exit criterion.
  *   COPY      - put the whole log on the clipboard to paste into the doc.
+ *
+ * There was a third, PROBE, which parsed raw USB descriptors without any
+ * library involved. It existed because "could not negotiate with camera"
+ * cannot distinguish an adapter that lacks a format from a library
+ * asking for it wrongly, and those have opposite fixes. It did its job -
+ * it proved this adapter advertises MJPEG 1080p30 and carries a UAC
+ * audio interface - and was removed once preview worked. If a future
+ * adapter misbehaves, restore `UsbProbe.kt` from commit f0a48c2 rather
+ * than guessing.
  */
 class MainActivity : ComponentActivity(), ConnectChecker {
 
@@ -80,11 +79,10 @@ class MainActivity : ComponentActivity(), ConnectChecker {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(buildUi())
-        registerUsbReceiver()
 
         log("VME streamer spike harness")
         log("device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-        log("Press 1 PROBE with the HDMI adapter plugged in.")
+        log("Press 1 PREVIEW with the HDMI adapter plugged in.")
         if (BuildConfig.STREAM_URL.isEmpty()) {
             log("No stream URL baked in. Paste one, or set vme.streamUrl in " +
                 "android/local.properties and rebuild.")
@@ -103,7 +101,6 @@ class MainActivity : ComponentActivity(), ConnectChecker {
 
     override fun onDestroy() {
         super.onDestroy()
-        runCatching { unregisterReceiver(usbReceiver) }
         runCatching { if (stream.isStreaming) stream.stopStream() }
         runCatching { if (stream.isOnPreview) stream.stopPreview() }
         runCatching { stream.release() }
@@ -118,9 +115,8 @@ class MainActivity : ComponentActivity(), ConnectChecker {
         }
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        buttons.addView(button("1 PROBE") { probe() })
-        buttons.addView(button("2 PREVIEW") { startPreview() })
-        buttons.addView(button("3 STREAM") { toggleStream() })
+        buttons.addView(button("1 PREVIEW") { startPreview() })
+        buttons.addView(button("2 STREAM") { toggleStream() })
         buttons.addView(button("COPY") { copyLog() })
         buttons.addView(button("CLEAR") { logView.text = "" })
         root.addView(HorizontalScrollView(this).apply { addView(buttons) })
@@ -176,64 +172,11 @@ class MainActivity : ComponentActivity(), ConnectChecker {
         setOnClickListener { onClick() }
     }
 
-    // ---- step 1: probe ----------------------------------------------------
-
-    private fun probe() {
-        log("--- USB devices ---")
-        log(UsbProbe.listDevices(this))
-
-        val manager = getSystemService(Context.USB_SERVICE) as UsbManager
-        val video = manager.deviceList.values.firstOrNull { d ->
-            (0 until d.interfaceCount).any { d.getInterface(it).interfaceClass == 0x0E }
-        }
-        if (video == null) {
-            log("No UVC device found. Everything past this point will fail.")
-        } else if (!manager.hasPermission(video)) {
-            log("Requesting USB permission...")
-            requestUsbPermission(manager, video)
-            return
-        } else {
-            log("--- video formats ---")
-            log(UsbProbe.dumpVideoFormats(this, video))
-        }
-
-        log("--- audio inputs ---")
-        log(UsbProbe.dumpAudioInputs(this))
-    }
-
-    private fun requestUsbPermission(manager: UsbManager, device: UsbDevice) {
-        // FLAG_MUTABLE is required: the system writes EXTRA_PERMISSION_GRANTED
-        // into this intent, and an immutable one silently never fires on
-        // Android 14.
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            PendingIntent.FLAG_MUTABLE
-        } else {
-            0
-        }
-        val intent = PendingIntent.getBroadcast(
-            this, 0, Intent(ACTION_USB_PERMISSION).setPackage(packageName), flags
-        )
-        manager.requestPermission(device, intent)
-    }
-
-    private val usbReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action != ACTION_USB_PERMISSION) return
-            val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-            log(if (granted) "USB permission granted - press 1 PROBE again."
-            else "USB permission DENIED. Nothing can open the adapter.")
-        }
-    }
-
-    private fun registerUsbReceiver() {
-        val filter = IntentFilter(ACTION_USB_PERMISSION)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(usbReceiver, filter)
-        }
-    }
+    // The USB permission prompt is not handled here. CameraHelper's
+    // selectDevice() asks for it through the library's own USBMonitor, so
+    // a hand-rolled PendingIntent/BroadcastReceiver pair would be a second
+    // path to the same dialog. It existed to support PROBE, which ran
+    // before any library was involved, and went with it.
 
     // ---- step 2: preview --------------------------------------------------
 
@@ -379,6 +322,5 @@ class MainActivity : ComponentActivity(), ConnectChecker {
 
     companion object {
         private const val TAG = "VMESpike"
-        private const val ACTION_USB_PERMISSION = "works.vme.streamer.USB_PERMISSION"
     }
 }
