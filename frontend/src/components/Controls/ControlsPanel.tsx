@@ -98,19 +98,19 @@ const MATCH_ACTIONS: ActionDef[] = [
     type: "game_start",
     label: "Game Start",
     needsPlayer: false,
-    payload: { fade_frames: 30 },
+    payload: { fade_frames: 60 },
   },
   {
     type: "game_end",
     label: "Game End",
     needsPlayer: false,
-    payload: { fade_frames: 30 },
+    payload: { fade_frames: 60 },
   },
   {
     type: "set_end",
     label: "End Set",
     needsPlayer: false,
-    payload: { fade_frames: 30 },
+    payload: { fade_frames: 60 },
   },
 ];
 

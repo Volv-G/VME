@@ -384,6 +384,24 @@ label {
   white-space: nowrap;
 }
 
+/* A cut marked on only one side, whose other edge is a lifecycle event.
+   Deliberately calm (blue/grey, not red): it is a working cut, and the
+   badge exists to explain where the missing edge came from - the tooltip
+   carries the detail. */
+.event-row .open-cut-badge {
+  display: inline-block;
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: rgba(88, 166, 255, 0.18);
+  color: #7fb3ff;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
 /* The same badge as a one-click "cut this gap" button. Deliberately
    keeps the warning's colours - it is still a warning, and the affordance
    is carried by the scissors, the cursor and the hover lift rather than

@@ -1,8 +1,10 @@
 """Build a `FrameMap` from a `Match` by consuming event effect properties.
 
-The builder makes no decisions based on event class names (other than
-`ClipTransitionEvent`, which is structurally special because it lives at a
-clip boundary). All transition behavior comes from `TimelineEffect`, all
+The builder makes no decisions based on event class names other than the
+three structural ones: `ClipTransitionEvent` (lives at a clip boundary
+rather than a frame), `LifecycleEvent` (can stand in for a missing cut
+marker - see `_collect_cut_regions`) and `ServeEvent` (blocks that
+substitution). All transition behavior comes from `TimelineEffect`, all
 overlay behavior from `OverlayEffect`.
 
 Pipeline:
@@ -31,6 +33,8 @@ from ..domain.effects import (
     TimelineEffect,
 )
 from ..domain.events.base import MatchEvent
+from ..domain.events.lifecycle import LifecycleEvent
+from ..domain.events.serve import BallServedEvent, FirstServeEvent
 from ..domain.events.timeline import (
     ClipTransitionEvent,
     CutEndEvent,
@@ -73,6 +77,37 @@ def build_frame_map(
 # ----- Pass 1: concatenate, drop cut regions ----------------------------------
 
 
+@dataclass
+class _Placed:
+    """An event with its position resolved in both coordinate systems."""
+
+    global_frame: int
+    clip_idx: int
+    local_frame: int
+    event: MatchEvent
+
+
+def _place_events(match: Match) -> list[_Placed]:
+    """Every event with a resolvable frame, in timeline order.
+
+    `ClipTransitionEvent` is excluded: it lives at a boundary, not a frame.
+    """
+    by_id: dict[str, int] = {c.id: i for i, c in enumerate(match.clips)}
+    out: list[_Placed] = []
+    for e in match.events:
+        if isinstance(e, ClipTransitionEvent):
+            continue
+        idx = by_id.get(e.clip_id)
+        if idx is None:
+            continue
+        g = match.to_global_frame(e.clip_id, e.local_frame)
+        if g is None:
+            continue
+        out.append(_Placed(g, idx, e.local_frame, e))
+    out.sort(key=lambda p: p.global_frame)
+    return out
+
+
 def _collect_cut_regions(match: Match) -> list[_CutRegion]:
     """Pair cut_start <-> cut_end events globally; cuts may span clips.
 
@@ -82,46 +117,114 @@ def _collect_cut_regions(match: Match) -> list[_CutRegion]:
     attached to the LAST sub-region so timeline-effect handling still finds
     it via the event's own `clip_id` + `local_frame`.
 
-    Orphans (an unmatched CutStart, or a CutEnd with nothing open) are simply
-    ignored here; the UI surfaces them in red so the user can fix them.
+    Markers that don't pair with each other get a second chance against the
+    lifecycle events, so a set break needs only ONE marker (see
+    `_resolve_open_cuts`). Anything still unpaired after that is ignored
+    here; the UI surfaces it in red so the user can fix it.
     """
-    # Build a flat list of (global_frame, clip_idx, local_frame, event)
-    # for cut_start / cut_end events, sorted in timeline order.
-    by_id: dict[str, int] = {c.id: i for i, c in enumerate(match.clips)}
-    sortable: list[tuple[int, int, int, MatchEvent]] = []
-    for e in match.events:
-        if isinstance(e, ClipTransitionEvent):
-            continue
-        if not isinstance(e, (CutStartEvent, CutEndEvent)):
-            continue
-        idx = by_id.get(e.clip_id)
-        if idx is None:
-            continue
-        g = match.to_global_frame(e.clip_id, e.local_frame)
-        if g is None:
-            continue
-        sortable.append((g, idx, e.local_frame, e))
-    sortable.sort(key=lambda t: t[0])
+    placed = _place_events(match)
+    markers = [
+        p for p in placed if isinstance(p.event, (CutStartEvent, CutEndEvent))
+    ]
 
     regions: list[_CutRegion] = []
-    open_event: Optional[tuple[int, int]] = None  # (clip_idx, local_frame)
+    open_marker: Optional[_Placed] = None
+    orphans: list[_Placed] = []
 
-    for _, idx, local_frame, ev in sortable:
-        if isinstance(ev, CutStartEvent):
-            if open_event is None:
-                open_event = (idx, local_frame)
-            # else: nested CutStart; treated as orphan by the UI.
+    for p in markers:
+        if isinstance(p.event, CutStartEvent):
+            if open_marker is not None:
+                # Nested CutStart: the earlier one never closed.
+                orphans.append(open_marker)
+            open_marker = p
         else:  # CutEndEvent
-            if open_event is None:
-                continue  # orphan CutEnd; surfaced by UI.
-            start_idx, start_local = open_event
-            end_idx, end_local = idx, local_frame
+            if open_marker is None:
+                orphans.append(p)
+                continue
             regions.extend(
                 _build_cross_clip_regions(
-                    match, start_idx, start_local, end_idx, end_local, ev
+                    match,
+                    open_marker.clip_idx,
+                    open_marker.local_frame,
+                    p.clip_idx,
+                    p.local_frame,
+                    p.event,
                 )
             )
-            open_event = None
+            open_marker = None
+    if open_marker is not None:
+        orphans.append(open_marker)
+
+    regions.extend(_resolve_open_cuts(match, placed, orphans))
+    return regions
+
+
+def _resolve_open_cuts(
+    match: Match, placed: list[_Placed], orphans: list[_Placed]
+) -> list[_CutRegion]:
+    """Close cuts that were only marked on one side, using a lifecycle event
+    as the missing boundary.
+
+    A set break is bounded by a `set_end` on one side, so making the user
+    mark it again is busywork: a lone `cut_start` before a `set_end` /
+    `game_end` runs to that event, and a lone `cut_end` after one runs back
+    to it.
+
+    The lifecycle event's own frame is never removed - the region stops
+    short of it (or starts one frame past it). That matters because the
+    fade lives on the event: with the dead time collapsed, its `fade_frames`
+    tail lands on the footage immediately before the cut and its head on the
+    footage immediately after, which is the whole point of doing this rather
+    than just deleting frames.
+
+    A serve between the marker and the lifecycle event voids the pairing:
+    a serve means a rally is in there, and a rally inside a cut is never
+    what was meant. Without the guard, forgetting to close a cut - a
+    routine slip - would let the next `set_end` silently swallow minutes of
+    live play. A cut that stays red removes nothing, which is the safe way
+    to be wrong.
+    """
+    if not orphans:
+        return []
+
+    regions: list[_CutRegion] = []
+    index = {id(p): i for i, p in enumerate(placed)}
+
+    for orphan in orphans:
+        i = index.get(id(orphan))
+        if i is None:
+            continue
+        forward = isinstance(orphan.event, CutStartEvent)
+        step = 1 if forward else -1
+        partner: Optional[_Placed] = None
+        j = i + step
+        while 0 <= j < len(placed):
+            candidate = placed[j]
+            if isinstance(candidate.event, (BallServedEvent, FirstServeEvent)):
+                break
+            if isinstance(candidate.event, LifecycleEvent):
+                partner = candidate
+                break
+            j += step
+        if partner is None:
+            continue
+
+        if forward:
+            start_idx, start_local = orphan.clip_idx, orphan.local_frame
+            end_idx, end_local = partner.clip_idx, partner.local_frame
+        else:
+            start_idx, start_local = partner.clip_idx, partner.local_frame + 1
+            end_idx, end_local = orphan.clip_idx, orphan.local_frame
+        if (start_idx, start_local) >= (end_idx, end_local):
+            continue
+        # `end_event` stays None: the closing CutEnd's own fade is what that
+        # field feeds, and here the boundary is a lifecycle event which
+        # already carries its own effect and resolves at its own frame.
+        regions.extend(
+            _build_cross_clip_regions(
+                match, start_idx, start_local, end_idx, end_local, None
+            )
+        )
 
     return regions
 
@@ -132,7 +235,7 @@ def _build_cross_clip_regions(
     start_local: int,
     end_idx: int,
     end_local: int,
-    end_event: CutEndEvent,
+    end_event: Optional[CutEndEvent],
 ) -> list[_CutRegion]:
     """Slice a possibly-cross-clip cut into per-clip `_CutRegion`s.
 

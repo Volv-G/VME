@@ -59,7 +59,7 @@ export function EventList({
   // red badge / `.orphan` class flags unpaired cuts AND unpaired focus
   // spans (both are dropped at render time). Membership in either set is
   // enough to highlight.
-  const { orphanIds: cutOrphans } = analyzeCuts(events);
+  const { orphanIds: cutOrphans, openEndedIds } = analyzeCuts(events);
   const { orphanIds: focusOrphans } = analyzeFocus(events);
   const orphanIds = useMemo(
     () => new Set([...cutOrphans, ...focusOrphans]),
@@ -284,17 +284,25 @@ export function EventList({
           lowerQuery !== "" && summary.toLowerCase().includes(lowerQuery);
         const orphanReason =
           ev.type === "cut_start"
-            ? "Cut Start without a matching Cut End"
+            ? "Cut Start without a matching Cut End (and no Set End / Game End before the next serve to close it)"
             : ev.type === "cut_end"
-            ? "Cut End without a preceding Cut Start"
+            ? "Cut End without a preceding Cut Start (and no Set End / Game End after the previous serve to open it)"
             : ev.type === "focus_in"
             ? "Focus In without a matching Focus Out - this focus will be skipped at render time"
             : "Orphan event";
+        // An open-ended cut has no second marker, so it looks unpaired at a
+        // glance. Say where the other edge came from rather than leaving the
+        // user to wonder whether it cuts anything.
+        const isOpenEnded = openEndedIds.has(ev.id);
         const title = isOrphan
           ? `${summary} - ${orphanReason}`
-          : gapReason
-            ? `${summary} - ${gapReason}`
-            : summary;
+          : isOpenEnded
+            ? `${summary} - open cut, closed by the neighbouring ${
+                ev.type === "cut_start" ? "Set End / Game End" : "Set End / Game Start"
+              }`
+            : gapReason
+              ? `${summary} - ${gapReason}`
+              : summary;
         return (
           <div
             key={ev.id}
@@ -319,6 +327,9 @@ export function EventList({
             <div className="event-row-body">
               <div className="event-row-text" title={title}>
                 {isOrphan && <span className="orphan-badge" title={orphanReason}>!</span>}
+                {isOpenEnded && (
+                  <span className="open-cut-badge" title={title}>⇥</span>
+                )}
                 {gapLabel && !isOrphan && (
                   canCut ? (
                     <button

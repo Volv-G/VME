@@ -26,9 +26,18 @@ class LifecycleEvent(MatchEvent):
     Lifecycle events have a `fade_frames` parameter used for fading to/from
     `blend_color`; `frame_shift` is always 0 (lifecycle events do not overlap
     sections).
+
+    The default is 60 frames - one second at 60fps, matching the bookend
+    fades at the very start and end of a render. It also matters more than
+    it used to: when a lifecycle event closes an open cut, this fade is the
+    whole transition across the removed footage, so half a second read as
+    an abrupt blink rather than a set break.
+
+    Events that stored an explicit value keep it; only ones saved with the
+    old default change.
     """
 
-    fade_frames: int = 30
+    fade_frames: int = 60
     blend_color: tuple[int, int, int] = (0, 0, 0)
 
     @property
