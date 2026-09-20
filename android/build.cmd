@@ -7,7 +7,7 @@ rem installs, so nothing has to be on PATH and no JAVA_HOME has to be set
 rem machine-wide.
 rem
 rem   build.cmd              assemble the debug APK
-rem   build.cmd install      assemble and push to the connected phone
+rem   build.cmd install      hand off to deploy.cmd (build + install + run)
 rem   build.cmd clean        wipe build outputs
 rem   build.cmd <task...>    any other gradle task, passed straight through
 
@@ -32,7 +32,21 @@ cd /d "%~dp0"
 
 set "TASK=%*"
 if "%TASK%"=="" set "TASK=assembleDebug"
-if /i "%TASK%"=="install" set "TASK=installDebug"
+
+rem Hand "install" to deploy.cmd rather than running gradle's installDebug.
+rem They do the same job, but installDebug's failure mode with nothing
+rem plugged in is a bare "DeviceException: No connected devices!" wrapped in
+rem a gradle stack trace, which says nothing about wireless debugging - and
+rem on this project the USB port is usually occupied by the capture adapter,
+rem so "no device" is the normal state rather than an error.
+if /i "%TASK%"=="install" (
+    call "%~dp0deploy.cmd"
+    exit /b %ERRORLEVEL%
+)
+if /i "%TASK%"=="installDebug" (
+    call "%~dp0deploy.cmd"
+    exit /b %ERRORLEVEL%
+)
 
 call gradlew.bat %TASK%
 set "RC=%ERRORLEVEL%"

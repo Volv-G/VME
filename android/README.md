@@ -80,18 +80,36 @@ the testing that involves actual capture, a debugging cable cannot be
 plugged in at the same time. Pair over Wi-Fi once and you can rebuild,
 reinstall and read logcat with the adapter still attached.
 
-On the phone: *Settings → About phone → tap Build number ×7* to unlock
-Developer options, then *Developer options → Wireless debugging → on →
-Pair device with pairing code*. That popup shows an IP, a **pairing**
-port and a 6-digit code; the main Wireless debugging screen shows a
-**different** port for connecting. Both are needed, and mixing them up
-is the usual reason pairing appears to fail.
+**On the phone, once:**
+
+1. *Settings → About phone* → tap **Build number** seven times. It
+   counts down at you, then says "You are now a developer".
+2. *Settings → System → Developer options* → turn on **Wireless
+   debugging**. (Samsung and others bury Developer options elsewhere;
+   searching settings for "developer" finds it.)
+3. Phone and PC must be on the **same Wi-Fi**, and not a guest network
+   that isolates clients.
+
+**Then, on the PC:**
 
 ```
-android\deploy.cmd pair    192.168.1.50:37xxx 123456   REM once per phone
-android\deploy.cmd connect 192.168.1.50:41xxx          REM after each reboot
+android\deploy.cmd find                                REM shows IP:PORT
+android\deploy.cmd pair    192.168.1.50:37123 123456   REM once per phone
+android\deploy.cmd connect 192.168.1.50:41987          REM after each reboot
 android\deploy.cmd                                     REM build+install+run+log
 ```
+
+For the pairing step, tap **Pair device with pairing code** on the
+phone — it shows a 6-digit code and an address. Keep that popup open;
+the pairing service only exists while it is on screen.
+
+> **The two ports are different.** The popup's port is for `pair`; the
+> main Wireless debugging screen shows another for `connect`. Using the
+> wrong one is the usual reason pairing looks broken. `deploy.cmd find`
+> labels them: `_adb-tls-pairing` vs `_adb-tls-connect`.
+
+Pairing is once per phone; `connect` is needed again after a reboot, or
+whenever the phone changes the port, which it does freely.
 
 ### Or a cable, for the first install
 

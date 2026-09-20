@@ -3,6 +3,7 @@ setlocal EnableDelayedExpansion
 rem VME streamer spike - deploy to a phone.
 rem
 rem   deploy.cmd                    build, install, launch, then tail the log
+rem   deploy.cmd find               discover phones advertising wireless debugging
 rem   deploy.cmd pair HOST:PORT CODE   wireless debugging, one time per phone
 rem   deploy.cmd connect HOST:PORT     wireless debugging, each reboot
 rem   deploy.cmd log                tail the spike log only
@@ -48,6 +49,26 @@ if /i "%~1"=="devices" (
     exit /b %ERRORLEVEL%
 )
 
+if /i "%~1"=="find" (
+    rem Phones advertise wireless debugging over mDNS, so the IP and port
+    rem can be discovered instead of squinted at on the phone screen. Two
+    rem service types show up and they are NOT interchangeable:
+    rem   _adb-tls-pairing  only while the pairing popup is open  -> pair
+    rem   _adb-tls-connect  once paired, whenever the toggle is on -> connect
+    echo.
+    echo === discovered services
+    echo    _adb-tls-pairing entries are for 'deploy.cmd pair'
+    echo    _adb-tls-connect entries are for 'deploy.cmd connect'
+    echo.
+    "%ADB%" mdns services
+    echo.
+    echo    Nothing listed? The phone must be on the SAME Wi-Fi network,
+    echo    with Wireless debugging switched on. Some networks block mDNS
+    echo    between clients - in that case read the address off the phone
+    echo    and pass it by hand.
+    exit /b %ERRORLEVEL%
+)
+
 if /i "%~1"=="apk" (
     if not exist "%APK%" call :build || exit /b 1
     echo %APK%
@@ -70,12 +91,14 @@ if errorlevel 1 (
     echo     USB cable   - enable Developer options then USB debugging,
     echo                   plug in, and accept the RSA prompt on the phone.
     echo.
-    echo     Wireless    - Developer options ^> Wireless debugging ^>
-    echo                   Pair device with pairing code, then:
+    echo     Wireless    - Developer options ^> Wireless debugging ^> on.
+    echo                   Then, with 'Pair device with pairing code' open:
+    echo                     deploy.cmd find                  ^(shows IP:PORT^)
     echo                     deploy.cmd pair  IP:PAIRPORT CODE
     echo                     deploy.cmd connect IP:PORT
-    echo                   ^(the two ports are different; the pairing one
-    echo                    is on the popup, the other on the main screen^)
+    echo                   ^(the two ports differ; the pairing one is on the
+    echo                    popup, the other on the main screen. Pairing is
+    echo                    once per phone, connect is after every reboot.^)
     echo.
     echo     Sideload    - copy this file to the phone and tap it:
     echo                     %APK%

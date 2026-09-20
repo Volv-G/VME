@@ -275,7 +275,11 @@ Toolchain installed under:
 
 Build with:
   android\build.cmd            (debug APK)
-  android\build.cmd install    (debug APK + push to a connected phone)
+  android\deploy.cmd           (build, install on the phone, launch, tail log)
+
+The phone is best paired over wireless debugging, not USB - the HDMI
+  capture adapter takes the only port. deploy.cmd explains how if it
+  finds no device.
 
 Nothing was added to your PATH or registry. To remove all of it:
   Remove-Item -Recurse -Force "$ToolchainDir"
