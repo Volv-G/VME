@@ -265,8 +265,21 @@ if ((Test-Path $wrapperJar) -and -not $Force) {
 # per-machine.
 Write-Step "local.properties"
 $localProps = Join-Path $androidDir 'local.properties'
-"sdk.dir=$($sdkDir -replace '\\', '\\')" | Set-Content -Path $localProps -Encoding ascii
+
+# Rewrite only the sdk.dir line. This file also holds vme.streamUrl - the
+# YouTube ingest URL, kept here precisely because the file is gitignored
+# and the repo is public - and clobbering the whole file on every bootstrap
+# would delete a credential that cannot be recovered from the repo.
+$keep = @()
+if (Test-Path $localProps) {
+    $keep = @(Get-Content $localProps | Where-Object { $_ -notmatch '^\s*sdk\.dir\s*=' })
+}
+$lines = @("sdk.dir=$($sdkDir -replace '\\', '\\')") + $keep
+$lines | Set-Content -Path $localProps -Encoding ascii
 Write-Host "    sdk.dir -> $sdkDir"
+foreach ($line in $keep) {
+    if ($line.Trim()) { Write-Host "    kept $($line.Split('=')[0])" }
+}
 
 Write-Step "Done"
 Write-Host @"

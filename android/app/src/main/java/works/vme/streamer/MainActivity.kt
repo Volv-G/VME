@@ -85,6 +85,13 @@ class MainActivity : ComponentActivity(), ConnectChecker {
         log("VME streamer spike harness")
         log("device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         log("Press 1 PROBE with the HDMI adapter plugged in.")
+        if (BuildConfig.STREAM_URL.isEmpty()) {
+            log("No stream URL baked in. Paste one, or set vme.streamUrl in " +
+                "android/local.properties and rebuild.")
+        } else {
+            log("stream URL loaded from local.properties " +
+                "(...${BuildConfig.STREAM_URL.takeLast(4)})")
+        }
         log("")
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
@@ -123,6 +130,9 @@ class MainActivity : ComponentActivity(), ConnectChecker {
             inputType = InputType.TYPE_TEXT_VARIATION_URI
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
+            // Prefilled from local.properties at build time so the key does
+            // not have to be typed on a phone keyboard. Still editable.
+            setText(BuildConfig.STREAM_URL)
         }
         root.addView(urlInput)
 

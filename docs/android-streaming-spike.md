@@ -1,8 +1,12 @@
 # Android streaming app — spike plan
 
-Status: **step 0 harness built, not yet run on hardware.**
-The harness is `android/` - see [its README](../android/README.md).
-Everything past step 1 is still parked.
+Status: **steps 0 and 2 passed on hardware, 2026-09-19.**
+Capture, preview, audio routing and RTMPS to YouTube all work; see
+[Findings](#findings). Two defects outstanding: the camera opened at
+1440p instead of 1080p (fixed, unverified), and the stream dropped after
+~65 s and its automatic retry failed to reconnect (**unexplained - this
+is now the top risk**). The harness is `android/` - see
+[its README](../android/README.md).
 
 Goal: replace the current two-app match-day chain with one Android app
 that captures the DSLR over HDMI→USB, burns in the VME scoreboard, and
@@ -488,7 +492,63 @@ frames are bandwidth spent to be thrown away.
   misleading log line rather than a routing failure. Now called after
   prepare.
 
-_(pending: preview result after the fix, then step 1)_
+### Steps 0 and 2 — **both passed, 2026-09-19.** It streamed.
+
+DSLR → HDMI → USB adapter → Galaxy S24 → RTMPS → YouTube, live, at
+**~6 Mbps**, with audio from the adapter's own USB audio device:
+
+```
+encoder wants 1920x1080@30 rot=0 (camera negotiates separately)
+audio: routed to USB "USB-Audio - Guermok USB2 Video"
+attach 345f:2130 Guermok USB2 Video
+startStream(rtmps://a.rtmps.youtube.com:443/live2/***)
+connect: SUCCESS
+bitrate 6189 kbps
+```
+
+That clears the **step 0 exit criterion** (live UVC preview) and the
+**step 2 exit criterion** (RTMPS to YouTube) in one sitting. The
+riskiest unknown in the whole plan - "UVC on Android" - is answered:
+it works, on this phone, with this adapter, through UVCAndroid +
+RootEncoder.
+
+Two defects remain, neither fatal.
+
+**1. It ran at 1440p, not 1080p.** The log said `no advertised sizes -
+opening with library defaults` and negotiated `Size(2560x1440@30,
+type:7)`. My second attempt had moved format selection into
+`onDeviceOpen`, but `CameraInternal.getSupportedSizeList()` returns null
+unless `mUVCCamera != null` - the list only exists once the camera is
+open. So the adapter was pushing 1440p MJPEG across a USB 2.0 bus to
+feed a 1080p encoder, which wastes bandwidth and forces the GL pipeline
+to downscale every frame.
+
+The fix reads the list in `onCameraOpen` where it exists, applies the
+choice with `setPreviewSize`, **and remembers it** so the next open can
+pass it straight to `openCamera(Size)`. The remembered value is the
+point: `setPreviewSize` destroys the camera outright if the device
+refuses the format, so the goal is to need it at most once.
+
+**2. The stream broke after ~65 seconds and did not self-heal.**
+
+```
+20:54:03 connect: SUCCESS
+20:55:08 connect: FAILED Error send packet, Broken pipe
+20:55:13 connect: FAILED Error configure stream, a.rtmps.youtube.com
+         ... x4, every 5 s ...
+20:55:33 connect: SUCCESS          (after preview was restarted)
+```
+
+The first failure is the far end closing the socket. The interesting
+part is the four that follow: `Error configure stream` on every retry,
+recovering only around the time preview was restarted by hand. **An
+automatic retry that cannot actually reconnect is worse than no retry**,
+because it looks like it is coping. This needs isolating before any
+match-day use - it is exactly what step 1's dropout test is for, and it
+may be the same phenomenon that makes SidelineHD's relay worth having.
+
+Unknown as yet whether the cause is Wi-Fi, YouTube's ingest, or
+RootEncoder's retry path reusing a poisoned client.
 
 - RootEncoder `CameraUvcSource` result: n/a — not used; see
   `android/UvcVideoSource.kt` for why.

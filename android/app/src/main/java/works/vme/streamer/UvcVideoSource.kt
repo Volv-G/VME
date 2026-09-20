@@ -34,14 +34,34 @@ import com.serenegiant.usb.Size
  * whole. That matters because those cards often advertise 1080p at 60fps
  * only; asking for the same resolution at 30 is what throws.
  *
- * So the format is chosen in `onDeviceOpen`, before the camera is opened
- * at all: `getSupportedSizeList()` needs only the *device*, not an open
- * camera. A first version opened with defaults and then reopened, which
- * cannot work - `closeCamera` and `openCamera` both post to the helper's
- * async handler, and closing the camera also closes the device, so the
- * queued open found `mUsbDevice` gone and silently did nothing. On real
- * hardware that ended the log at "device closed" with no preview and no
+ * Getting there took two wrong turns, both worth recording.
+ *
+ * First: open with defaults, then close and reopen with a chosen size.
+ * That cannot work. `closeCamera` and `openCamera` both post to the
+ * helper's async handler, and closing the camera also closes the device,
+ * so the queued open found `mUsbDevice` gone and silently did nothing.
+ * On hardware the log ended at "device closed" with no preview and no
  * error.
+ *
+ * Second: choose the format in `onDeviceOpen`, before opening. Also
+ * wrong - `CameraInternal.getSupportedSizeList()` returns null unless
+ * `mUVCCamera != null`, which only happens once the camera is open. On
+ * hardware that logged "no advertised sizes" and ran at the library's
+ * default, which on this adapter is 2560x1440 - 1440p over a USB 2.0 bus
+ * to feed a 1080p encoder.
+ *
+ * So the list is read in `onCameraOpen`, where it exists, and the format
+ * is applied two ways:
+ *
+ *  - `setPreviewSize` on the open camera, which is what the library
+ *    itself offers for this, and
+ *  - the choice is remembered, so the *next* open can pass it straight to
+ *    `openCamera(Size)` - the author-sanctioned path, with no resize at
+ *    all.
+ *
+ * The remembered value is what makes this safe: `setPreviewSize` destroys
+ * the camera if the format is refused (see `CameraInternal`), so the
+ * second route exists to avoid needing it.
  */
 class UvcVideoSource(
     private val target: Target,
@@ -80,6 +100,15 @@ class UvcVideoSource(
     private var cameraHelper: ICameraHelper? = null
     private var surface: Surface? = null
     private var running = false
+
+    /**
+     * The format chosen on a previous open, reused on the next one.
+     *
+     * Held in memory rather than persisted: it survives stop/start of the
+     * source, which is all that is needed, and a stale entry cannot then
+     * outlive a change of adapter.
+     */
+    private var remembered: Size? = null
 
     /** What the camera actually ended up running at. */
     @Volatile
@@ -134,9 +163,28 @@ class UvcVideoSource(
             val helper = cameraHelper ?: return
             log("device open (first=$isFirstOpen)")
 
-            // The size list is readable now: getSupportedSizeList() only
-            // needs the device, not an open camera. So the format is chosen
-            // here and the camera is opened exactly once, with it.
+            // The size list is NOT readable yet - it comes off the open
+            // camera. But if a previous open already told us what this
+            // adapter offers, it can be applied here, which is the one path
+            // that never resizes a live camera.
+            val known = remembered
+            if (known == null) {
+                log("opening camera with defaults (format list needs an open camera)")
+                helper.openCamera()
+            } else {
+                log("opening camera directly with remembered $known")
+                try {
+                    helper.openCamera(known)
+                } catch (e: Exception) {
+                    log("openCamera($known) threw: $e - falling back to defaults")
+                    helper.openCamera()
+                }
+            }
+        }
+
+        override fun onCameraOpen(device: UsbDevice) {
+            val helper = cameraHelper ?: return
+
             val sizes: List<Size> = try {
                 helper.supportedSizeList ?: emptyList()
             } catch (e: Exception) {
@@ -144,35 +192,35 @@ class UvcVideoSource(
                 emptyList()
             }
 
-            if (sizes.isEmpty()) {
-                log("no advertised sizes - opening with library defaults")
-                helper.openCamera()
-                return
-            }
-
-            log("supportedSizeList (${sizes.size} entries):")
-            sizes.forEach { log("   $it") }
-
-            val pick = choose(sizes)
-            if (pick == null) {
-                log("nothing usable in the list - opening with defaults")
-                helper.openCamera()
-                return
-            }
-
-            val wanted = atTargetFps(pick)
-            log("opening camera with $wanted")
-            try {
-                helper.openCamera(wanted)
+            val current = try {
+                helper.previewSize
             } catch (e: Exception) {
-                // Something rather than nothing, with the refusal on record.
-                log("openCamera($wanted) threw: $e - retrying with defaults")
-                helper.openCamera()
+                log("getPreviewSize threw: $e"); null
             }
-        }
+            log("camera open at ${current ?: "(unknown)"}, " +
+                "${sizes.size} advertised formats")
 
-        override fun onCameraOpen(device: UsbDevice) {
-            val helper = cameraHelper ?: return
+            if (remembered == null && sizes.isNotEmpty()) {
+                sizes.forEach { log("   $it") }
+                val pick = choose(sizes)?.let { atTargetFps(it) }
+                if (pick != null) {
+                    remembered = pick
+                    if (sameFormat(pick, current)) {
+                        log("already at $pick")
+                    } else {
+                        // The library's own way to change format on an open
+                        // camera. It is not free: CameraInternal destroys the
+                        // camera if the device refuses, so the result is
+                        // checked rather than assumed.
+                        log("applying $pick via setPreviewSize")
+                        try {
+                            helper.setPreviewSize(pick)
+                        } catch (e: Exception) {
+                            log("setPreviewSize threw: $e")
+                        }
+                    }
+                }
+            }
 
             negotiated = try {
                 helper.previewSize?.toString() ?: "(unknown)"
@@ -180,6 +228,11 @@ class UvcVideoSource(
                 "(unknown)"
             }
             log("negotiated: $negotiated")
+            if (remembered != null && !sameFormat(remembered!!, helper.runCatching { previewSize }.getOrNull())) {
+                log("note: setPreviewSize is asynchronous, so the line above may " +
+                    "still show the old format. Stop and start preview to open " +
+                    "directly at ${remembered}.")
+            }
 
             // Order matters: add the surface before starting preview so the
             // first frames have somewhere to land.
@@ -248,6 +301,11 @@ class UvcVideoSource(
         log("requesting ${target.fps}fps instead of ${size.fps} (available: $rates)")
         return Size(size.type, size.width, size.height, target.fps, rates)
     }
+
+    /** Size has no useful equals(), and identity is never right here. */
+    private fun sameFormat(a: Size, b: Size?): Boolean =
+        b != null && a.type == b.type && a.width == b.width &&
+            a.height == b.height && a.fps == b.fps
 
     private fun hex(v: Int) = String.format("%04x", v)
 }

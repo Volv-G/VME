@@ -1,9 +1,23 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+// The ingest URL is read from local.properties, which is gitignored,
+// rather than written into a source file. This repo is public, and a
+// YouTube stream key is a bearer credential: anyone holding it can
+// broadcast to the channel. Committing one is also not undoable - it
+// stays in the git history and in every clone and fork after that.
+//
+// Put this line in android/local.properties:
+//   vme.streamUrl=rtmps://a.rtmps.youtube.com:443/live2/xxxx-xxxx-xxxx-xxxx
+val streamUrl: String = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }
+        ?.inputStream()?.use { load(it) }
+}.getProperty("vme.streamUrl", "")
 
 android {
     namespace = "works.vme.streamer"
@@ -19,6 +33,12 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1-spike"
+
+        buildConfigField("String", "STREAM_URL", "\"$streamUrl\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
