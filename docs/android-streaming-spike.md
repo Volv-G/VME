@@ -1,11 +1,12 @@
 # Android streaming app — spike plan
 
-Status: **steps 0 and 2 passed on hardware, 2026-09-19.**
-Capture, preview, audio routing and RTMPS to YouTube all work; see
-[Findings](#findings). Two defects outstanding: the camera opened at
-1440p instead of 1080p (fixed, unverified), and the stream dropped after
-~65 s and its automatic retry failed to reconnect (**unexplained - this
-is now the top risk**). The harness is `android/` - see
+Status: **step 0 passed; step 2 is blocked on one open bug.**
+Capture, preview at 1080p30, USB audio routing and phone-side broadcast
+creation (step 2b) all work on hardware. What does **not** work: the
+phone's RTMP media never reaches the stream it is bound to, although
+ffmpeg to the same key from a PC does. See
+[the open bug](#open-bug--the-phones-bytes-never-reach-the-bound-stream)
+before touching anything else. The harness is `android/` - see
 [its README](../android/README.md).
 
 Goal: replace the current two-app match-day chain with one Android app
@@ -636,7 +637,118 @@ may be the same phenomenon that makes SidelineHD's relay worth having.
 Unknown as yet whether the cause is Wi-Fi, YouTube's ingest, or
 RootEncoder's retry path reusing a poisoned client.
 
+### Camera fix confirmed — 2026-09-19
+
+```
+camera open at Size(2560x1440@30,type:7), 22 advertised formats
+...
+negotiated: Size(1920x1080@30,type:7)
+```
+
+Reading the list in `onCameraOpen` and applying it with `setPreviewSize`
+works on this adapter: it opens at the library default of 1440p and ends
+up at **1080p30**, the format the encoder is configured for. The
+remembered value means the next open goes straight there.
+
+### Step 2b built on both sides — 2026-09-19
+
+**Backend** (`backend/app/upload/live.py`, `backend/scripts/live_test.py`)
+and **phone** (`3 GO LIVE`, `YouTubeAuth.kt`, `YouTubeLive.kt`). Both
+create a titled broadcast and bind it to the channel's existing stream
+key. Verified working from both: `live_test.py` created, bound and
+**thumbnailed** a broadcast with no consent prompt (the desktop token
+already carries the full `youtube` scope), and the phone did the same
+over its own token.
+
+Phone-side OAuth notes, all confirmed on hardware:
+
+- Play Services authorization returns a **short-lived access token and
+  no refresh token**. Nothing long-lived ships in the APK, which is what
+  the scope decision above requires.
+- There is **no client id in the app**. Google matches the caller by
+  package name plus signing certificate, so an **Android** OAuth client
+  must exist in project `vme-youtube-496704`:
+  package `works.vme.streamer`, SHA-1
+  `10:1F:04:59:36:4C:15:73:FA:2E:18:31:54:87:6C:48:01:B8:F6:EA`
+  (this machine's debug keystore - **per machine**, verified against the
+  APK itself with `apksigner verify --print-certs`).
+- Before that client existed the failure was
+  `ApiException: 8 [UNREGISTERED_ON_API_CONSOLE]`, which names neither
+  the package nor the certificate.
+- The channel has **five stream keys**, three belonging to SidelineHD,
+  which is why both implementations refuse to guess which to bind.
+
+### OPEN BUG — the phone's bytes never reach the bound stream
+
+This is where 2026-09-19 ended. **Do not build anything else until it is
+understood.**
+
+What happened: `3 GO LIVE` created broadcast `425VFJEK4fA`, bound it to
+the `test` stream (`...fx4k`), connected, and pushed ~6 Mbps for 2.5
+minutes with `connect: SUCCESS`. YouTube meanwhile reported:
+
+```
+stream status: inactive   health: noData
+broadcast    : ready               (never transitioned to live)
+```
+
+Then the now-familiar failure: `Error send packet, Broken pipe` at about
+65 seconds, followed by retries that all fail with `Error configure
+stream`.
+
+**The control experiment says the key, the endpoint and the binding are
+all correct.** Pushing ffmpeg from the PC to the *same key*:
+
+```
+ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 ... \
+       -f flv rtmps://a.rtmps.youtube.com/live2/<key>
+
+stream status: active   health: good
+broadcast    : live
+```
+
+So the same key, same host, same binding works from a different encoder.
+The problem is on the phone side.
+
+**This also reframes the earlier "top risk".** The 65-second dropout was
+recorded as a possible network or ingest problem worth a dropout test.
+It now looks like YouTube dropping a publisher it never got usable media
+from - the same bug, seen twice, not two bugs. That is *better* news:
+nothing suggests the gym network or YouTube's relay is at fault.
+
+Two hypotheses, in order of cheapness:
+
+1. **The URL's explicit port.** The app builds
+   `rtmps://a.rtmps.youtube.com:443/live2/<key>`; YouTube's own
+   `rtmpsIngestionAddress` is `rtmps://a.rtmps.youtube.com/live2` with
+   no port, and that is what ffmpeg used. RootEncoder derives
+   `tlsEnabled` from the scheme and defaults the port to 443 anyway
+   (`RtmpClient.kt` ~line 270), so this *should* be equivalent - but it
+   is the only textual difference between the working and failing cases.
+   **Fix regardless:** use the `rtmpsIngestionAddress` the API already
+   returns instead of a hardcoded constant.
+2. **A stale broadcast held the stream.** A backend-created broadcast
+   (`qXf6aLeOte0`) was bound to the same key earlier in the evening and
+   was never deleted; by the time of the ffmpeg test it had vanished on
+   its own (`404 liveBroadcastNotFound`). If YouTube was still
+   associating the key with it, the phone's media would land nowhere
+   visible. This matches the ordering of events exactly.
+
+Tests that separate them, in order:
+
+- Stream from the phone with **no port** in the URL, nothing else
+  changed, with no other broadcast bound.
+- If that fails, stream from the phone to **plain `rtmp://` on 1935** -
+  isolates RootEncoder's TLS path from everything else.
+- If that also fails, it is the media itself: capture what the encoder
+  actually produced by recording locally at the same time.
+
+Housekeeping done: test broadcasts deleted; the channel's default
+persistent broadcast (`Volv Grebennikov Live Stream`) is bound to
+`Default stream key` (`...4db7`), **not** to `test`, so it was never
+competing for our key.
+
 - RootEncoder `CameraUvcSource` result: n/a — not used; see
   `android/UvcVideoSource.kt` for why.
-- Dropout 30 s:
-- Dropout 3 min:
+- Dropout 30 s: superseded — see the open bug above before testing this.
+- Dropout 3 min: as above.
