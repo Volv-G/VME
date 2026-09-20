@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,7 +7,8 @@ plugins {
 
 android {
     namespace = "works.vme.streamer"
-    compileSdk = 35
+    // 36 is forced by RootEncoder 2.7.5; see the root build file.
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "works.vme.streamer"
@@ -13,7 +16,7 @@ android {
         // floor for the audio-device routing this harness uses, and no
         // phone that can run a 1080p encoder is below it anyway.
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "0.1-spike"
     }
@@ -32,9 +35,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
 
     packaging {
         // UVCAndroid ships native libs for several ABIs; nothing here
@@ -42,6 +42,13 @@ android {
         jniLibs {
             useLegacyPackaging = false
         }
+    }
+}
+
+// kotlinOptions.jvmTarget is a hard error in Kotlin 2.3, not a warning.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 

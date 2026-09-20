@@ -21,20 +21,96 @@ Four buttons, in order. Each can fail independently, which is deliberate:
 | **3 STREAM** | Does RTMPS to YouTube hold up? The **step 2 exit criterion**. Paste an ingest URL first. |
 | **COPY** | Whole log to the clipboard, and to a file under the app's external files dir. |
 
-## Setup
+## Build
 
-You need a JDK and the Android SDK; neither is currently installed on the
-dev box. Easiest path is **Android Studio** (bundles both), then
-*File → Open* this `android/` folder and let it sync.
-
-Studio will offer to create the Gradle wrapper jar, which is gitignored.
-From the command line after that:
+Once, to install a self-contained toolchain (JDK 17, Android SDK 35+36,
+build-tools, platform-tools, Gradle). **No admin rights needed** — it all
+lands in `%LOCALAPPDATA%\vme-android` and touches neither PATH nor the
+registry:
 
 ```
-cd android
-./gradlew installDebug        # or gradlew.bat on Windows
-adb logcat -s VMESpike        # same lines as the on-screen log
+powershell -NoProfile -ExecutionPolicy Bypass -File android\scripts\bootstrap.ps1
 ```
+
+Then:
+
+```
+android\build.cmd            REM debug APK
+android\build.cmd clean
+android\deploy.cmd           REM build + install + launch + tail logcat
+```
+
+Android Studio also works — *File → Open* the `android/` folder — but it
+is not required, and the command line above is what has actually been
+exercised. To undo everything: `Remove-Item -Recurse -Force
+$env:LOCALAPPDATA\vme-android`.
+
+### Versions are not negotiable
+
+AGP 8.13.2 / Gradle 8.13 / Kotlin **2.3.21** / compileSdk **36**. Two
+independent constraints force this, both discovered by the compiler
+rather than by reading:
+
+- RootEncoder 2.7.5 is built against **API 36**, so all seven of its
+  modules reject `compileSdk = 35` outright.
+- JitPack built it with **Kotlin 2.3**, so its `.kotlin_module` metadata
+  is version 2.3.0 and any older compiler refuses the dependency with
+  *"Module was compiled with an incompatible version of Kotlin"*. It
+  pulls `kotlin-stdlib 2.3.21` transitively, which is the tell.
+
+The first attempt pinned AGP 8.7.3 / Kotlin 1.9.25 on the theory that
+older is safer for a spike. It did not compile.
+
+## Deploy to the phone
+
+### Use wireless debugging, not the cable
+
+This matters more here than in a normal Android project: **the HDMI
+capture adapter occupies the phone's only USB port.** For the half of
+the testing that involves actual capture, a debugging cable cannot be
+plugged in at the same time. Pair over Wi-Fi once and you can rebuild,
+reinstall and read logcat with the adapter still attached.
+
+On the phone: *Settings → About phone → tap Build number ×7* to unlock
+Developer options, then *Developer options → Wireless debugging → on →
+Pair device with pairing code*. That popup shows an IP, a **pairing**
+port and a 6-digit code; the main Wireless debugging screen shows a
+**different** port for connecting. Both are needed, and mixing them up
+is the usual reason pairing appears to fail.
+
+```
+android\deploy.cmd pair    192.168.1.50:37xxx 123456   REM once per phone
+android\deploy.cmd connect 192.168.1.50:41xxx          REM after each reboot
+android\deploy.cmd                                     REM build+install+run+log
+```
+
+### Or a cable, for the first install
+
+*Developer options → USB debugging*, plug in, accept the RSA prompt,
+then `android\deploy.cmd`. Fine for step 1 (**PROBE** needs the adapter,
+so this only works on a phone with two ports or a powered hub).
+
+### Or no computer at all
+
+`android\deploy.cmd apk` prints the APK path. Copy that file to the
+phone by any means and tap it; allow installing from unknown sources.
+The on-screen log pane and the **COPY** button exist precisely so the
+app is useful with no adb attached — COPY also writes a timestamped
+file under the app's external files directory.
+
+Install is run with `-g`, which pre-grants the microphone permission so
+the harness does not stop to ask.
+
+If install fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, the phone
+has a build signed with a different debug key:
+`adb uninstall works.vme.streamer`.
+
+## Reading the output
+
+The on-screen pane and logcat carry the same lines. `deploy.cmd log`
+tails the tags worth seeing — the harness's own `VMESpike` plus the
+native UVC tags, since the interesting failures happen down in
+`libuvc` and never surface as Kotlin exceptions.
 
 ## Why it does not use `CameraUvcSource`
 
