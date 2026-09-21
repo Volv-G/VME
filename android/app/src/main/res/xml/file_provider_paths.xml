@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    FileProvider only needs to reach the matches/ tree under filesDir,
+    which is where MatchStore writes match.json. Kept scoped rather
+    than "root of filesDir" so a future misuse can't accidentally
+    hand out something else (e.g. a cached OAuth blob) via the same
+    authority.
+-->
+<paths>
+    <files-path name="matches" path="matches/" />
+</paths>

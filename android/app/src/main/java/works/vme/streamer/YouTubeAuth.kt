@@ -45,6 +45,19 @@ object YouTubeAuth {
     private const val SCOPE_YOUTUBE = "https://www.googleapis.com/auth/youtube"
 
     /**
+     * Send the "we are live" announcement (see [works.vme.streamer.Mail]).
+     *
+     * Requested on the same sheet as the YouTube scope rather than when
+     * the first email is sent: consent belongs at the start of the
+     * flow, not in the middle of one, and a prompt appearing the
+     * instant a broadcast goes live is a prompt nobody reads.
+     *
+     * Adding it changes the granted set, so Play Services shows the
+     * sheet once more on the next Go Live and then never again.
+     */
+    private const val SCOPE_GMAIL_SEND = "https://www.googleapis.com/auth/gmail.send"
+
+    /**
      * Ask for a token, prompting for consent only if needed.
      *
      * The first call on a device shows a Google account/consent sheet, which
@@ -59,7 +72,7 @@ object YouTubeAuth {
         onToken: (String) -> Unit,
     ) {
         val request = AuthorizationRequest.builder()
-            .setRequestedScopes(listOf(Scope(SCOPE_YOUTUBE)))
+            .setRequestedScopes(listOf(Scope(SCOPE_YOUTUBE), Scope(SCOPE_GMAIL_SEND)))
             .build()
 
         Identity.getAuthorizationClient(activity)

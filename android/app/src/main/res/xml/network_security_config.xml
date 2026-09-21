@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    A dev VME backend commonly runs on http://<lan-ip>:8000, which
+    Android has blocked by default since API 28. Cleartext is allowed
+    globally here because scoping to RFC 1918 does not work as one might
+    hope: <domain> in this file is a *literal* host string, not a CIDR,
+    so `192.168.1.0` would only match that exact address and not the
+    /24 around it. The alternative - enumerating every IP the phone
+    might see at a gym - is unmaintainable, so the honest thing is a
+    plain base-config allowance and a note saying so.
+
+    The RTMP path to YouTube is unaffected: it is RTMPS, which is not
+    cleartext, and RootEncoder derives TLS from the scheme.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

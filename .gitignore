@@ -33,3 +33,7 @@ media/*/*/source*.mp4
 media/*/*/source*.mov
 media/*/*/source*.mkv
 media/*/*/renders/
+
+# Claude Code's local settings: machine-specific permission paths,
+# meaningless on another checkout.
+.claude/

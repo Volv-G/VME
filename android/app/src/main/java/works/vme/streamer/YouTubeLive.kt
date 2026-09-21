@@ -39,6 +39,9 @@ object YouTubeLive {
 
     data class Broadcast(val id: String, val title: String, val watchUrl: String)
 
+    /** A broadcast as it comes back from a list call. */
+    data class LiveBroadcast(val id: String, val title: String, val status: String)
+
     class ApiError(val status: Int, val reason: String, message: String) : RuntimeException(message)
 
     /**
@@ -151,6 +154,139 @@ object YouTubeLive {
             title = (resp.optJSONObject("snippet") ?: JSONObject()).optString("title"),
             watchUrl = "https://www.youtube.com/watch?v=$id",
         )
+    }
+
+    /**
+     * `liveBroadcasts.list` - 1 quota unit. The broadcast's
+     * `lifeCycleStatus`, or null when it no longer exists.
+     *
+     * Null rather than throwing on a failed lookup: the only caller
+     * is deciding whether to reuse a broadcast, and "could not tell"
+     * has the same safe answer as "it is gone" -- make a new one.
+     */
+    fun broadcastStatus(token: String, id: String): String? = runCatching {
+        val items = get("$API/liveBroadcasts?part=status&id=$id", token)
+            .optJSONArray("items") ?: return@runCatching null
+        if (items.length() == 0) return@runCatching null
+        items.getJSONObject(0).optJSONObject("status")?.optString("lifeCycleStatus")
+    }.getOrNull()
+
+    /**
+     * Can we keep streaming into this broadcast?
+     *
+     * Everything except a broadcast that has been ended or taken
+     * down. `created` / `ready` / `testing` / `live` are all states an
+     * encoder can (re)connect to, and because broadcasts are made
+     * with `enableAutoStop = false`, stopping the encoder leaves one
+     * sitting in `live` rather than completing it -- which is exactly
+     * the case worth resuming after a dropped connection or a battery
+     * swap.
+     */
+    fun isReusable(token: String, id: String): Boolean {
+        val status = broadcastStatus(token, id) ?: return false
+        return status !in setOf("complete", "revoked")
+    }
+
+    /**
+     * `thumbnails.set` - 50 quota units. Attaches [jpeg] to a video.
+     *
+     * Its own connection rather than [call]: this is the upload host,
+     * the body is binary, and the response is not worth parsing.
+     */
+    fun setThumbnail(token: String, videoId: String, jpeg: ByteArray) {
+        val url = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set" +
+            "?videoId=$videoId&uploadType=media"
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Content-Type", "image/jpeg")
+            doOutput = true
+            setFixedLengthStreamingMode(jpeg.size)
+            connectTimeout = 15_000
+            readTimeout = 30_000
+        }
+        try {
+            conn.outputStream.use { it.write(jpeg) }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val text = conn.errorStream
+                    ?.bufferedReader()?.use(BufferedReader::readText).orEmpty()
+                throw translate(code, text)
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
+     * `liveBroadcasts.list` - 1 quota unit. Broadcasts on this
+     * channel in the given state, e.g. `active` (taking video now)
+     * or `upcoming` (created but not started).
+     *
+     * `id`, `mine` and `broadcastStatus` are mutually exclusive
+     * filters, so this passes only the one.
+     *
+     * Empty on failure rather than throwing: the caller is tidying
+     * up before going live, and a tidy-up that cannot see the
+     * channel should not stop the match being streamed.
+     */
+    fun broadcastsWithStatus(token: String, status: String): List<LiveBroadcast> =
+        runCatching {
+            val items = get(
+                "$API/liveBroadcasts?part=id,snippet,status" +
+                    "&broadcastStatus=$status&maxResults=50",
+                token,
+            ).optJSONArray("items") ?: JSONArray()
+            (0 until items.length()).map { i ->
+                val o = items.getJSONObject(i)
+                LiveBroadcast(
+                    id = o.optString("id"),
+                    title = (o.optJSONObject("snippet") ?: JSONObject()).optString("title"),
+                    status = (o.optJSONObject("status") ?: JSONObject())
+                        .optString("lifeCycleStatus"),
+                )
+            }
+        }.getOrElse { emptyList() }
+
+    /**
+     * `liveBroadcasts.transition` - 50 quota units. Ends a broadcast.
+     *
+     * This is what frees the stream key: a key carries one live
+     * broadcast at a time, so a broadcast left in `live` blocks the
+     * next match on the same key. Only legal from `live` or
+     * `testing`; from `ready` the API answers `invalidTransition`,
+     * which the caller logs rather than treats as a failure -- a
+     * broadcast that never started is not holding anything.
+     */
+    fun completeBroadcast(token: String, id: String) {
+        post(
+            "$API/liveBroadcasts/transition" +
+                "?broadcastStatus=complete&id=$id&part=id,status",
+            token,
+            null,
+        )
+    }
+
+    /**
+     * `playlistItems.insert` - 50 quota units. Files a broadcast under
+     * a playlist.
+     *
+     * Best effort at the call site: a typo in the playlist id must not
+     * stop a match going out, and the video can be moved by hand
+     * afterwards. Same call and same reasoning as the backend's
+     * post-upload attach in `app/upload/youtube.py`.
+     */
+    fun addToPlaylist(token: String, playlistId: String, videoId: String) {
+        val body = JSONObject().put(
+            "snippet",
+            JSONObject()
+                .put("playlistId", playlistId)
+                .put(
+                    "resourceId",
+                    JSONObject().put("kind", "youtube#video").put("videoId", videoId),
+                ),
+        )
+        post("$API/playlistItems?part=snippet", token, body)
     }
 
     /** `liveBroadcasts.bind` - 50 quota units. Points the broadcast at the key. */

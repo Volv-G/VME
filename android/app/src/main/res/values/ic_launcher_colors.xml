@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The VME ball is blue and yellow on transparency. A white
+         plate keeps it reading as the same mark as the web favicon;
+         a dark one turned the white panels of the ball into holes. -->
+    <color name="ic_launcher_background">#FFFFFF</color>
+</resources>

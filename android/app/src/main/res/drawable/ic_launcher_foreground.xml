@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon foreground.
+
+     The adaptive canvas is 108dp, of which only the centre 66dp is
+     guaranteed visible - launchers mask the rest into circles,
+     squircles, rounded squares and so on, and animate it during
+     drags. Drawing the ball at 108dp would get its edges clipped
+     into a flat-sided blob on most devices.
+
+     60dp centred leaves the ball comfortably inside the safe zone
+     and still reads as round under a circular mask. Scaling is done
+     here rather than by shrinking the PNG so the source bitmap
+     stays full resolution for the legacy icon. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:gravity="center"
+        android:width="60dp"
+        android:height="60dp"
+        android:drawable="@drawable/vme_ball" />
+</layer-list>
