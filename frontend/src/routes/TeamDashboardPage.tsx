@@ -2,12 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { RosterDto, TournamentSummary } from "../types/api";
-import { RosterEditor } from "../components/RosterEditor";
 import { Modal } from "../components/Modal";
 import { TeamRenderQueue } from "../components/TeamRenderQueue";
-import { TeamYouTubeSettings } from "../components/TeamYouTubeSettings";
-import { TeamNamingSettings } from "../components/TeamNamingSettings";
-import { TeamMediaServerSettings } from "../components/TeamMediaServerSettings";
 import { TeamFullRendersPanel } from "../components/TeamFullRendersPanel";
 import { displayName } from "../util/names";
 
@@ -37,15 +33,6 @@ export function TeamDashboardPage() {
   }, [team]);
 
   useEffect(() => { void load(); }, [load]);
-
-  async function saveRoster(next: RosterDto) {
-    try {
-      const saved = await api.putRoster(team, next);
-      setRoster(saved);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
 
   async function createTournament() {
     const name = newName.trim();
@@ -135,13 +122,25 @@ export function TeamDashboardPage() {
 
       <TeamFullRendersPanel team={team} />
 
-      <TeamYouTubeSettings team={team} roster={roster} onSaved={setRoster} />
-
-      <TeamNamingSettings team={team} roster={roster} onSaved={setRoster} />
-
-      <TeamMediaServerSettings team={team} roster={roster} onSaved={setRoster} />
-
-      {roster && <RosterEditor value={roster} onSave={saveRoster} defaultName={displayName(team)} team={team} />}
+      {/* Settings moved to their own page once there were two upload
+          engines: a playlist is YouTube's vocabulary and a folder path
+          is OneDrive's, and a single stack asked the reader to work out
+          which half applied to them. */}
+      <div className="card">
+        <div className="card-header">
+          <h2>Settings</h2>
+          <Link
+            className="primary button-like"
+            to={`/teams/${encodeURIComponent(team)}/settings`}
+          >
+            Open settings
+          </Link>
+        </div>
+        <p className="muted">
+          Upload destinations, YouTube and OneDrive accounts, file naming,
+          media server, and the roster.
+        </p>
+      </div>
 
       <Modal
         open={creating}

@@ -21,6 +21,9 @@ interface Props {
   currentFrame: number;
   onSelect: (id: number) => void;
   onDelete: (id: number) => void;
+  /** Shift an event along the timeline. Optional: without it the
+   *  nudge buttons are not rendered at all, rather than rendered dead. */
+  onNudge?: (id: number, seconds: number) => Promise<void>;
   onSeek: (globalFrame: number) => void;
   /**
    * Insert a cut_start/cut_end pair over a global-frame span. Optional:
@@ -40,6 +43,7 @@ export function EventList({
   currentFrame,
   onSelect,
   onDelete,
+  onNudge,
   onSeek,
   onInsertCut,
   fps,
@@ -48,7 +52,12 @@ export function EventList({
   homeName,
   opponentName,
 }: Props) {
+  // Which event is mid-nudge, so its buttons can be disabled without
+  // freezing the whole list. Null = nothing in flight.
+  const [nudgingId, setNudgingId] = useState<number | null>(null);
+
   // Local-only search state - fresh per match-editor mount, not persisted.
+
   // Filters nothing; it only highlights so the user keeps scroll context.
   const [query, setQuery] = useState("");
   const trimmed = query.trim();
@@ -359,6 +368,28 @@ export function EventList({
               </div>
               <div className="ev-frame">{frameLabel(ev.global_frame, fps)}</div>
             </div>
+            {onNudge && ev.global_frame !== null && (
+              <span className="event-nudge">
+                {[-1, 1].map((sec) => (
+                  <button
+                    key={sec}
+                    type="button"
+                    className="nudge-btn"
+                    disabled={nudgingId !== null}
+                    title={`Move this event ${sec > 0 ? "later" : "earlier"} by 1 second`}
+                    onClick={(e) => {
+                      // The row seeks on click; nudging shouldn't drag
+                      // the playhead along with it.
+                      e.stopPropagation();
+                      setNudgingId(ev.id);
+                      void onNudge(ev.id, sec).finally(() => setNudgingId(null));
+                    }}
+                  >
+                    {sec > 0 ? "+1s" : "-1s"}
+                  </button>
+                ))}
+              </span>
+            )}
             <button
               className="danger"
               onClick={(e) => {

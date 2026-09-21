@@ -64,6 +64,7 @@ def serialize_event(match: Match, event: MatchEvent) -> EventOut:
         id=raw["id"],
         payload=payload,
         global_frame=global_frame,
+        at_ms=getattr(event, "at_ms", None),
         state=state,
     )
 
@@ -95,6 +96,7 @@ def serialize_match(
         events=[serialize_event(m, e) for e in m.events],
         home_roster=_serialize_roster(scanner.load_team_roster(team)),
         opponent_roster=_serialize_roster(m.opponent_roster),
+        liberos=list(m.liberos),
         reel_lead_seconds=m.reel_lead_seconds,
         reel_tail_seconds=m.reel_tail_seconds,
         reel_lead_default=reels.REEL_MAX_LEAD_SECONDS,

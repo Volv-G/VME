@@ -323,6 +323,13 @@ def find_logo(directory: Path, stem: str) -> Optional[Path]:
     return None
 
 
+def onedrive_sidecar_path(render_path: Path) -> Path:
+    """`<render>.onedrive.json`, the OneDrive counterpart of the
+    YouTube sidecar. Same idea: a listing can report where a file went
+    without calling anyone's API."""
+    return render_path.with_suffix(render_path.suffix + ".onedrive.json")
+
+
 def youtube_sidecar_path(render_path: Path) -> Path:
     """YouTube-upload sidecar for a single rendered file.
 

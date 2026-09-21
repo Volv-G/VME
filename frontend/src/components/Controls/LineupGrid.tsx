@@ -4,6 +4,8 @@ import { positionLabel } from "./state";
 interface Props {
   positions: GameStateDto["home_positions"];
   roster: RosterDto;
+  /** Libero jerseys for this match, for the `(L)` tag. */
+  liberos: readonly number[];
   /** When set, the grid is in "pick a position" mode for an armed action. */
   armedActionLabel: string | null;
   /** Click handler. In normal mode receives any position; in armed mode only fires for filled positions. */
@@ -23,7 +25,13 @@ const LAYOUT: number[][] = [
   [5, 6, 1],
 ];
 
-export function LineupGrid({ positions, roster, armedActionLabel, onPositionClick }: Props) {
+export function LineupGrid({
+  positions,
+  roster,
+  liberos,
+  armedActionLabel,
+  onPositionClick,
+}: Props) {
   return (
     <div className={`lineup-grid${armedActionLabel ? " armed" : ""}`}>
       {LAYOUT.flat().map((pos) => {
@@ -46,7 +54,9 @@ export function LineupGrid({ positions, roster, armedActionLabel, onPositionClic
             }
           >
             <span className="lineup-pos">P{pos}</span>
-            <span className="lineup-name">{positionLabel(roster, jersey)}</span>
+            <span className="lineup-name">
+              {positionLabel(roster, jersey, liberos)}
+            </span>
           </button>
         );
       })}

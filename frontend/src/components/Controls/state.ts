@@ -39,10 +39,82 @@ export function findPlayer(
   return roster.players.find((p) => p.number === number);
 }
 
+/** Jersey tag as shown on buttons and chips: `#7`, or `#7 (L)` for a libero. */
+export function jerseyLabel(jersey: number, liberos: readonly number[]): string {
+  return liberos.includes(jersey) ? `#${jersey} (L)` : `#${jersey}`;
+}
+
 /** Display name for a player at a position; "?" when empty. */
-export function positionLabel(roster: RosterDto, jersey: number | null | undefined): string {
+export function positionLabel(
+  roster: RosterDto,
+  jersey: number | null | undefined,
+  liberos: readonly number[] = []
+): string {
   if (jersey == null) return "?";
   const p = findPlayer(roster, jersey);
-  if (!p) return `#${jersey}`;
-  return `#${p.number} ${p.short_name || p.name.split(" ")[0]}`;
+  if (!p) return jerseyLabel(jersey, liberos);
+  return `${jerseyLabel(p.number, liberos)} ${p.short_name || p.name.split(" ")[0]}`;
+}
+
+// ---- libero rule --------------------------------------------------------
+//
+// A libero may only play the back row. When a side-out rotates one into
+// P4, the player they came on for has to go back in. The backend stores
+// `match.liberos` but its state machine never reads it, so the pairing
+// is derived here, as a pure fold over the event list: it survives
+// reload, undo and reorder for free because nothing is stored.
+
+/** Front-row slots in rotation order: P4 is where a back-row player
+ *  lands first after a side-out. */
+const FRONT_ROW = [4, 3, 2];
+
+/** Position (4/3/2) of the first libero found in the front row, or null. */
+export function frontRowLibero(
+  positions: GameStateDto["home_positions"],
+  liberos: readonly number[]
+): { position: number; jersey: number } | null {
+  for (const position of FRONT_ROW) {
+    const jersey = positions[position];
+    if (jersey != null && liberos.includes(jersey)) return { position, jersey };
+  }
+  return null;
+}
+
+/**
+ * Libero jersey -> jersey of the player they came on for, as of the
+ * last event at or before `uptoFrame`.
+ *
+ * A libero coming on remembers who they replaced; a libero going off,
+ * for anyone by any route, forgets it. Placing a libero into an empty
+ * slot (lineup entry at set start) records nothing - which is what
+ * makes the caller fall back to the picker. Cleared on set end,
+ * because positions are.
+ */
+export function liberoReplacements(
+  events: EventDto[],
+  liberos: readonly number[],
+  uptoFrame: number
+): Record<number, number> {
+  const isLibero = (j: number | null): j is number =>
+    j != null && liberos.includes(j);
+  const pairs: Record<number, number> = {};
+  let prev: GameStateDto = EMPTY_STATE;
+  for (const e of events) {
+    if (e.global_frame === null || e.state == null) continue;
+    if (e.global_frame > uptoFrame) break;
+    if (e.type === "set_end") {
+      for (const k of Object.keys(pairs)) delete pairs[Number(k)];
+    } else if (e.type === "substitution" && e.payload.team === "home") {
+      const position = Number(e.payload.position);
+      const incoming = Number(e.payload.player_in_number);
+      const outgoing = prev.home_positions[position] ?? null;
+      if (isLibero(outgoing)) delete pairs[outgoing];
+      if (isLibero(incoming)) {
+        if (outgoing != null && !isLibero(outgoing)) pairs[incoming] = outgoing;
+        else delete pairs[incoming];
+      }
+    }
+    prev = e.state;
+  }
+  return pairs;
 }

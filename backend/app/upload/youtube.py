@@ -125,10 +125,38 @@ def _is_quota_error(exc: Exception) -> bool:
 # read/manage scope) to attach uploaded videos to a playlist. Adding
 # both up-front avoids forcing a re-consent if the user later configures
 # a playlist.
+# Never add a scope here without re-running the consent flow. `refresh()`
+# checks the requested scopes against what the saved grant actually
+# carries and raises `RefreshError: Not all requested scopes were
+# granted` when they are not a subset - which takes uploads down, not
+# just whatever the new scope was for. (The live-stream announcement
+# briefly lived here; it is sent from the phone instead, on the phone's
+# own grant, so the operator consents where they are standing.)
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube",
 ]
+
+
+def granted_scopes() -> list[str]:
+    """Scopes the saved token actually carries.
+
+    Read from the token file rather than from a `Credentials` object:
+    `from_authorized_user_file` takes the scopes it is *given*, so a
+    credential built with [SCOPES] would report them whether or not the
+    user ever consented. The file records what Google returned.
+    """
+    tok = token_path()
+    if not tok.is_file():
+        return []
+    try:
+        import json
+
+        data = json.loads(tok.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    scopes = data.get("scopes")
+    return list(scopes) if isinstance(scopes, list) else []
 
 
 def _config_dir() -> Path:
@@ -294,20 +322,22 @@ def get_status() -> ConfigStatus:
     )
 
 
-def _build_service():
-    """Create an authenticated `youtube` API client.
+def load_credentials():
+    """Load, refresh and return the saved Google credentials.
+
+    Split out of [_build_service] so other Google APIs on the same grant
+    - currently Gmail, for the live announcement - go through one place
+    for the token dance and its error messages.
 
     Loads the saved refresh token, mints a fresh access token if
     necessary (and re-saves the token file when google-auth rotates
-    fields), and returns the v3 client. Raises a clear RuntimeError
-    when prerequisites aren't met - caller is expected to surface this
-    as a user-facing failure message.
+    fields). Raises a clear RuntimeError when prerequisites aren't met -
+    caller is expected to surface this as a user-facing failure message.
     """
     try:
         from google.auth.exceptions import RefreshError
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
-        from googleapiclient.discovery import build
     except ImportError as exc:
         raise RuntimeError(
             "YouTube upload libraries are not installed: " + str(exc)
@@ -358,6 +388,14 @@ def _build_service():
             _record_auth_error(msg)
             raise RuntimeError(msg)
     _clear_auth_error()
+    return creds
+
+
+def _build_service():
+    """Create an authenticated `youtube` API client."""
+    from googleapiclient.discovery import build
+
+    creds = load_credentials()
     # `cache_discovery=False` silences a noisy file-cache warning under
     # newer google-api-python-client versions.
     return build("youtube", "v3", credentials=creds, cache_discovery=False)

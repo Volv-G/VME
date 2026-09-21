@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { GameStateDto, RosterDto } from "../../types/api";
+import { jerseyLabel } from "./state";
 
 interface Props {
   roster: RosterDto;
@@ -7,12 +8,28 @@ interface Props {
   lineup: GameStateDto["home_positions"];
   /** Position number being filled. */
   position: number;
+  /** Libero jerseys for this match - for the `(L)` tag and the filter below. */
+  liberos: readonly number[];
+  /** Hide liberos - for a front-row slot they are not allowed to fill. */
+  excludeLiberos?: boolean;
+  /** Shown above the grid when the picker was opened by a rule rather
+   *  than a click, so the user knows why they are being asked. */
+  reason?: string | null;
   onPick: (jersey: number) => void;
   onClose: () => void;
 }
 
 /** Inline picker that replaces the lineup grid while choosing a player to substitute in. */
-export function RosterPicker({ roster, lineup, position, onPick, onClose }: Props) {
+export function RosterPicker({
+  roster,
+  lineup,
+  position,
+  liberos,
+  excludeLiberos,
+  reason,
+  onPick,
+  onClose,
+}: Props) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
@@ -38,7 +55,9 @@ export function RosterPicker({ roster, lineup, position, onPick, onClose }: Prop
     );
   }
 
-  const sorted = [...roster.players].sort((a, b) => a.number - b.number);
+  const sorted = [...roster.players]
+    .filter((p) => !(excludeLiberos && liberos.includes(p.number)))
+    .sort((a, b) => a.number - b.number);
 
   return (
     <div className="roster-picker">
@@ -46,6 +65,7 @@ export function RosterPicker({ roster, lineup, position, onPick, onClose }: Prop
         <strong>Position {position} - choose player</strong>
         <button onClick={onClose}>Cancel</button>
       </div>
+      {reason && <p className="muted">{reason}</p>}
       <div className="roster-picker-grid">
         {sorted.map((p) => (
           <button
@@ -55,7 +75,7 @@ export function RosterPicker({ roster, lineup, position, onPick, onClose }: Prop
             onClick={() => onPick(p.number)}
             title={onCourt.has(p.number) ? `${p.name} (currently on court)` : p.name}
           >
-            <span className="chip-num">#{p.number}</span>
+            <span className="chip-num">{jerseyLabel(p.number, liberos)}</span>
             <span className="chip-name">{p.short_name || p.name.split(" ")[0]}</span>
           </button>
         ))}

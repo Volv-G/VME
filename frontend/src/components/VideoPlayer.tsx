@@ -26,6 +26,16 @@ interface Props {
   fps: number;
   /** Called continuously while playing/seeking with the latest global frame. */
   onFrame?: (globalFrame: number) => void;
+  /**
+   * When set, playback is held and this string is shown over the video
+   * as the reason.
+   *
+   * For prompts the operator has to answer before carrying on - the
+   * libero substitution being the first. Stepping frames stays
+   * available: it does not run away from them, and being able to look
+   * at the surrounding play is often how the question gets answered.
+   */
+  playbackLock?: string | null;
 }
 
 /** Resolves a global frame to (clip index, local frame). */
@@ -47,11 +57,16 @@ function clipOffset(clips: ClipDto[], idx: number): number {
 }
 
 export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
-  { team, tournament, date, match, clips, fps, onFrame },
+  { team, tournament, date, match, clips, fps, onFrame, playbackLock },
   ref
 ) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const zoomRef = useRef<ReactZoomPanPinchRef | null>(null);
+  // Mirrored into a ref because the clip-switch effect resumes playback
+  // from a closure captured when the src changed, which is not
+  // necessarily the render where the lock came on.
+  const lockRef = useRef<string | null | undefined>(playbackLock);
+  lockRef.current = playbackLock;
   // The frame we last asked the video to display. Used to chain rapid step
   // clicks off the intended position instead of the stale, mid-seek
   // video.currentTime. Cleared on 'seeked' / 'play' / clip change.
@@ -133,7 +148,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       if (v && clips[newIdx]) {
         targetFrameRef.current = localSeekFrame;
         v.currentTime = timeForFrame(localSeekFrame, clips[newIdx].fps || fps);
-        if (autoPlay) void v.play();
+        if (autoPlay && !lockRef.current) void v.play();
       }
       return;
     }
@@ -313,6 +328,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   function playAt(rate: number) {
     const v = videoRef.current;
     if (!v || !activeClip || clips.length === 0) return;
+    // The single gate every route into playback passes through: the
+    // buttons, all four hotkeys, and the rate hot-swap.
+    if (lockRef.current) return;
 
     const sameRate = Math.abs(v.playbackRate - rate) < 0.01;
     if (!v.paused && sameRate) {
@@ -337,6 +355,13 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     v.playbackRate = rate;
     if (v.paused) void v.play();
   }
+
+  // Stop whatever is running the moment something starts waiting on the
+  // operator. Pausing here is only half of it - the hotkeys and the play
+  // buttons are still live, so `playAt` checks the lock as well.
+  useEffect(() => {
+    if (playbackLock) videoRef.current?.pause();
+  }, [playbackLock]);
 
   // Hotkeys. Bindings live in src/hotkeys/catalog.ts and can be customized
   // (and persisted) via the registry; here we only wire live handlers.
@@ -369,6 +394,14 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div className="editor-video">
+        {playbackLock && (
+          // Over the video rather than beside the controls: that is
+          // where the operator is looking when playback stops under
+          // them, and "why did it stop" should not need hunting for.
+          <div className="playback-lock" role="status">
+            ⏸ {playbackLock}
+          </div>
+        )}
         <TransformWrapper
           ref={zoomRef}
           minScale={1}
@@ -432,7 +465,14 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
                 key={rate}
                 onClick={() => playAt(rate)}
                 className={`play-btn${active ? " primary" : ""}`}
-                title={active ? "Pause (Space)" : `Play at ${rate}×${hotkey}`}
+                disabled={!!playbackLock}
+                title={
+                  playbackLock
+                    ? playbackLock
+                    : active
+                      ? "Pause (Space)"
+                      : `Play at ${rate}×${hotkey}`
+                }
               >
                 {active ? "❚❚" : label}
               </button>

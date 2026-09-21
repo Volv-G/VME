@@ -56,6 +56,21 @@ class MatchEvent:
     clip_id: str = ""
     local_frame: int = 0
 
+    # Wall-clock moment of this event, in Unix milliseconds.
+    #
+    # Frames address a position in the *edit*; this addresses a moment in
+    # the *world*. The two answer different questions, and only the second
+    # one survives the clips being re-probed, reordered, replaced, or
+    # never having existed - which is the case when the events were tagged
+    # on a phone that never saw this footage.
+    #
+    # `clip_id` + `local_frame` remain what gets rendered. This is the
+    # companion that says where those came from, so they can be
+    # recomputed. None on events recorded before the field existed;
+    # `Match.backfill_event_times` derives one from the frame position
+    # and the clip's recording time.
+    at_ms: Optional[int] = None
+
     # Computed snapshot of state AFTER applying this event. Not serialized.
     state: Optional[GameState] = field(default=None, repr=False, compare=False)
 

@@ -108,6 +108,10 @@ def patch_match(
                 f"{attr} must be between 0 and 60 seconds (got {value})",
             )
         setattr(m, attr, value)
+    if body.liberos is not None:
+        # Order-preserving dedupe; a jersey need not be on the roster
+        # (the phone adds ad-hoc jerseys), it just has to be a number.
+        m.liberos = list(dict.fromkeys(int(n) for n in body.liberos))
     if body.opponent_roster is not None:
         m.opponent_roster = Roster(
             team_name=body.opponent_roster.team_name,

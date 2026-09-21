@@ -86,6 +86,13 @@ class Match:
     clips: list[Clip] = field(default_factory=list)
     events: list[MatchEvent] = field(default_factory=list)
     opponent_roster: Roster = field(default_factory=Roster)
+    # Home jersey numbers designated libero for this match. Liberos may
+    # only play the back row; the editor uses this to send one off when
+    # a rotation carries them to the front. Per match, not per roster,
+    # because the designation changes between matches. The state
+    # machine does not read it - the swap is an ordinary substitution
+    # event, so a finished match replays identically with or without it.
+    liberos: list[int] = field(default_factory=list)
     # Per-match override of how much footage a player-reel segment keeps
     # around a tagged action, in seconds. `None` means "use the defaults"
     # (`render.reels.REEL_MAX_LEAD_SECONDS` / `REEL_MAX_TAIL_SECONDS`) -
@@ -145,6 +152,192 @@ class Match:
                 return (c.id, global_frame - offset)
             offset += c.frame_count
         return None
+
+    # ---- Absolute time ---------------------------------------------------
+    #
+    # Everything downstream - renderer, frame map, cuts - works in frames,
+    # and still does. These translate between that and wall-clock time so
+    # an event tagged somewhere else, against no footage at all, can be
+    # placed on this timeline.
+
+    @property
+    def timeline_epoch_ms(self) -> Optional[int]:
+        """Wall-clock time of global frame 0, in Unix milliseconds.
+
+        Taken from the first clip that knows when it started recording,
+        walked back past the clips in front of it. None when no clip has
+        a recording time: such a match has no anchor to the world, and
+        its events keep frame addressing alone rather than being given
+        a fabricated one.
+        """
+        elapsed_ms = 0.0
+        for c in self.clips:
+            if c.start_recording_time is not None:
+                return int(c.start_recording_time * 1000.0 - elapsed_ms)
+            elapsed_ms += c.duration * 1000.0
+        return None
+
+    def clip_start_ms(self, clip_id: str) -> Optional[int]:
+        """Wall-clock start of a clip.
+
+        Its own recording time when ffprobe found one, otherwise
+        projected from the epoch by summing the clips in front of it.
+        The projection assumes the clips are contiguous, which is what
+        "we did not stop recording between these two" means - and when
+        the camera *was* stopped, the clip after the gap almost always
+        carries its own timestamp anyway.
+        """
+        clip = self.get_clip(clip_id)
+        if clip is None:
+            return None
+        if clip.start_recording_time is not None:
+            return int(clip.start_recording_time * 1000.0)
+        epoch = self.timeline_epoch_ms
+        if epoch is None:
+            return None
+        elapsed_ms = 0.0
+        for c in self.clips:
+            if c.id == clip_id:
+                return int(epoch + elapsed_ms)
+            elapsed_ms += c.duration * 1000.0
+        return None
+
+    def event_time_ms(self, event: MatchEvent) -> Optional[int]:
+        """When an event happened, derived from where it sits."""
+        if isinstance(event, ClipTransitionEvent):
+            return None
+        start = self.clip_start_ms(event.clip_id)
+        if start is None:
+            return None
+        clip = self.get_clip(event.clip_id)
+        fps = (clip.fps if clip and clip.fps else self.fps) or 30.0
+        return int(start + (event.local_frame / fps) * 1000.0)
+
+    def project_ms(self, at_ms: int) -> Optional[tuple[str, int]]:
+        """Frame position for a wall-clock moment.
+
+        A moment inside a clip maps exactly. A moment in a **gap** - the
+        camera was stopped, so no footage of it exists - is pulled
+        forward to the first frame of the next clip, the earliest place
+        it could be shown. Before the first clip is the same case. After
+        the last clip lands on its final frame, since there is nothing
+        later to pull it to.
+
+        None when the clips carry no recording times at all, because
+        then there is no mapping to make.
+        """
+        if not self.clips:
+            return None
+        spans: list[tuple[Clip, int, int]] = []
+        for c in self.clips:
+            start = self.clip_start_ms(c.id)
+            if start is None:
+                return None
+            spans.append((c, start, start + int(c.duration * 1000.0)))
+
+        for clip, start, end in spans:
+            if at_ms >= end:
+                continue
+            if at_ms < start:
+                # In the gap before this clip (or before the match).
+                return (clip.id, 0)
+            fps = (clip.fps or self.fps) or 30.0
+            frame = int(round((at_ms - start) / 1000.0 * fps))
+            return (clip.id, max(0, min(frame, max(0, clip.frame_count - 1))))
+
+        last = spans[-1][0]
+        return (last.id, max(0, last.frame_count - 1))
+
+    def covers_ms(self, at_ms: int) -> bool:
+        """True when some clip was recording at that moment.
+
+        The question `project_ms` cannot answer on its own: it always
+        returns a position, so the caller cannot tell an exact placement
+        from one that was pulled out of a gap. Import reports the
+        difference, because "12 of your events happened while the camera
+        was stopped" is worth knowing.
+        """
+        for c in self.clips:
+            start = self.clip_start_ms(c.id)
+            if start is None:
+                continue
+            if start <= at_ms < start + int(c.duration * 1000.0):
+                return True
+        return False
+
+    def backfill_event_times(self) -> bool:
+        """Give every event an `at_ms` derived from its frame position.
+
+        Legacy events predate the field. Derived, not guessed: the frame
+        position and the clip's recording time between them say exactly
+        when it happened. Events on a match whose clips have no recording
+        times are left alone - there is nothing to derive from.
+        """
+        changed = False
+        for e in self.events:
+            if getattr(e, "at_ms", None) is not None:
+                continue
+            when = self.event_time_ms(e)
+            if when is not None:
+                e.at_ms = when
+                changed = True
+        return changed
+
+    def is_placed(self, event: MatchEvent) -> bool:
+        """True when this event sits on a clip that actually exists.
+
+        An event imported before the footage has a time but no position:
+        its `clip_id` is empty, so it renders nowhere and seeks nowhere
+        until [place_pending_events] finds it a home.
+        """
+        if isinstance(event, ClipTransitionEvent):
+            return True
+        return self.get_clip(event.clip_id) is not None
+
+    def place_pending_events(self) -> bool:
+        """Give a frame position to events that have a time but no clip.
+
+        Events routinely arrive before the footage does - the phone
+        finishes the moment the match does, while the card is still in
+        the camera. Rather than refuse the import and make the operator
+        remember to come back, such events are stored with their `at_ms`
+        alone and placed here, once there is something to place them on.
+
+        Idempotent, and only ever touches events with no valid clip, so
+        an event the operator has since nudged by hand is left where
+        they put it.
+        """
+        if not self.clips:
+            return False
+        changed = False
+        for e in self.events:
+            if isinstance(e, ClipTransitionEvent):
+                continue
+            at = getattr(e, "at_ms", None)
+            if at is None or self.is_placed(e):
+                continue
+            placed = self.project_ms(at)
+            if placed is not None:
+                e.clip_id, e.local_frame = placed
+                changed = True
+        if changed:
+            self._sort_events()
+            self._recompute_states()
+        return changed
+
+    def reproject_event(self, event: MatchEvent, at_ms: int) -> bool:
+        """Move an event to a wall-clock moment, frames and all.
+
+        The single place that keeps the two addressings in step: callers
+        that shift an event in time go through here rather than setting
+        `at_ms` and leaving the frame position saying something else.
+        """
+        placed = self.project_ms(at_ms)
+        if placed is None:
+            return False
+        event.clip_id, event.local_frame = placed
+        event.at_ms = at_ms
+        return True
 
     # ---- Events ----------------------------------------------------------
 
@@ -214,16 +407,24 @@ class Match:
         return max((e.id for e in self.events), default=0) + 1
 
     def _sort_events(self) -> None:
-        def key(e: MatchEvent) -> tuple[int, int]:
+        def key(e: MatchEvent) -> tuple[int, int, int]:
+            # Three ranks: everything on the timeline first, ordered by
+            # frame; then events that have a time but nowhere to sit yet,
+            # ordered by that time. Without the third rank an unplaced
+            # log would all collide on one key and keep whatever order it
+            # happened to be inserted in - which is right by luck on a
+            # fresh import and wrong on the second one.
             if isinstance(e, ClipTransitionEvent):
                 # Place at boundary between from_clip and to_clip.
                 offset = self.clip_offset(e.from_clip_id)
                 clip = self.get_clip(e.from_clip_id)
                 if offset is None or clip is None:
-                    return (10**9, e.id)
-                return (offset + clip.frame_count, 0)
+                    return (2, 10**9, e.id)
+                return (0, offset + clip.frame_count, 0)
             g = self.to_global_frame(e.clip_id, e.local_frame)
-            return (g if g is not None else 10**9, 1)
+            if g is not None:
+                return (0, g, 1)
+            return (1, getattr(e, "at_ms", None) or 0, e.id)
 
         self.events.sort(key=key)
 
@@ -252,6 +453,7 @@ class Match:
             # to your channel and doesn't influence your file
             # naming). Strips those keys so match.json stays clean.
             "opponent_roster": self.opponent_roster.to_dict(include_admin=False),
+            "liberos": list(self.liberos),
             "reel_lead_seconds": self.reel_lead_seconds,
             "reel_tail_seconds": self.reel_tail_seconds,
         }
@@ -265,11 +467,16 @@ class Match:
             clips=[Clip.from_dict(c) for c in data.get("clips", [])],
             events=[event_from_dict(e) for e in data.get("events", [])],
             opponent_roster=Roster.from_dict(data.get("opponent_roster", {})),
+            liberos=[int(n) for n in (data.get("liberos") or [])],
             reel_lead_seconds=_opt_float(data.get("reel_lead_seconds")),
             reel_tail_seconds=_opt_float(data.get("reel_tail_seconds")),
             schema_version=int(data.get("schema_version", SCHEMA_VERSION)),
         )
         m._sort_events()
+        # Legacy matches gain their wall-clock times the first time they
+        # are read. Only fills what is missing, so an event that already
+        # carries one is never second-guessed.
+        m.backfill_event_times()
         m._recompute_states()
         return m
 

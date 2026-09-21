@@ -290,18 +290,53 @@ def _draw_wedges(img: Image.Image, spec: ThumbnailSpec, *, flat: bool) -> None:
     img.paste(Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB"), (0, 0))
 
 
+def _initials(name: str) -> str:
+    """Short stand-in for a team with no crest.
+
+    Initials for a multi-word name ("Bellevue Storm" -> BS), the first
+    three letters of a single one ("Woodinville" -> WOO). Digits
+    survive, because age-group sides are routinely "Rivers 14U" and
+    dropping the number merges two teams.
+    """
+    words = [w for w in (name or "").split() if w]
+    if not words:
+        return ""
+    if len(words) == 1:
+        return words[0][:3].upper()
+    return "".join(w[0] for w in words[:3]).upper()
+
+
 def _draw_logos(img: Image.Image, spec: ThumbnailSpec) -> None:
-    """Circular team logos, one per side, vertically centered."""
+    """Circular team logos, one per side, vertically centered.
+
+    Every disc has a fallback, and a side with nothing left to draw is
+    skipped rather than composited as None. That was not defensive
+    enough before: `_logo_disc` returns None for a missing path, and an
+    opponent with no uploaded crest - the normal case - took the whole
+    thumbnail down with an AttributeError. The render then uploaded with
+    whatever frame the host picked, which is how a reel ended up
+    fronted by an empty court.
+    """
     y = (THUMB_H - LOGO_D) // 2 - 20
     home_x = int(THUMB_W * 0.13) - LOGO_D // 2
     away_x = int(THUMB_W * 0.87) - LOGO_D // 2
+
     home_disc = _logo_disc(spec.home_logo, LOGO_D, photo=spec.home_is_photo)
     if home_disc is None and spec.home_badge:
         # No player photo (or it failed to load): a number badge still
         # identifies whose reel this is, which is the whole point of the
         # left-hand disc on a reel thumbnail.
         home_disc = _badge_disc(spec.home_badge, spec.home_color, LOGO_D)
-    for disc, x in ((home_disc, home_x), (_logo_disc(spec.away_logo, LOGO_D), away_x)):
+    if home_disc is None and _initials(spec.home_name):
+        home_disc = _badge_disc(_initials(spec.home_name), spec.home_color, LOGO_D)
+
+    away_disc = _logo_disc(spec.away_logo, LOGO_D)
+    if away_disc is None and _initials(spec.away_name):
+        away_disc = _badge_disc(_initials(spec.away_name), spec.away_color, LOGO_D)
+
+    for disc, x in ((home_disc, home_x), (away_disc, away_x)):
+        if disc is None:
+            continue
         rgba = img.convert("RGBA")
         rgba.alpha_composite(disc, (x, y))
         img.paste(rgba.convert("RGB"), (0, 0))

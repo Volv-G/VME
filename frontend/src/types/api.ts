@@ -60,6 +60,7 @@ export interface RosterDto {
   /** Team-level YouTube upload defaults. Optional on input - the server
    *  preserves any previously-saved settings when omitted. */
   youtube?: YouTubeConfigDto | null;
+  upload?: UploadConfigDto | null;
   /** Team-level render-output naming templates. Optional - omitted
    *  block leaves previously-saved values intact. */
   naming?: NamingConfigDto | null;
@@ -133,6 +134,10 @@ export interface EventDto {
   id: number;
   payload: Record<string, unknown>;
   global_frame: number | null;
+  /** Wall-clock moment of the event, Unix milliseconds. Null when this
+   *  match's clips carry no recording times, and on clip transitions.
+   *  The server keeps it in step with `global_frame`. */
+  at_ms: number | null;
   /** Server-computed game state snapshot AFTER this event. Null for ClipTransition. */
   state: GameStateDto | null;
 }
@@ -151,6 +156,16 @@ export interface MatchDto {
   events: EventDto[];
   home_roster: RosterDto;
   opponent_roster: RosterDto;
+  /** Home jersey numbers designated libero for this match (back row
+   *  only). The controls panel sends one off automatically when a
+   *  rotation carries them to P4. Per match - it changes between
+   *  tournaments - so it is set from the match editor, not the roster.
+   *
+   *  Optional because the frontend deploys on build while the backend
+   *  waits on a service restart: between the two, a running server
+   *  answers without this field. Read it through the `liberos`
+   *  fallback in ControlsPanel, never directly. */
+  liberos?: number[];
   /** Player-reel padding around a tagged action, in seconds. `null`
    *  means this match uses the server defaults below. */
   reel_lead_seconds: number | null;
@@ -159,6 +174,26 @@ export interface MatchDto {
    *  instead of hardcoding numbers that live on the backend. */
   reel_lead_default: number;
   reel_tail_default: number;
+}
+
+/** Which engine uploads what, per team. */
+export interface UploadConfigDto {
+  match_destination: "youtube" | "onedrive";
+  reel_destination: "youtube" | "onedrive";
+  onedrive_folder?: string | null;
+  onedrive_share_links: boolean;
+}
+
+/** One upload account the server can act as. */
+export interface AuthStatusDto {
+  provider: string;
+  connected: boolean;
+  /** Scopes the saved grant actually carries, read from the token file. */
+  scopes: string[];
+  client: { present: boolean; kind: "web" | "installed" | null };
+  /** The callback that must be registered with the provider. */
+  redirect_uri: string;
+  reason: string;
 }
 
 export interface RenderJobDto {
@@ -240,6 +275,15 @@ export interface RenderFileDto {
 /** A full-match render listed on the team dashboard, with optional
  *  YouTube upload state read from the per-render sidecar. */
 export interface FullRenderDto {
+  /** Where a future upload of this file would go, from the team's
+   *  config and this file's kind. Drives the button label. */
+  upload_destination: "youtube" | "onedrive";
+  /** Set once a OneDrive upload has been recorded. The URL is the
+   *  anonymous share link when the drive allowed one, else the
+   *  signed-in webUrl. */
+  onedrive_item_id?: string | null;
+  onedrive_uploaded_at?: number | null;
+  onedrive_url?: string | null;
   team: string;
   tournament: string;
   date: string;

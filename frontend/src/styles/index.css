@@ -431,6 +431,161 @@ label {
 }
 .event-row.orphan:hover { background: rgba(248, 81, 73, 0.16); }
 .event-row.orphan.selected { background: rgba(248, 81, 73, 0.18); }
+/* --- Team settings: one subject per subpage --- */
+.page-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.settings-tab {
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 13px;
+}
+.settings-tab:hover { color: var(--text); }
+.settings-tab.active {
+  background: var(--bg-elev);
+  border-color: var(--border);
+  color: var(--text);
+  /* Sit on top of the rule so the active tab reads as attached to the
+     panel below it rather than as one more button in a row. */
+  margin-bottom: -1px;
+  padding-bottom: 8px;
+}
+
+.field-block { margin-top: 16px; }
+.field-block > label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+/* Engine choice: cards rather than a <select>, because the trade-off
+   between the two is the whole decision and a dropdown hides it. */
+.engine-choice { display: flex; gap: 8px; flex-wrap: wrap; }
+.engine-btn {
+  flex: 1 1 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 12px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev-2);
+}
+.engine-btn .muted { font-size: 11px; line-height: 1.35; }
+.engine-btn.active {
+  border-color: var(--accent);
+  background: var(--bg-elev);
+  outline: 1px solid var(--accent);
+}
+
+.setup-block {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.setup-block h3 { margin: 0 0 8px; font-size: 13px; }
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+.checkbox-row input { width: auto; }
+
+.button-like {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 4px;
+  text-decoration: none;
+}
+
+/* Upload connections: the callback URL is meant to be copied into
+   Google Cloud Console, so it gets monospace and room to be selected
+   rather than being squeezed into running text. */
+.redirect-uri {
+  display: block;
+  padding: 6px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  word-break: break-all;
+  user-select: all;
+}
+.ok-badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(46, 158, 79, 0.18);
+  border: 1px solid #2e9e4f;
+  color: #7ddc9f;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* "Playback held" banner, pinned over the top of the video. Amber
+   rather than red: nothing is wrong, something is waiting. */
+.playback-lock {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: 90%;
+  padding: 5px 12px;
+  border-radius: 4px;
+  background: rgba(20, 16, 6, 0.92);
+  border: 1px solid #d99b2b;
+  color: #f5c86a;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* +1s / -1s, between the event text and the delete button. Small and
+   quiet: they are used occasionally to correct a tag, and should not
+   compete with the summary for attention in a list of 200 rows. */
+.event-nudge {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.event-nudge .nudge-btn {
+  min-width: 0;
+  padding: 1px 5px;
+  font-size: 10px;
+  line-height: 1.4;
+  font-family: ui-monospace, monospace;
+  opacity: 0.55;
+}
+.event-row:hover .event-nudge .nudge-btn,
+.event-row.selected .event-nudge .nudge-btn {
+  opacity: 1;
+}
+.event-nudge .nudge-btn:disabled {
+  opacity: 0.3;
+}
+
 .event-row .orphan-badge {
   display: inline-block;
   width: 14px;
@@ -704,6 +859,17 @@ label {
   line-height: 1;
 }
 
+/* "L" button beside it: opens the per-match libero picker. Shows a
+   count once liberos are set, so the state is readable without
+   opening the picker. Same footprint rules as .first-serve-btn. */
+.libero-btn {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .match-actions {
   display: flex;
   flex-direction: column;
@@ -757,6 +923,11 @@ label {
 }
 .roster-chip.on-court {
   opacity: 0.45;
+}
+/* LiberoPicker: toggled-on chip. */
+.roster-chip.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* --- Inline dialogs (Score Fix, Message) --- */

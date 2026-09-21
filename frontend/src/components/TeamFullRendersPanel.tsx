@@ -34,6 +34,15 @@ function rowId(r: FullRenderDto): string {
   return `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
 }
 
+/** Has this render been uploaded anywhere?
+ *
+ *  Both engines write a sidecar, so a row is done if either did.
+ *  Checking only `youtube_video_id` made bulk-select offer to upload
+ *  files that were already in OneDrive. */
+function isUploaded(r: FullRenderDto): boolean {
+  return !!r.youtube_video_id || !!r.onedrive_item_id;
+}
+
 function leafOf(r: FullRenderDto): string {
   return r.filename.split("/").pop() || r.filename;
 }
@@ -409,7 +418,7 @@ export function TeamFullRendersPanel({ team }: Props) {
     // Already-uploaded rows are skipped rather than refused: selecting a
     // whole match day and pressing upload should do the remaining ones,
     // not error because one is done.
-    const todo = rows.filter((r) => !r.youtube_video_id);
+    const todo = rows.filter((r) => !isUploaded(r));
     const skipped = rows.length - todo.length;
     if (!todo.length) {
       setNote({
@@ -456,7 +465,7 @@ export function TeamFullRendersPanel({ team }: Props) {
 
   async function bulkDelete(rows: FullRenderDto[]) {
     const bytes = rows.reduce((n, r) => n + r.size_bytes, 0);
-    const onYouTube = rows.filter((r) => r.youtube_video_id).length;
+    const alreadyUp = rows.filter((r) => isUploaded(r)).length;
     if (
       !confirm(
         `Delete ${rows.length} render${rows.length === 1 ? "" : "s"} ` +
@@ -464,11 +473,12 @@ export function TeamFullRendersPanel({ team }: Props) {
           `The files and their thumbnail / poster / timestamp sidecars are ` +
           `removed from disk. Copies already on the media server are not ` +
           `touched.` +
-          (onYouTube
-            ? `\n\n${onYouTube} of them ${
-                onYouTube === 1 ? "is" : "are"
-              } on YouTube. Those videos stay up, but you won't be able to ` +
-              `re-upload or re-thumbnail them without rendering again.`
+          (alreadyUp
+            ? `\n\n${alreadyUp} of them ${
+                alreadyUp === 1 ? "has" : "have"
+              } been uploaded. Those copies stay up, but you won't be ` +
+              `able to re-upload or re-thumbnail them without rendering ` +
+              `again.`
             : "")
       )
     )
@@ -596,6 +606,8 @@ export function TeamFullRendersPanel({ team }: Props) {
         {/* The API's daily quota is the real constraint on a match day:
             six uploads, then nothing until Pacific midnight. Say so
             up front instead of letting the 7th upload discover it. */}
+        {/* YouTube's daily quota. Labelled as such since reels may be
+            going to OneDrive, where it does not apply at all. */}
         {status?.configured && status.quota && (() => {
           const q = status.quota;
           // Two independent ceilings, and the honest label is whichever
@@ -768,8 +780,8 @@ export function TeamFullRendersPanel({ team }: Props) {
             + reels
           </button>
           <button
-            onClick={() => selectWhere((r) => !r.youtube_video_id)}
-            disabled={!!bulk || !visible.some((r) => !r.youtube_video_id)}
+            onClick={() => selectWhere((r) => !isUploaded(r))}
+            disabled={!!bulk || !visible.some((r) => !isUploaded(r))}
             title="Add everything not yet on YouTube to the selection"
             style={{ padding: "1px 8px", fontSize: 11 }}
           >
@@ -860,10 +872,25 @@ export function TeamFullRendersPanel({ team }: Props) {
         <div className="list">
           {visible.map((r, rowIndex) => {
             const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
-            const uploaded = !!r.youtube_video_id;
-            const ytUrl = uploaded
+            // A row belongs to one engine. `destination` is where a
+            // future upload goes; `uploaded`/`url` describe where it
+            // already went, which can differ if the setting changed
+            // after the fact - so read the sidecar, not the config.
+            const toOneDrive = r.upload_destination === "onedrive";
+            const onOneDrive = !!r.onedrive_item_id;
+            const uploaded = isUploaded(r);
+            const ytUrl = r.youtube_video_id
               ? `https://youtu.be/${r.youtube_video_id}`
               : null;
+            const url = ytUrl ?? r.onedrive_url ?? null;
+            const whereLabel = r.youtube_video_id
+              ? "on YouTube"
+              : onOneDrive
+                ? "in OneDrive"
+                : null;
+            const uploadedAt = r.youtube_video_id
+              ? r.youtube_uploaded_at
+              : r.onedrive_uploaded_at;
             // Title line: "<date>  M<n>. <opponent>  (<tournament>)".
             // Uses displayName so underscored slugs render with spaces.
             const matchLabel = r.match_index
@@ -1044,31 +1071,47 @@ export function TeamFullRendersPanel({ team }: Props) {
                     <div
                       style={{ display: "flex", gap: 8, alignItems: "center" }}
                     >
-                      <a
-                        href={ytUrl!}
-                        target="_blank"
-                        rel="noreferrer"
-                        title={
-                          r.youtube_uploaded_at
-                            ? `Uploaded ${formatAge(r.youtube_uploaded_at)}`
-                            : "Uploaded"
-                        }
-                        style={{ color: "#3aa55d" }}
-                      >
-                        ▶ on YouTube
-                      </a>
-                      <button
-                        onClick={() => regenerateThumbnail(r)}
-                        disabled={busyId === id || !!bulk}
-                        title={
-                          "Regenerate the thumbnail from the current team " +
-                          "colors, logos and names, and replace it on " +
-                          "YouTube too."
-                        }
-                        style={{ padding: "1px 6px", fontSize: 11 }}
-                      >
-                        {busyId === id ? "…" : "🖼"}
-                      </button>
+                      {url ? (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={
+                            uploadedAt
+                              ? `Uploaded ${formatAge(uploadedAt)}`
+                              : "Uploaded"
+                          }
+                          style={{ color: "#3aa55d" }}
+                        >
+                          ▶ {whereLabel}
+                        </a>
+                      ) : (
+                        // A OneDrive upload whose tenant forbade even a
+                        // signed-in link. It is still up; there is just
+                        // nowhere to point.
+                        <span style={{ color: "#3aa55d" }} title="Uploaded">
+                          {whereLabel} (no link)
+                        </span>
+                      )}
+                      {/* Thumbnail replacement is a YouTube call
+                          (`thumbnails.set`). OneDrive has no equivalent
+                          worth offering here - a custom thumbnail is
+                          Personal-only and the durable answer is the
+                          title card baked into the render. */}
+                      {!onOneDrive && (
+                        <button
+                          onClick={() => regenerateThumbnail(r)}
+                          disabled={busyId === id || !!bulk}
+                          title={
+                            "Regenerate the thumbnail from the current team " +
+                            "colors, logos and names, and replace it on " +
+                            "YouTube too."
+                          }
+                          style={{ padding: "1px 6px", fontSize: 11 }}
+                        >
+                          {busyId === id ? "…" : "🖼"}
+                        </button>
+                      )}
                       <button
                         onClick={() => forgetUpload(r)}
                         disabled={busyId === id || !!bulk}
@@ -1187,21 +1230,31 @@ export function TeamFullRendersPanel({ team }: Props) {
                   </button>
                   <button
                     onClick={() => upload(r)}
-                    disabled={!status?.configured || busyId === id || !!bulk}
+                    // OneDrive rows are not gated on YouTube's status or
+                    // quota: neither applies to them, and a mixed queue
+                    // drains the OneDrive half while the YouTube half
+                    // waits out the reset.
+                    disabled={
+                      (!toOneDrive && !status?.configured) ||
+                      busyId === id ||
+                      !!bulk
+                    }
                     title={
-                      !status?.configured
-                        ? status?.reason ||
-                          "YouTube uploads are not configured for this server"
-                        : status.quota?.uploads_blocked
-                          ? "YouTube is refusing new videos on this channel " +
-                            "right now (channel upload limit). This will be " +
-                            "queued and retried automatically - for up to a " +
-                            "week - without you watching it."
-                          : status.quota && status.quota.uploads_remaining <= 0
-                            ? "Today's YouTube API quota is used up - this " +
-                              "will be queued and uploaded automatically " +
-                              "after the reset (midnight US/Pacific)."
-                            : "Upload this render to YouTube"
+                      toOneDrive
+                        ? "Upload this render to OneDrive"
+                        : !status?.configured
+                          ? status?.reason ||
+                            "YouTube uploads are not configured for this server"
+                          : status.quota?.uploads_blocked
+                            ? "YouTube is refusing new videos on this channel " +
+                              "right now (channel upload limit). This will be " +
+                              "queued and retried automatically - for up to a " +
+                              "week - without you watching it."
+                            : status.quota && status.quota.uploads_remaining <= 0
+                              ? "Today's YouTube API quota is used up - this " +
+                                "will be queued and uploaded automatically " +
+                                "after the reset (midnight US/Pacific)."
+                              : "Upload this render to YouTube"
                     }
                     style={{ padding: "2px 8px" }}
                   >

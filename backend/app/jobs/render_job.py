@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import json
 import time
 from datetime import datetime
 from pathlib import Path
@@ -925,6 +926,166 @@ def _run_media_server_copy(job: RenderJob, cancel_check) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _upload_destination(team: str, *, is_reel: bool) -> str:
+    """The engine configured for this kind of file, defaulting to YouTube.
+
+    Read at upload time rather than baked into the job at enqueue: a
+    queue can sit for days while it waits out a quota reset, and the
+    answer that matters is the one in force when the bytes move.
+    """
+    try:
+        roster = scanner.load_team_roster(team)
+    except Exception:  # noqa: BLE001 - a missing roster is not fatal here
+        return "youtube"
+    return roster.upload.destination_for(is_reel=is_reel)
+
+
+def _run_onedrive_upload(
+    job: RenderJob, file_path: Path, *, is_reel: bool, cancel_check
+) -> None:
+    """Send a render to OneDrive instead of YouTube.
+
+    A separate path rather than a branch inside the YouTube one,
+    because almost none of that function applies: there is no quota
+    ledger to consult, no playlist, no privacy status, and no second
+    call to attach a thumbnail. What it does share is the progress
+    reporting and cancellation contract, which is why
+    `onedrive.upload_file` was given the same signature.
+    """
+    from ..upload import onedrive
+
+    roster = scanner.load_team_roster(job.team)
+    cfg = roster.upload
+
+    # Folder from the template, filename from the render. The same
+    # placeholders the naming templates use, so a team that already
+    # thinks in `{date} {opponent}` does not learn a second vocabulary.
+    folder = (cfg.onedrive_folder or "").strip().strip("/")
+    folder = (
+        folder.replace("{team}", _safe_segment(roster.team_name or job.team))
+        .replace("{tournament}", _safe_segment(job.tournament))
+        .replace("{date}", _safe_segment(job.date))
+        .replace("{opponent}", _safe_segment(job.match))
+    )
+    remote = f"{folder}/{file_path.name}" if folder else file_path.name
+
+    last_emit = [time.time()]
+    last_pct = [0.0]
+
+    def on_progress(pct: float, done: int, total: int) -> None:
+        now = time.time()
+        if pct - last_pct[0] >= 0.5 or now - last_emit[0] > 0.4:
+            JOBS.update(
+                job.id,
+                percent=pct,
+                phase="uploading",
+                message=f"{_fmt_mb(done)} / {_fmt_mb(total)}",
+            )
+            last_pct[0] = pct
+            last_emit[0] = now
+
+    # Make sure there IS a thumbnail before the upload, for the same
+    # reason the YouTube path does it here: generating one means seeking
+    # a frame, and that is better spent before the transfer than sitting
+    # between the transfer finishing and the thumbnail call.
+    if not thumbnail_path(file_path).is_file():
+        JOBS.update(job.id, phase="thumbnail", message="Generating thumbnail")
+        generate_thumbnail(job.team, job.tournament, job.date, job.match, file_path)
+
+    logger.info("upload job %s -> OneDrive: %s", job.id, remote)
+    result = onedrive.upload_file(
+        file_path=file_path,
+        remote_path=remote,
+        share=cfg.onedrive_share_links,
+        progress_cb=on_progress,
+        cancel_check=cancel_check,
+    )
+
+    # The share link is what anyone is actually going to use, so it is
+    # what the finished job surfaces. A drive that forbids anonymous
+    # links still uploaded the file, and `webUrl` at least gets a
+    # signed-in viewer there.
+    link = result.share_url or result.web_url or ""
+
+    # Replace OneDrive's own frame-grab with the card VME drew. Best
+    # effort, and it genuinely does not work everywhere: Graph
+    # documents custom thumbnails as OneDrive **Personal** only, and a
+    # Business or SharePoint drive refuses them. The durable answer on
+    # any drive is the title card burnt onto the front of the render -
+    # this just improves the case where the API allows it.
+    thumb = thumbnail_path(file_path)
+    thumbed = False
+    if result.item_id and thumb.is_file():
+        thumbed = onedrive.set_thumbnail(result.item_id, thumb)
+        logger.info(
+            "onedrive thumbnail for %s: %s",
+            result.item_id,
+            "set" if thumbed else "refused (expected on Business/SharePoint)",
+        )
+
+    _write_onedrive_sidecar(file_path, result, is_reel=is_reel, thumbed=thumbed)
+    # The message first, because `mark_done` does not carry one.
+    JOBS.update(
+        job.id,
+        message=(
+            "Uploaded to OneDrive"
+            + ("" if result.share_url else " (no share link - tenant policy)")
+        ),
+    )
+    # `mark_done` is what moves the job out of RUNNING. Setting
+    # `phase="done"` looks identical in the UI's text and is not the
+    # same thing at all: phase is a label, status is the state machine,
+    # and a job that only got the label sat at 100% RUNNING forever.
+    JOBS.mark_done(job.id, link)
+
+
+def _write_onedrive_sidecar(
+    file_path: Path, result, *, is_reel: bool, thumbed: bool = False
+) -> None:
+    """Record where a render ended up, beside the render.
+
+    Mirrors the `<file>.youtube.json` sidecar so a listing can show
+    upload state without calling anyone's API.
+    """
+    sidecar = file_path.with_suffix(file_path.suffix + ".onedrive.json")
+    try:
+        sidecar.write_text(
+            json.dumps(
+                {
+                    "item_id": result.item_id,
+                    "name": result.name,
+                    "share_url": result.share_url,
+                    "web_url": result.web_url,
+                    "is_reel": is_reel,
+                    # False is the normal outcome on a Business drive,
+                    # so the listing can say "OneDrive picked this one"
+                    # rather than implying something went wrong.
+                    "thumbnail_set": thumbed,
+                    "uploaded_at": time.time(),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        # The upload succeeded; losing the note about it is not a reason
+        # to fail the job and make someone upload 4 GB again.
+        logger.warning("could not write %s: %s", sidecar, exc)
+
+
+def _safe_segment(value: str) -> str:
+    """One path segment OneDrive will accept.
+
+    Graph rejects `" * : < > ? / \\ |` in item names, and a match
+    folder like `01_Bellevue` is fine but an opponent typed with a
+    slash is not.
+    """
+    out = str(value or "").strip()
+    for ch in '"*:<>?/\\|':
+        out = out.replace(ch, "-")
+    return out.strip(". ") or "untitled"
+
+
 def _run_upload(job: RenderJob, cancel_check) -> None:
     """Upload a previously-rendered file to YouTube.
 
@@ -955,6 +1116,21 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
     file_path = renders / filename
     if not file_path.is_file():
         raise RuntimeError(f"Render file not found: {file_path}")
+
+    # Which engine takes this one? Matches and reels can go to different
+    # places, and usually should: a match is large and watched by
+    # everyone, which is what YouTube serves free, while a dozen reels
+    # are small, watched by one family each, and are the entire reason
+    # the daily quota runs out.
+    #
+    # `is_reel` is decided the same way the render job decides it -
+    # reels live under `reels/<team>/<player>/`.
+    rel_parts = Path(filename).parts
+    is_reel = len(rel_parts) > 2 and rel_parts[0] == "reels"
+    destination = _upload_destination(job.team, is_reel=is_reel)
+    if destination == "onedrive":
+        _run_onedrive_upload(job, file_path, is_reel=is_reel, cancel_check=cancel_check)
+        return
 
     # NOTE: chapters are NOT merged here. The enqueue endpoint expands
     # the reel description template - which can position `{chapters}`

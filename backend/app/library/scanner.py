@@ -68,6 +68,17 @@ class FullRenderInfo:
     created_at: float
     opponent: str = ""
     match_index: int | None = None
+    # Populated from the `.onedrive.json` sidecar. `share_url` is the
+    # anonymous link when the drive allowed one; `web_url` is the
+    # signed-in fallback, which is all a Business tenant may permit.
+    onedrive_item_id: str | None = None
+    onedrive_uploaded_at: float | None = None
+    onedrive_url: str | None = None
+    # Where a *future* upload of this file would go, from the team's
+    # config and the file's kind. Drives the button label, so the
+    # operator is told what the button will actually do rather than
+    # finding out afterwards.
+    upload_destination: str = "youtube"
     # Populated from the `.youtube.json` sidecar if a successful upload
     # has been recorded for this file. None when no upload exists.
     youtube_video_id: str | None = None
@@ -235,6 +246,39 @@ def save_tournament_info(
     info.save(p)
 
 
+def load_onedrive_sidecar(render_path: Path) -> dict | None:
+    """Read a render's OneDrive-upload sidecar, or None.
+
+    Shape: `{ "item_id": str, "name": str, "share_url": str | None,
+    "web_url": str | None, "is_reel": bool, "uploaded_at": float }`.
+    """
+    p = paths.onedrive_sidecar_path(render_path)
+    if not p.is_file():
+        return None
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def delete_onedrive_sidecar(render_path: Path) -> bool:
+    """Remove a render's OneDrive-upload record. True if one was there.
+
+    The counterpart of `delete_youtube_sidecar`: the file in OneDrive is
+    not touched, only our note that it exists.
+    """
+    p = paths.onedrive_sidecar_path(render_path)
+    try:
+        if p.is_file():
+            p.unlink()
+            return True
+    except OSError:
+        pass
+    return False
+
+
 def load_youtube_sidecar(render_path: Path) -> dict | None:
     """Read a render's YouTube-upload sidecar (or None if absent / unreadable).
 
@@ -389,6 +433,12 @@ def _build_render_info(
     except OSError:
         return None
     sidecar = load_youtube_sidecar(path)
+    od = load_onedrive_sidecar(path)
+    try:
+        roster = load_team_roster(team)
+        destination = roster.upload.destination_for(is_reel=(kind == "reel"))
+    except Exception:  # noqa: BLE001 - a missing roster is not fatal
+        destination = "youtube"
     return FullRenderInfo(
         team=team,
         tournament=tournament,
@@ -399,6 +449,10 @@ def _build_render_info(
         created_at=stat.st_mtime,
         opponent=opponent,
         match_index=match_index,
+        onedrive_item_id=od.get("item_id") if od else None,
+        onedrive_uploaded_at=od.get("uploaded_at") if od else None,
+        onedrive_url=(od.get("share_url") or od.get("web_url")) if od else None,
+        upload_destination=destination,
         youtube_video_id=sidecar.get("video_id") if sidecar else None,
         youtube_uploaded_at=sidecar.get("uploaded_at") if sidecar else None,
         youtube_privacy_status=(
@@ -562,6 +616,12 @@ def reconcile_clips(
         changed = True
 
     if backfill_recording_times(team, tournament, date, match, m):
+        changed = True
+
+    # Only now do the clips - and their recording times - exist. Events
+    # imported from the phone before the footage was uploaded have been
+    # waiting for exactly this.
+    if m.place_pending_events():
         changed = True
 
     return changed

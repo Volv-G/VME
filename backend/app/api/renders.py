@@ -27,6 +27,7 @@ from ..jobs.manager import JOBS, LANES, JobStatus
 from ..jobs.render_job import kick_off_immediate
 from ..config import VIDEO_EXTENSIONS
 from ..library import paths, scanner
+from ..upload import onedrive as onedrive_uploader
 from ..upload import youtube as youtube_uploader
 from ..upload.templates import (
     build_vars,
@@ -153,13 +154,26 @@ def enqueue_youtube_upload(
     so the persisted job carries the resolved strings (the team profile
     can change without affecting queued uploads).
     """
-    s = youtube_uploader.get_status()
-    if not s.configured:
-        raise HTTPException(400, f"YouTube upload not configured: {s.reason}")
-
     rel = body.filename.replace("\\", "/")
     parts = [p for p in rel.split("/") if p]
     is_reel = len(parts) > 1 and parts[0] == "reels"
+
+    # Check the provider this file is actually going to. Refusing on
+    # YouTube's status regardless made a OneDrive-only setup impossible
+    # to use: nothing could be queued even though nothing was going to
+    # YouTube.
+    roster_cfg = scanner.load_team_roster(team).upload
+    destination = roster_cfg.destination_for(is_reel=is_reel)
+    if destination == "onedrive":
+        od_status = onedrive_uploader.get_status()
+        if not od_status.configured:
+            raise HTTPException(
+                400, f"OneDrive upload not configured: {od_status.reason}"
+            )
+    else:
+        s = youtube_uploader.get_status()
+        if not s.configured:
+            raise HTTPException(400, f"YouTube upload not configured: {s.reason}")
     if len(parts) > 1 and not is_reel:
         raise HTTPException(
             400,
@@ -759,9 +773,27 @@ def forget_youtube_upload(
     if not target.is_file():
         raise HTTPException(404, "Render file not found")
 
+    # A render can carry either record - or, after a destination
+    # change, both. Clearing only the YouTube one left OneDrive rows
+    # showing "in OneDrive" with a button that reported success and
+    # changed nothing.
+    od = scanner.load_onedrive_sidecar(target)
     sidecar = scanner.load_youtube_sidecar(target)
-    if not sidecar:
+    if not sidecar and not od:
         return {"cleared": False, "reason": "no upload record"}
+
+    if not sidecar:
+        # OneDrive only. There is no cheap "does this still exist"
+        # call worth making here: Graph would need the item fetched,
+        # and unlike YouTube the file lives in a folder the operator
+        # can see for themselves.
+        cleared = scanner.delete_onedrive_sidecar(target)
+        logger.info(
+            "cleared OneDrive upload record for %s (item=%s)",
+            filename,
+            od.get("item_id") if od else "?",
+        )
+        return {"cleared": cleared, "destination": "onedrive"}
 
     video_id = str(sidecar.get("video_id") or "")
     if verify and video_id:
@@ -777,6 +809,10 @@ def forget_youtube_upload(
         # than a re-upload they can delete.
 
     cleared = scanner.delete_youtube_sidecar(target)
+    # Both can exist if the destination changed between uploads; the
+    # button means "this render is not uploaded anywhere", so clear it.
+    if od:
+        scanner.delete_onedrive_sidecar(target)
     logger.info(
         "cleared YouTube upload record for %s (video_id=%s, verified=%s)",
         filename,

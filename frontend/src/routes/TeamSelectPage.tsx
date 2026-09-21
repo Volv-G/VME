@@ -36,6 +36,12 @@ export function TeamSelectPage() {
       <div className="card">
         <div className="card-header">
           <h2>Select a team</h2>
+          {/* The accounts VME uploads with are server-wide, so this is
+              the one page that is always a sensible place to reach
+              them from - a first-run visitor has no team to go via. */}
+          <Link to="/settings" className="button-like">
+            Server settings
+          </Link>
         </div>
         {error && <div className="error">{error}</div>}
         {teams.length === 0 && !error && (

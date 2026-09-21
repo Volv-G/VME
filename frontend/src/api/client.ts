@@ -1,4 +1,5 @@
 import type {
+  AuthStatusDto,
   AutoCutsResultDto,
   ClipDto,
   EventDto,
@@ -21,10 +22,20 @@ import type {
 const BASE = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/api`;
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
-    ...init,
-  });
+  // A FormData body must carry the browser's OWN Content-Type, because
+  // that is what holds the multipart boundary. Setting
+  // application/json over it leaves the server unable to find any
+  // parts, which surfaces as a 422 that reads like the endpoint
+  // rejecting the file rather than a header problem.
+  const isForm =
+    typeof FormData !== "undefined" && init?.body instanceof FormData;
+  const headers = isForm
+    ? { ...(init?.headers || {}) }
+    : { "Content-Type": "application/json", ...(init?.headers || {}) };
+  // `...init` first: spreading it after `headers` would replace the
+  // merged object wholesale with the caller's own, silently dropping
+  // the content type for anyone who passes a header of their own.
+  const res = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
@@ -324,6 +335,88 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(body),
     });
+  },
+  // ---- upload connections ------------------------------------------
+  async authStatus(provider: "google" | "microsoft"): Promise<AuthStatusDto> {
+    return fetchJson<AuthStatusDto>(`/auth/${provider}/status`);
+  },
+  async authStart(
+    provider: "google" | "microsoft",
+    returnTo: string
+  ): Promise<{ auth_url: string }> {
+    return fetchJson(
+      `/auth/${provider}/start?return_to=${encodeURIComponent(returnTo)}`,
+      { method: "POST" }
+    );
+  },
+  async authDisconnect(provider: "google" | "microsoft"): Promise<AuthStatusDto> {
+    return fetchJson<AuthStatusDto>(`/auth/${provider}/disconnect`, {
+      method: "POST",
+    });
+  },
+  async microsoftClient(
+    clientId: string,
+    clientSecret: string
+  ): Promise<AuthStatusDto> {
+    return fetchJson<AuthStatusDto>("/auth/microsoft/client", {
+      method: "POST",
+      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+    });
+  },
+  async googleAuthStatus(): Promise<AuthStatusDto> {
+    return fetchJson<AuthStatusDto>("/auth/google/status");
+  },
+  async googleAuthStart(returnTo: string): Promise<{ auth_url: string }> {
+    return fetchJson(
+      `/auth/google/start?return_to=${encodeURIComponent(returnTo)}`,
+      { method: "POST" }
+    );
+  },
+  async googleAuthDisconnect(): Promise<AuthStatusDto> {
+    return fetchJson<AuthStatusDto>("/auth/google/disconnect", { method: "POST" });
+  },
+  async googleAuthClientSecret(file: File): Promise<AuthStatusDto> {
+    const form = new FormData();
+    form.append("file", file);
+    // No Content-Type header: the browser must set the multipart
+    // boundary itself, and naming it here breaks the parse server-side.
+    return fetchJson<AuthStatusDto>("/auth/google/client-secret", {
+      method: "POST",
+      body: form,
+    });
+  },
+
+  /** Shift one event along the timeline by `seconds` (may be negative). */
+  async nudgeEvent(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    eventId: number,
+    seconds: number
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(
+      `${matchBase(team, tournament, date, match)}/events/${eventId}/nudge`,
+      { method: "POST", body: JSON.stringify({ seconds }) }
+    );
+  },
+  /** Import an event log captured elsewhere (the phone) onto this match. */
+  async importEvents(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    body: { events: unknown[]; liberos?: number[]; replace?: boolean }
+  ): Promise<{
+    imported: number;
+    snapped: number;
+    skipped: string[];
+    match: MatchDto;
+  }> {
+    return fetchJson(
+      `${matchBase(team, tournament, date, match)}/events/import`,
+      { method: "POST", body: JSON.stringify(body) }
+    );
   },
   async deleteMatch(
     team: string,

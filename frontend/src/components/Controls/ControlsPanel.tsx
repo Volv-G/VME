@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import type { AutoCutsResultDto, MatchDto } from "../../types/api";
 import { resolveClipFromGlobal } from "../clipFrames";
 import { LineupGrid } from "./LineupGrid";
+import { LiberoPicker } from "./LiberoPicker";
 import { RosterPicker } from "./RosterPicker";
 import { ScoreDisplay } from "./ScoreDisplay";
 import { ScoreFixDialog, MessageDialog } from "./InlineDialogs";
-import { stateAtPlayhead } from "./state";
+import { frontRowLibero, liberoReplacements, stateAtPlayhead } from "./state";
 import { useHotkeyAction } from "../../hotkeys";
 import { eventIcon } from "../eventStyle";
 import { ColorPicker } from "../ColorPicker";
@@ -29,6 +30,17 @@ interface Props {
   /** Persist a new team color (team roster for home, match's embedded
    *  opponent roster for away). Wired to the swatch in each team card. */
   onTeamColorChange?: (which: "home" | "opponent", hex: string) => Promise<void>;
+  /** Persist the libero designation for this match (PATCH liberos). */
+  onLiberosChange?: (liberos: number[]) => Promise<void>;
+  /**
+   * Hold or release video playback, with the reason.
+   *
+   * Raised while the libero prompt is open: the rotation rule fires on
+   * a scoring event, so the operator is almost always mid-playback when
+   * it appears, and footage running on behind an unanswered question is
+   * how it gets dismissed without being read.
+   */
+  onPlaybackLock?: (reason: string | null) => void;
   /** Reload the match after a logo upload/removal so the roster DTOs
    *  (and therefore the "has a logo" state) reflect what's on disk. */
   onRosterChanged?: () => Promise<void>;
@@ -120,6 +132,8 @@ export function ControlsPanel({
   onCreate,
   onAutoCuts,
   onTeamColorChange,
+  onLiberosChange,
+  onPlaybackLock,
   onRosterChanged,
   team,
   tournament,
@@ -130,11 +144,17 @@ export function ControlsPanel({
   // version busts the browser cache for the fixed logo filename.
   const [logoVersion, setLogoVersion] = useState<number>(() => Date.now());
   const live = stateAtPlayhead(data.events, currentFrame);
+  // A backend that has not been restarted since the liberos field was
+  // added answers without it. Defaulted once, here, rather than at
+  // each use: a stale server should cost the libero button, not the
+  // whole editor.
+  const liberos = data.liberos ?? [];
   const homeName = data.home_roster.team_name || data.team;
   const opponentName = data.opponent_roster.team_name || data.opponent || "Away";
 
   const [armed, setArmed] = useState<ActionDef | null>(null);
   const [subPosition, setSubPosition] = useState<number | null>(null);
+  const [liberoPickerOpen, setLiberoPickerOpen] = useState(false);
   const [scoreFixOpen, setScoreFixOpen] = useState(false);
   const [messageOpen, setMessageOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -146,6 +166,51 @@ export function ControlsPanel({
   const [pendingAssistKiller, setPendingAssistKiller] = useState<
     number | null
   >(null);
+  // Set by a scoring commit to the frame it landed on. The libero rule
+  // has to look at the state AFTER that event, and `data` only carries
+  // it once the parent has reloaded - hence an effect rather than a
+  // check inline in `commit`. `null` = nothing to check.
+  const [liberoCheckFrame, setLiberoCheckFrame] = useState<number | null>(null);
+  // Why the roster picker is open when a rule opened it, not a click.
+  const [subReason, setSubReason] = useState<string | null>(null);
+
+  // The prompt is the only thing that holds playback, so the lock is
+  // derived from it rather than tracked separately - there is no way
+  // for the two to disagree, including when `clearOverlays` closes the
+  // picker on a successful pick.
+  useEffect(() => {
+    onPlaybackLock?.(subReason);
+  }, [subReason, onPlaybackLock]);
+
+  // A libero may only play the back row. Once a scoring event has
+  // landed and the rotation carried a libero into P4, put back the
+  // player they came on for - as an ordinary substitution at the same
+  // frame, so the renderer and Undo treat it like any other. When
+  // nobody is remembered (libero placed into an empty slot at set
+  // start) ask, with liberos hidden from the picker.
+  useEffect(() => {
+    if (liberoCheckFrame == null) return;
+    const frame = liberoCheckFrame;
+    setLiberoCheckFrame(null);
+    const after = stateAtPlayhead(data.events, frame);
+    const hit = frontRowLibero(after.home_positions, liberos);
+    if (!hit) return;
+    const back = liberoReplacements(data.events, liberos, frame)[hit.jersey];
+    const onCourt = Object.values(after.home_positions);
+    if (back != null && !onCourt.includes(back)) {
+      void commit("substitution", {
+        team: "home",
+        position: hit.position,
+        player_in_number: back,
+      });
+      return;
+    }
+    setSubReason(`Libero #${hit.jersey} rotated to P${hit.position} - pick who comes back.`);
+    setSubPosition(hit.position);
+    // `commit` closes over props that are all current on the render
+    // where `data.events` changed, which is the only render this runs on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.events, liberos, liberoCheckFrame]);
 
   async function runAutoCuts() {
     setErr(null);
@@ -188,6 +253,8 @@ export function ControlsPanel({
   function clearOverlays() {
     setArmed(null);
     setSubPosition(null);
+    setSubReason(null);
+    setLiberoPickerOpen(false);
     setScoreFixOpen(false);
     setMessageOpen(false);
     setPendingAssistKiller(null);
@@ -209,6 +276,11 @@ export function ControlsPanel({
     try {
       await onCreate({ type, clip_id: r.clipId, local_frame: r.localFrame, payload });
       if (!opts.keepOverlays) clearOverlays();
+      // Only scoring events rotate, so only they can put a libero in
+      // the front row. Checked once `data` reflects the new event.
+      if (type === "score" || type === "kill" || type === "ace") {
+        setLiberoCheckFrame(currentFrame);
+      }
       return true;
     } catch (e) {
       setErr(String(e));
@@ -358,23 +430,65 @@ export function ControlsPanel({
           >
             {eventIcon("first_serve")}
           </button>
+          <button
+            className="libero-btn"
+            onClick={() => {
+              setArmed(null);
+              setSubPosition(null);
+              setSubReason(null);
+              setLiberoPickerOpen((o) => !o);
+            }}
+            disabled={busy || !onLiberosChange}
+            title={
+              liberos.length
+                ? `Liberos: ${liberos
+                    .map((n) => `#${n}`)
+                    .join(", ")} - click to change`
+                : "Designate liberos for this match"
+            }
+            aria-label="Designate liberos"
+          >
+            L{liberos.length ? `×${liberos.length}` : ""}
+          </button>
           <button className="primary" onClick={() => commit("score", { team: "home" })} disabled={busy}>
             +1
           </button>
         </div>
 
-        {subPosition != null ? (
+        {liberoPickerOpen ? (
+          <LiberoPicker
+            roster={data.home_roster}
+            value={liberos}
+            onSave={async (liberos) => {
+              setErr(null);
+              try {
+                await onLiberosChange?.(liberos);
+                setLiberoPickerOpen(false);
+              } catch (e) {
+                setErr(String(e));
+              }
+            }}
+            onClose={() => setLiberoPickerOpen(false)}
+          />
+        ) : subPosition != null ? (
           <RosterPicker
             roster={data.home_roster}
             lineup={live.home_positions}
             position={subPosition}
+            liberos={liberos}
+            excludeLiberos={subReason != null}
+            reason={subReason}
             onPick={onSubPick}
-            onClose={() => setSubPosition(null)}
+            onClose={() => {
+              setSubPosition(null);
+              setSubReason(null);
+            }}
           />
         ) : (
           <LineupGrid
             positions={live.home_positions}
             roster={data.home_roster}
+            liberos={liberos}
             armedActionLabel={
               pendingAssistKiller != null
                 ? `Assister for kill by #${pendingAssistKiller}`

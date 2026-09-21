@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from .auth import BasicAuthMiddleware, configure_from_env
 from .config import DATA_DIR, LOG_ROOT, MEDIA_ROOT, STATIC_ROOT
 from .api import (
+    auth as auth_api,
     clips,
     events,
     logos,
@@ -94,6 +95,7 @@ def _shutdown_jobs() -> None:
 
 
 api = FastAPI()
+api.include_router(auth_api.router)
 api.include_router(teams.router)
 api.include_router(tournaments.router)
 api.include_router(matches.list_router)

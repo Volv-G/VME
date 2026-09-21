@@ -26,6 +26,8 @@ export function MatchEditorPage() {
   const [clipsOpen, setClipsOpen] = useState(false);
   const [renderOpen, setRenderOpen] = useState(false);
   const playerRef = useRef<VideoPlayerHandle | null>(null);
+  // Set by the controls panel while a prompt is waiting on an answer.
+  const [playbackLock, setPlaybackLock] = useState<string | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
   const [topH, setTopH] = useState<number | null>(() => {
     if (typeof window === "undefined") return null;
@@ -144,6 +146,19 @@ export function MatchEditorPage() {
     setData(await api.deleteEvent(team, tournament, date, match, id));
     if (selectedEventId === id) setSelectedEventId(null);
   }
+
+  /** Shift one event along the timeline. The server owns the arithmetic:
+   *  it moves by wall clock where the clips have recording times and by
+   *  frames where they do not, and either way returns the whole match so
+   *  the recomputed states arrive with it. */
+  async function nudgeEvent(id: number, seconds: number) {
+    try {
+      setData(await api.nudgeEvent(team, tournament, date, match, id, seconds));
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
   /** Create a cut_start/cut_end pair spanning [startFrame, endFrame].
    *
    * There is no batch event endpoint, so this is two POSTs. If the second
@@ -225,6 +240,12 @@ export function MatchEditorPage() {
     }
   }
 
+  async function setLiberos(liberos: number[]) {
+    if (!data) return;
+    setData(await api.patchMatch(team, tournament, date, match, { liberos }));
+    setError(null);
+  }
+
   async function runAutoCuts(opts: { hasIntroClip?: boolean } = {}) {
     const r = await api.autoCuts(team, tournament, date, match, opts);
     setData(r.match);
@@ -279,6 +300,7 @@ export function MatchEditorPage() {
         <div className="editor-video">
           <VideoPlayer
             ref={playerRef}
+            playbackLock={playbackLock}
             team={team}
             tournament={tournament}
             date={date}
@@ -296,6 +318,8 @@ export function MatchEditorPage() {
             onCreate={createEvent}
             onAutoCuts={runAutoCuts}
             onTeamColorChange={setTeamColor}
+            onLiberosChange={setLiberos}
+            onPlaybackLock={setPlaybackLock}
             onRosterChanged={load}
             team={team}
             tournament={tournament}
@@ -311,6 +335,7 @@ export function MatchEditorPage() {
             currentFrame={currentFrame}
             onSelect={setSelectedEventId}
             onDelete={(id) => void deleteEvent(id)}
+            onNudge={nudgeEvent}
             onSeek={seek}
             onInsertCut={insertCut}
             fps={data.fps}

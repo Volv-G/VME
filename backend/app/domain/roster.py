@@ -241,6 +241,67 @@ class YouTubeConfig:
         )
 
 
+# Where a finished video goes. Two destinations because they have
+# opposite economics: a match is large and watched by everyone, which
+# is exactly what YouTube serves free; a reel is small, watched by one
+# family, and is the entire reason the daily upload quota runs out.
+DESTINATIONS = ("youtube", "onedrive")
+
+DEFAULT_ONEDRIVE_FOLDER = "VME/{team}/{date} {opponent}"
+
+
+@dataclass
+class UploadConfig:
+    """Which engine uploads what, and where OneDrive puts it.
+
+    Stored under `roster.json -> upload`. Defaults keep every existing
+    team on YouTube for both, so adding this changes nothing until
+    someone picks otherwise.
+    """
+
+    match_destination: str = "youtube"
+    reel_destination: str = "youtube"
+    # Folder path on the drive, relative to its root. Same placeholders
+    # as the naming templates; the filename comes from the render.
+    onedrive_folder: str = DEFAULT_ONEDRIVE_FOLDER
+    # Ask Graph for an anonymous view link after each upload. Business
+    # and SharePoint tenants often forbid these by policy, in which case
+    # the upload still succeeds and simply has no shareable URL.
+    onedrive_share_links: bool = True
+
+    def destination_for(self, *, is_reel: bool) -> str:
+        return self.reel_destination if is_reel else self.match_destination
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "match_destination": self.match_destination,
+            "reel_destination": self.reel_destination,
+            "onedrive_folder": self.onedrive_folder,
+            "onedrive_share_links": self.onedrive_share_links,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "UploadConfig":
+        if not isinstance(data, dict):
+            return cls()
+
+        def dest(key: str) -> str:
+            # An unknown engine falls back to YouTube rather than
+            # failing the load: a roster written by a newer build must
+            # not make a team unopenable on an older one.
+            value = str(data.get(key) or "youtube")
+            return value if value in DESTINATIONS else "youtube"
+
+        return cls(
+            match_destination=dest("match_destination"),
+            reel_destination=dest("reel_destination"),
+            onedrive_folder=(
+                data.get("onedrive_folder") or DEFAULT_ONEDRIVE_FOLDER
+            ),
+            onedrive_share_links=bool(data.get("onedrive_share_links", True)),
+        )
+
+
 @dataclass
 class Roster:
     """A list of players belonging to a team.
@@ -270,6 +331,10 @@ class Roster:
     # Where to copy finished renders for a media server (Jellyfin etc.).
     # Always present; `enabled` is False until a path is configured.
     media_server: MediaServerConfig = field(default_factory=MediaServerConfig)
+    # Which upload engine handles matches and reels. Admin-only, like
+    # `youtube` and `naming`: it says where *your* videos go and means
+    # nothing on an opponent roster embedded in a match.
+    upload: UploadConfig = field(default_factory=UploadConfig)
 
     def __iter__(self) -> Iterator[Player]:
         return iter(self.players)
@@ -318,6 +383,7 @@ class Roster:
             out["youtube"] = self.youtube.to_dict()
             out["naming"] = self.naming.to_dict()
             out["media_server"] = self.media_server.to_dict()
+            out["upload"] = self.upload.to_dict()
         out["players"] = [p.to_dict() for p in self.players]
         return out
 
@@ -333,6 +399,7 @@ class Roster:
                 youtube=YouTubeConfig.from_dict(data.get("youtube")),
                 naming=NamingConfig.from_dict(data.get("naming")),
                 media_server=MediaServerConfig.from_dict(data.get("media_server")),
+                upload=UploadConfig.from_dict(data.get("upload")),
                 players=[Player.from_dict(p) for p in data.get("players", [])],
             )
         return cls()

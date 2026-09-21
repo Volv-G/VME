@@ -61,6 +61,15 @@ class MediaServerConfigOut(BaseModel):
     filename_template: Optional[str] = None
 
 
+class UploadConfigOut(BaseModel):
+    """Which engine uploads what. See `domain/roster.py::UploadConfig`."""
+
+    match_destination: str = "youtube"
+    reel_destination: str = "youtube"
+    onedrive_folder: Optional[str] = None
+    onedrive_share_links: bool = True
+
+
 class RosterOut(BaseModel):
     team_name: Optional[str] = None
     team_color: Optional[str] = None
@@ -70,6 +79,7 @@ class RosterOut(BaseModel):
     team_logo_path: Optional[str] = None
     youtube: Optional[YouTubeConfigOut] = None
     naming: Optional[NamingConfigOut] = None
+    upload: Optional[UploadConfigOut] = None
     media_server: Optional[MediaServerConfigOut] = None
     players: list[PlayerOut] = Field(default_factory=list)
 
@@ -137,6 +147,15 @@ class FullRenderOut(BaseModel):
     thumbnail_synced: bool = False
     # Display label of the player a reel belongs to ("#8 Kate G").
     player_label: str = ""
+    # Where a future upload of this file would go ("youtube" |
+    # "onedrive"), from the team's config and this file's kind.
+    upload_destination: str = "youtube"
+    # Set once a OneDrive upload has been recorded for this file. The
+    # URL is the anonymous share link when the drive allowed one, else
+    # the signed-in `webUrl`.
+    onedrive_item_id: Optional[str] = None
+    onedrive_uploaded_at: Optional[float] = None
+    onedrive_url: Optional[str] = None
     youtube_video_id: Optional[str] = None
     youtube_uploaded_at: Optional[float] = None
     # `youtube_privacy_status` is what the video is set to *right now*
@@ -219,6 +238,10 @@ class EventOut(BaseModel):
     id: int
     payload: dict[str, Any] = Field(default_factory=dict)
     global_frame: Optional[int] = None
+    # Wall-clock moment, Unix milliseconds. Null on a match whose clips
+    # have no recording times, and on clip transitions, which sit at a
+    # boundary rather than at a moment.
+    at_ms: Optional[int] = None
     state: Optional[GameStateOut] = None
 
 
@@ -235,6 +258,11 @@ class MatchOut(BaseModel):
     events: list[EventOut]
     home_roster: RosterOut
     opponent_roster: RosterOut
+    # Home jersey numbers designated libero for THIS match. A match
+    # property, not a roster one: who wears the libero jersey changes
+    # from tournament to tournament, and a roster flag would rewrite
+    # history for every match already tagged.
+    liberos: list[int] = Field(default_factory=list)
     # Per-match player-reel padding, in seconds. None = server defaults
     # (see `render/reels.py`); the client shows those as placeholders so
     # an empty box reads as "default", not "zero".
@@ -269,6 +297,9 @@ class UpdateMatchIn(BaseModel):
     date: Optional[str] = None
     fps: Optional[float] = None
     opponent_roster: Optional[RosterOut] = None
+    # Replaces the whole list; None leaves it alone. An empty list is a
+    # valid value ("no liberos this match").
+    liberos: Optional[list[int]] = None
     # Reel padding is three-valued: absent (leave alone), a number (set),
     # or an explicit null (reset to the default). The handler reads
     # `model_fields_set` to tell absent from null - without that there
@@ -336,13 +367,58 @@ class EventCreateIn(BaseModel):
     type: str
     clip_id: Optional[str] = None
     local_frame: Optional[int] = None
+    # Place by wall clock instead of by frame. When given, the server
+    # projects it onto the clips and fills in the frame position.
+    at_ms: Optional[int] = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class EventUpdateIn(BaseModel):
     clip_id: Optional[str] = None
     local_frame: Optional[int] = None
+    at_ms: Optional[int] = None
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class NudgeEventIn(BaseModel):
+    """Shift one event along the timeline.
+
+    Seconds rather than frames because that is what the operator is
+    thinking in, and fractional so the UI can offer finer steps later
+    without a second endpoint.
+    """
+
+    seconds: float
+
+
+class ImportEventsIn(BaseModel):
+    """An event log captured somewhere else - in practice the phone.
+
+    Each entry is the phone's `match.json` event shape: a `type`, the
+    payload fields inline, and `_at` as Unix milliseconds. Frame fields
+    on the incoming events are ignored; the phone never saw these clips,
+    so its `clip_id` and `local_frame` are placeholders.
+    """
+
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    # Home jerseys designated libero for the match, if the capture knew.
+    liberos: Optional[list[int]] = None
+    # Replace the existing event log rather than adding to it. Clip
+    # transitions are structural and survive either way.
+    replace: bool = False
+
+
+class ImportEventsOut(BaseModel):
+    imported: int
+    # Landed in a gap between clips - the camera was stopped - and were
+    # pulled forward to the next clip's first frame.
+    snapped: int
+    # Stored with their timestamp but no frame position, because the
+    # footage is not here yet. Placed automatically once it is.
+    pending: int = 0
+    # One line per event that could not be imported, with the reason.
+    skipped: list[str] = Field(default_factory=list)
+    match: MatchOut
 
 
 class AutoCutsIn(BaseModel):

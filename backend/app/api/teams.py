@@ -9,13 +9,20 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from ..domain.player import Player
-from ..domain.roster import MediaServerConfig, NamingConfig, Roster, YouTubeConfig
+from ..domain.roster import (
+    MediaServerConfig,
+    NamingConfig,
+    Roster,
+    UploadConfig,
+    YouTubeConfig,
+)
 from ..jobs.manager import JOBS, JobStatus
 from ..library import paths, scanner
 from ..upload import thumbnail_sync
 from .schemas import (
     FullRenderOut,
     MediaServerConfigOut,
+    UploadConfigOut,
     NamingConfigOut,
     PlayerOut,
     RosterOut,
@@ -64,6 +71,7 @@ def _serialize_roster(r: Roster) -> RosterOut:
         youtube=YouTubeConfigOut(**r.youtube.to_dict()),
         naming=NamingConfigOut(**r.naming.to_dict()),
         media_server=MediaServerConfigOut(**r.media_server.to_dict()),
+        upload=UploadConfigOut(**r.upload.to_dict()),
         players=[PlayerOut(**p.to_dict()) for p in r.players],
     )
 
@@ -85,6 +93,7 @@ def put_roster(team: str, roster: RosterOut) -> RosterOut:
         roster.youtube is None
         or roster.naming is None
         or roster.media_server is None
+        or roster.upload is None
     ):
         existing = scanner.load_team_roster(team)
 
@@ -106,6 +115,12 @@ def put_roster(team: str, roster: RosterOut) -> RosterOut:
     else:
         media_server = MediaServerConfig.from_dict(roster.media_server.model_dump())
 
+    upload: UploadConfig
+    if roster.upload is None:
+        upload = existing.upload  # type: ignore[union-attr]
+    else:
+        upload = UploadConfig.from_dict(roster.upload.model_dump())
+
     # Player photos are managed by their own upload endpoints too, so
     # keep the saved path for any player the request didn't echo it for.
     if existing is None:
@@ -126,6 +141,7 @@ def put_roster(team: str, roster: RosterOut) -> RosterOut:
         youtube=yt,
         naming=naming,
         media_server=media_server,
+        upload=upload,
         players=[
             Player.from_dict(_keep_photo(p.model_dump(), existing_players))
             for p in roster.players
@@ -175,6 +191,10 @@ def list_full_renders(team: str) -> list[FullRenderOut]:
             player_label=r.player_label,
             has_thumbnail=r.has_thumbnail,
             thumbnail_synced=r.thumbnail_synced,
+            upload_destination=r.upload_destination,
+            onedrive_item_id=r.onedrive_item_id,
+            onedrive_uploaded_at=r.onedrive_uploaded_at,
+            onedrive_url=r.onedrive_url,
             youtube_video_id=r.youtube_video_id,
             youtube_uploaded_at=r.youtube_uploaded_at,
             youtube_privacy_status=r.youtube_privacy_status,
