@@ -270,9 +270,10 @@ export function TeamFullRendersPanel({ team }: Props) {
   }
 
   /** Rebuild the thumbnail from the current colors / logos / names, and
-   *  (for an already-uploaded render) replace the live one on YouTube.
-   *  The server reports YouTube's verdict separately from generation, so
-   *  a refused push still leaves a fresh local image. */
+   *  (for an already-uploaded render) replace the live one wherever it
+   *  is hosted. The server picks the engine from the render's own upload
+   *  sidecar and reports its verdict separately from generation, so a
+   *  refused push still leaves a fresh local image. */
   async function regenerateThumbnail(r: FullRenderDto) {
     const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
     setErr(null);
@@ -288,7 +289,7 @@ export function TeamFullRendersPanel({ team }: Props) {
       );
       setThumbVersion((v) => ({ ...v, [id]: Date.now() }));
       // Not pushing is only a success when there was nothing to push to.
-      setNote({ text: res.message, ok: res.pushed || !res.video_id });
+      setNote({ text: res.message, ok: res.pushed || !res.destination });
       await reload();
     } catch (e) {
       setErr(String(e));
@@ -451,8 +452,8 @@ export function TeamFullRendersPanel({ team }: Props) {
       );
       setThumbVersion((v) => ({ ...v, [rowId(r)]: Date.now() }));
       // A refused push is a failure even though the local image was
-      // written - the published video still shows the old one.
-      return res.pushed || !res.video_id ? null : res.message;
+      // written - the published copy still shows the old one.
+      return res.pushed || !res.destination ? null : res.message;
     });
   }
 
@@ -807,7 +808,8 @@ export function TeamFullRendersPanel({ team }: Props) {
                 onClick={() => bulkThumbnails(selectedRows)}
                 title={
                   "Regenerate thumbnails for the selected renders (and " +
-                  "replace them on YouTube where the render is uploaded)."
+                  "replace them on YouTube or OneDrive where the render " +
+                  "is uploaded)."
                 }
                 style={{ padding: "2px 8px" }}
               >
@@ -891,6 +893,20 @@ export function TeamFullRendersPanel({ team }: Props) {
             const uploadedAt = r.youtube_video_id
               ? r.youtube_uploaded_at
               : r.onedrive_uploaded_at;
+            // "The published copy is showing OUR image." Each engine
+            // answers for itself: `thumbnail_synced` is the YouTube
+            // sidecar's field and is false on every OneDrive row, which
+            // used to make them all look like a failed push.
+            const hostHasThumb = r.youtube_video_id
+              ? !!r.thumbnail_synced
+              : !!r.onedrive_thumbnail_set;
+            // "on YouTube" / "in OneDrive" reads as a phrase; the bare
+            // noun is what a sentence about pushing needs.
+            const hostName = r.youtube_video_id
+              ? "YouTube"
+              : onOneDrive
+                ? "OneDrive"
+                : null;
             // Title line: "<date>  M<n>. <opponent>  (<tournament>)".
             // Uses displayName so underscored slugs render with spaces.
             const matchLabel = r.match_index
@@ -923,10 +939,10 @@ export function TeamFullRendersPanel({ team }: Props) {
                   style={{ flex: "0 0 auto" }}
                 />
                 {/* Only show the image when it is what viewers see: for
-                    an uploaded video that means YouTube accepted it.
+                    an uploaded render that means its host accepted it.
                     Otherwise the row would advertise a thumbnail the
-                    published video doesn't have. */}
-                {r.has_thumbnail && (!uploaded || r.thumbnail_synced) && (
+                    published copy doesn't have. */}
+                {r.has_thumbnail && (!uploaded || hostHasThumb) && (
                   <a
                     href={api.renderThumbnailUrl(
                       team,
@@ -961,12 +977,12 @@ export function TeamFullRendersPanel({ team }: Props) {
                     />
                   </a>
                 )}
-                {r.has_thumbnail && uploaded && !r.thumbnail_synced && (
+                {r.has_thumbnail && uploaded && !hostHasThumb && (
                   <span
                     title={
-                      "A thumbnail was generated but YouTube has not " +
-                      "accepted it, so the video still shows its old " +
-                      "image. Use the thumbnail button to try again."
+                      `A thumbnail was generated but ${hostName} has not ` +
+                      "accepted it, so the published copy still shows its " +
+                      "own image. Use the thumbnail button to try again."
                     }
                     style={{
                       flex: "0 0 auto",
@@ -1093,25 +1109,23 @@ export function TeamFullRendersPanel({ team }: Props) {
                           {whereLabel} (no link)
                         </span>
                       )}
-                      {/* Thumbnail replacement is a YouTube call
-                          (`thumbnails.set`). OneDrive has no equivalent
-                          worth offering here - a custom thumbnail is
-                          Personal-only and the durable answer is the
-                          title card baked into the render. */}
-                      {!onOneDrive && (
-                        <button
-                          onClick={() => regenerateThumbnail(r)}
-                          disabled={busyId === id || !!bulk}
-                          title={
-                            "Regenerate the thumbnail from the current team " +
-                            "colors, logos and names, and replace it on " +
-                            "YouTube too."
-                          }
-                          style={{ padding: "1px 6px", fontSize: 11 }}
-                        >
-                          {busyId === id ? "…" : "🖼"}
-                        </button>
-                      )}
+                      {/* Offered for both engines. OneDrive takes a
+                          custom thumbnail through the `source` member of
+                          the item's thumbnail set; on a Business or
+                          SharePoint drive it refuses, and the server says
+                          so rather than the button disappearing. */}
+                      <button
+                        onClick={() => regenerateThumbnail(r)}
+                        disabled={busyId === id || !!bulk}
+                        title={
+                          "Regenerate the thumbnail from the current team " +
+                          `colors, logos and names, and replace it on ${hostName} ` +
+                          "too."
+                        }
+                        style={{ padding: "1px 6px", fontSize: 11 }}
+                      >
+                        {busyId === id ? "…" : "🖼"}
+                      </button>
                       <button
                         onClick={() => forgetUpload(r)}
                         disabled={busyId === id || !!bulk}
@@ -1200,8 +1214,9 @@ export function TeamFullRendersPanel({ team }: Props) {
                     onClick={() => regenerateThumbnail(r)}
                     disabled={busyId === id || !!bulk}
                     title={
-                      "Generate the YouTube thumbnail for this render from " +
-                      "the current team colors, logos and names."
+                      "Generate the thumbnail for this render from the " +
+                      "current team colors, logos and names. It is used " +
+                      "when the render is uploaded, and by the media server."
                     }
                     style={{ padding: "2px 8px" }}
                   >

@@ -22,6 +22,7 @@ from ..render.batch import (
     focused_from_match,
     highlights_from_match,
 )
+from ..domain.team import Team
 from ..render.overlays.scoreboard import TeamBranding
 from ..render.reels import build_timestamps, reels_from_match
 from ..render.renderer import MatchRenderer, RenderCancelled, RenderProgress
@@ -770,12 +771,18 @@ def _run_player_reels(
                 job.id,
                 message=f"[{i}/{len(reels)}] {spec.label}",
             )
+            # Computed once and used twice: the captions burnt into the
+            # video and the timestamp index beside it must name the same
+            # plays at the same offsets, and `segment_offsets` costs a
+            # FrameMap build each time it is asked.
+            spans = r.segment_offsets(spec.source_ranges())
             try:
                 r.render(
                     output_path,
                     progress=on_progress,
                     source_frame_ranges=spec.source_ranges(),
                     cancel_check=cancel_check,
+                    captions=_reel_captions(spec, spans, home, away),
                 )
             except RenderCancelled:
                 try:
@@ -786,7 +793,7 @@ def _run_player_reels(
                     )
                 raise
 
-            _write_timestamp_sidecar(r, spec, output_path, fps)
+            _write_timestamp_sidecar(spans, spec, output_path, fps)
             generate_thumbnail(
                 job.team,
                 job.tournament,
@@ -805,12 +812,40 @@ def _run_player_reels(
     JOBS.mark_done(job.id, first_output or "")
 
 
-def _write_timestamp_sidecar(renderer, spec, output_path: Path, fps: float) -> None:
+def _reel_captions(spec, spans, home, away) -> list:
+    """Lower thirds naming each play, in output frame coordinates.
+
+    Built from the same `spans` as the timestamp sidecar, so a caption
+    and its line in `<reel>.chapters.txt` cannot drift apart. A segment
+    that fell entirely inside a cut region is absent from `spans` and
+    therefore gets neither.
+    """
+    from ..render.overlays.caption import ReelCaption
+
+    branding = home if spec.team == Team.HOME else away
+    accent = getattr(branding, "color", "") or ""
+    out = []
+    for out_start, out_end, seg_index in spans:
+        seg = spec.segments[seg_index]
+        out.append(
+            ReelCaption(
+                out_start=out_start,
+                out_end=out_end,
+                title=seg.label(),
+                accent=accent,
+            )
+        )
+    return out
+
+
+def _write_timestamp_sidecar(spans, spec, output_path: Path, fps: float) -> None:
     """Write `<reel>.chapters.txt` next to a rendered reel.
 
-    Offsets come from the renderer so they match the file exactly (a
-    segment that fell entirely inside a cut region isn't in the output
-    and must not shift every later timestamp).
+    `spans` come from `MatchRenderer.segment_offsets()` so they match the
+    file exactly (a segment that fell entirely inside a cut region isn't
+    in the output and must not shift every later timestamp), and are
+    passed in rather than recomputed because the burnt-in captions were
+    built from them.
 
     The contents are a plain timestamp index, not YouTube chapters -
     see `reels.py` for why chapters were dropped. The FILENAME keeps the
@@ -820,7 +855,6 @@ def _write_timestamp_sidecar(renderer, spec, output_path: Path, fps: float) -> N
     gain.
     """
     try:
-        spans = renderer.segment_offsets(spec.source_ranges())
         stamps = build_timestamps(spans, spec.segments, fps)
         if not stamps.lines:
             return
@@ -940,6 +974,144 @@ def _upload_destination(team: str, *, is_reel: bool) -> str:
     return roster.upload.destination_for(is_reel=is_reel)
 
 
+class _LenientValues(dict):
+    """Format mapping that leaves an unknown placeholder alone.
+
+    A typo in a folder template should not fail the job - by the time
+    the name is used, gigabytes have already gone up the wire, and a
+    file landing as `{opponnt}.mp4` can be renamed in OneDrive in two
+    seconds while a failed upload costs the whole transfer again. The
+    settings page previews the rendered path, which is where a typo is
+    supposed to be caught.
+    """
+
+    def __missing__(self, key: str) -> str:
+        logger.warning("unknown OneDrive template placeholder: {%s}", key)
+        return "{" + key + "}"
+
+
+def _onedrive_values(job: RenderJob, roster, file_path: Path, *, is_reel: bool) -> dict:
+    """Placeholder values for a OneDrive folder / filename template.
+
+    The same vocabulary as the YouTube naming templates, so a team that
+    already thinks in `{date} {opponent}` does not learn a second one.
+    `{tournament}` is kept as an alias for `{tournament_abbr}` because
+    the shipped default folder used it before this shared the naming
+    templates' variables, and those configs are already on disk.
+
+    Every value is scrubbed of the characters Graph rejects in an item
+    name. Scrubbing the VALUES rather than the finished string is what
+    lets a folder template keep its own `/` separators while an opponent
+    typed with a slash still cannot invent a folder level.
+    """
+    from ..upload.templates import build_vars
+
+    m = scanner.load_or_create_match(job.team, job.tournament, job.date, job.match)
+    v = build_vars(
+        team=job.team,
+        tournament=job.tournament,
+        date=job.date,
+        match=job.match,
+        match_obj=m,
+        roster=roster,
+        tournament_info=scanner.load_tournament_info(job.team, job.tournament),
+    )
+    if is_reel:
+        renders_root = paths.renders_dir(job.team, job.tournament, job.date, job.match)
+        try:
+            parts = file_path.relative_to(renders_root).parts
+        except ValueError:
+            parts = ()
+        jersey, player_name = (
+            paths.parse_player_folder(parts[2]) if len(parts) >= 3 else (None, "")
+        )
+        chapters = read_chapter_sidecar(file_path)
+        v = v.with_reel(
+            jersey=jersey,
+            player_name=player_name,
+            clip_count=len(chapters.splitlines()) if chapters else 0,
+            chapters="",  # a chapter block is not a filename
+        )
+    values = {k: _clean_value(x) for k, x in v.as_dict().items()}
+    values["tournament"] = values["tournament_abbr"]
+    return values
+
+
+def _onedrive_remote_path(
+    job: RenderJob, roster, file_path: Path, *, is_reel: bool
+) -> str:
+    """Where this render lands on the drive, relative to its root.
+
+    Falls back to the render's own filename at the drive root if
+    anything about the templates is unusable: a file in the wrong place
+    is recoverable, a job that dies after the upload is not.
+    """
+    cfg = roster.upload
+    try:
+        values = _onedrive_values(job, roster, file_path, is_reel=is_reel)
+    except Exception:  # noqa: BLE001 - naming must not fail an upload
+        logger.warning("could not resolve OneDrive template values", exc_info=True)
+        return file_path.name
+
+    folder = "/".join(
+        cleaned
+        for cleaned in (
+            _safe_segment_or_blank(seg)
+            for seg in _fill(cfg.onedrive_folder, values).split("/")
+        )
+        if cleaned
+    )
+    name = _safe_segment_or_blank(
+        _fill(cfg.name_template_for(is_reel=is_reel), values).replace("/", "-")
+    )
+    # An empty template - or one that rendered to nothing because every
+    # placeholder in it was blank - means "keep what the render is
+    # called", which is also the only name guaranteed to be non-empty.
+    leaf = f"{name}{file_path.suffix}" if name else file_path.name
+    return f"{folder}/{leaf}" if folder else leaf
+
+
+def _fill(template: str, values: dict) -> str:
+    """Render one path template, tidying an unnumbered match's marker.
+
+    Mirrors `templates.render_template`: match 0 is "the only match that
+    day", so `M{match_index}` should disappear entirely rather than
+    leave a bare `M` behind.
+    """
+    text = (template or "").strip()
+    if not text:
+        return ""
+    try:
+        if not values.get("match_index"):
+            return paths.collapse_empty_segments(
+                paths.strip_match_number(text).format_map(_LenientValues(values))
+            )
+        return text.format_map(_LenientValues(values))
+    except (ValueError, IndexError) as exc:
+        # An unbalanced brace. Same reasoning as _LenientValues.
+        logger.warning("malformed OneDrive template %r: %s", template, exc)
+        return text
+
+
+def _clean_value(value: str) -> str:
+    """A template value that cannot escape its path segment.
+
+    Unlike [_safe_segment] this preserves emptiness: a blank
+    `{player_name}` should vanish from the name, not become the word
+    "untitled" in the middle of it.
+    """
+    out = str(value or "").strip()
+    for ch in '"*:<>?/\|':
+        out = out.replace(ch, "-")
+    return out.strip()
+
+
+def _safe_segment_or_blank(value: str) -> str:
+    """[_safe_segment] without the "untitled" fallback."""
+    out = _clean_value(value).strip(". ")
+    return out
+
+
 def _run_onedrive_upload(
     job: RenderJob, file_path: Path, *, is_reel: bool, cancel_check
 ) -> None:
@@ -957,17 +1129,7 @@ def _run_onedrive_upload(
     roster = scanner.load_team_roster(job.team)
     cfg = roster.upload
 
-    # Folder from the template, filename from the render. The same
-    # placeholders the naming templates use, so a team that already
-    # thinks in `{date} {opponent}` does not learn a second vocabulary.
-    folder = (cfg.onedrive_folder or "").strip().strip("/")
-    folder = (
-        folder.replace("{team}", _safe_segment(roster.team_name or job.team))
-        .replace("{tournament}", _safe_segment(job.tournament))
-        .replace("{date}", _safe_segment(job.date))
-        .replace("{opponent}", _safe_segment(job.match))
-    )
-    remote = f"{folder}/{file_path.name}" if folder else file_path.name
+    remote = _onedrive_remote_path(job, roster, file_path, is_reel=is_reel)
 
     last_emit = [time.time()]
     last_pct = [0.0]
@@ -1008,11 +1170,13 @@ def _run_onedrive_upload(
     link = result.share_url or result.web_url or ""
 
     # Replace OneDrive's own frame-grab with the card VME drew. Best
-    # effort, and it genuinely does not work everywhere: Graph
-    # documents custom thumbnails as OneDrive **Personal** only, and a
-    # Business or SharePoint drive refuses them. The durable answer on
-    # any drive is the title card burnt onto the front of the render -
-    # this just improves the case where the API allows it.
+    # effort: custom thumbnails are documented as OneDrive **Personal**
+    # only, so a Business or SharePoint drive refuses them. The durable
+    # answer on any drive is the title card burnt onto the front of the
+    # render - this just improves the case where the API allows it.
+    # `onedrive.set_thumbnail` logs *why* it failed; saying so here too
+    # would only guess, which is how this spent a week blaming tenant
+    # policy for a wrong URL.
     thumb = thumbnail_path(file_path)
     thumbed = False
     if result.item_id and thumb.is_file():
@@ -1020,10 +1184,21 @@ def _run_onedrive_upload(
         logger.info(
             "onedrive thumbnail for %s: %s",
             result.item_id,
-            "set" if thumbed else "refused (expected on Business/SharePoint)",
+            "set" if thumbed else "not set",
         )
 
-    _write_onedrive_sidecar(file_path, result, is_reel=is_reel, thumbed=thumbed)
+    # The timestamp index, on the item itself. The enqueue endpoint
+    # already expanded `{chapters}` into this string for whichever
+    # engine the file was bound for - OneDrive simply never read it.
+    described = False
+    if result.item_id:
+        described = onedrive.set_description(
+            result.item_id, (job.payload or {}).get("description", "")
+        )
+
+    _write_onedrive_sidecar(
+        file_path, result, is_reel=is_reel, thumbed=thumbed, described=described
+    )
     # The message first, because `mark_done` does not carry one.
     JOBS.update(
         job.id,
@@ -1040,7 +1215,12 @@ def _run_onedrive_upload(
 
 
 def _write_onedrive_sidecar(
-    file_path: Path, result, *, is_reel: bool, thumbed: bool = False
+    file_path: Path,
+    result,
+    *,
+    is_reel: bool,
+    thumbed: bool = False,
+    described: bool = False,
 ) -> None:
     """Record where a render ended up, beside the render.
 
@@ -1057,10 +1237,11 @@ def _write_onedrive_sidecar(
                     "share_url": result.share_url,
                     "web_url": result.web_url,
                     "is_reel": is_reel,
-                    # False is the normal outcome on a Business drive,
-                    # so the listing can say "OneDrive picked this one"
-                    # rather than implying something went wrong.
+                    # False is the normal outcome on a Business or
+                    # SharePoint drive, so the listing can say "OneDrive
+                    # picked this one" rather than implying a failure.
                     "thumbnail_set": thumbed,
+                    "description_set": described,
                     "uploaded_at": time.time(),
                 },
                 indent=2,

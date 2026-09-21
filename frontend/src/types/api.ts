@@ -181,6 +181,9 @@ export interface UploadConfigDto {
   match_destination: "youtube" | "onedrive";
   reel_destination: "youtube" | "onedrive";
   onedrive_folder?: string | null;
+  /** Filename without extension; empty keeps the render's own name. */
+  onedrive_match_name?: string | null;
+  onedrive_reel_name?: string | null;
   onedrive_share_links: boolean;
 }
 
@@ -284,6 +287,9 @@ export interface FullRenderDto {
   onedrive_item_id?: string | null;
   onedrive_uploaded_at?: number | null;
   onedrive_url?: string | null;
+  /** Whether OneDrive took VME's custom thumbnail. `thumbnail_synced`
+   *  is the YouTube answer and is always false for a OneDrive row. */
+  onedrive_thumbnail_set?: boolean;
   team: string;
   tournament: string;
   date: string;

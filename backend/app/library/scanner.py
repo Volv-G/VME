@@ -74,6 +74,11 @@ class FullRenderInfo:
     onedrive_item_id: str | None = None
     onedrive_uploaded_at: float | None = None
     onedrive_url: str | None = None
+    # Whether OneDrive took the custom thumbnail. Separate from
+    # `thumbnail_synced`, which only ever means YouTube: a row needs to
+    # ask its own host, or a OneDrive upload looks like a YouTube push
+    # that never landed.
+    onedrive_thumbnail_set: bool = False
     # Where a *future* upload of this file would go, from the team's
     # config and the file's kind. Drives the button label, so the
     # operator is told what the button will actually do rather than
@@ -341,6 +346,25 @@ def mark_thumbnail_synced(
     save_youtube_sidecar(render_path, info)
 
 
+def mark_onedrive_thumbnail(render_path: Path, thumbed: bool) -> None:
+    """Record whether OneDrive accepted this render's custom thumbnail.
+
+    The OneDrive counterpart of [mark_thumbnail_synced], minus the
+    digest: that exists to avoid re-spending YouTube's per-channel
+    thumbnail rate limit, and Graph has no equivalent to conserve.
+    """
+    info = load_onedrive_sidecar(render_path)
+    if info is None:
+        return
+    info["thumbnail_set"] = bool(thumbed)
+    try:
+        paths.onedrive_sidecar_path(render_path).write_text(
+            json.dumps(info, indent=2), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
 def delete_youtube_sidecar(render_path: Path) -> bool:
     """Drop a render's upload record. True if a sidecar was removed.
 
@@ -452,6 +476,7 @@ def _build_render_info(
         onedrive_item_id=od.get("item_id") if od else None,
         onedrive_uploaded_at=od.get("uploaded_at") if od else None,
         onedrive_url=(od.get("share_url") or od.get("web_url")) if od else None,
+        onedrive_thumbnail_set=bool(od.get("thumbnail_set")) if od else False,
         upload_destination=destination,
         youtube_video_id=sidecar.get("video_id") if sidecar else None,
         youtube_uploaded_at=sidecar.get("uploaded_at") if sidecar else None,

@@ -195,6 +195,7 @@ def list_full_renders(team: str) -> list[FullRenderOut]:
             onedrive_item_id=r.onedrive_item_id,
             onedrive_uploaded_at=r.onedrive_uploaded_at,
             onedrive_url=r.onedrive_url,
+            onedrive_thumbnail_set=r.onedrive_thumbnail_set,
             youtube_video_id=r.youtube_video_id,
             youtube_uploaded_at=r.youtube_uploaded_at,
             youtube_privacy_status=r.youtube_privacy_status,

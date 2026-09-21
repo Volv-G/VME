@@ -44,6 +44,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import quote
 
 import requests
 
@@ -218,6 +219,23 @@ def get_status() -> Status:
         return Status(False, f"Could not reach Graph: {exc}", True, True)
 
 
+def _encode_path(remote_path: str) -> str:
+    """Percent-encode a drive path for Graph's `root:/<path>:` addressing.
+
+    `/` stays a separator; everything else is escaped. This is not
+    belt-and-braces - `#` and `?` are URL *structure*, so a reel named
+    `#12 Zoe H.mp4` interpolated raw makes the server see a path that
+    ends at the `#`, and answers 400 for a request it never received in
+    full. Spaces survived unencoded for months only because urllib3
+    fixes those up on the way out; it cannot fix a fragment, because by
+    then the rest of the path is already gone.
+
+    A jersey number is the natural thing to open a reel's name with, so
+    `#` is not a character to sanitize away - it is one to encode.
+    """
+    return quote(remote_path, safe="/")
+
+
 def upload_file(
     *,
     file_path: Path,
@@ -241,17 +259,23 @@ def upload_file(
     token = access_token()
     size = file_path.stat().st_size
     headers = {"Authorization": f"Bearer {token}"}
+    address = _encode_path(remote_path)
+    # Graph checks the body's `name` against the leaf of the path and
+    # refuses the session when they differ, so this has to come from
+    # `remote_path` and not from the file on disk. They were the same
+    # string until filename templates existed.
+    leaf = remote_path.rsplit("/", 1)[-1] or file_path.name
 
     # A session rather than a simple PUT: simple uploads cap at 250 MB,
     # and a match render is well past that. It also gives us resumable
     # byte ranges, which is what makes cancel cheap.
     session = requests.post(
-        f"{GRAPH}/me/drive/root:/{remote_path}:/createUploadSession",
+        f"{GRAPH}/me/drive/root:/{address}:/createUploadSession",
         headers=headers,
         json={
             "item": {
                 "@microsoft.graph.conflictBehavior": "replace",
-                "name": file_path.name,
+                "name": leaf,
             }
         },
         timeout=30,
@@ -306,7 +330,7 @@ def upload_file(
 
     result = UploadResult(
         item_id=item.get("id", ""),
-        name=item.get("name", file_path.name),
+        name=item.get("name", leaf),
         web_url=item.get("webUrl"),
     )
     if share and result.item_id:
@@ -341,14 +365,72 @@ def create_share_link(item_id: str, scope: str = "anonymous") -> Optional[str]:
         return None
 
 
-def set_thumbnail(item_id: str, image: Path, size: str = "medium") -> bool:
-    """Attach a custom thumbnail. OneDrive **Personal** only.
+# OneDrive Personal caps an item description at 1024 characters and
+# answers 400 for a longer one. A reel's timestamp index is ~35 chars a
+# play, so only an unusually busy match comes close.
+DESCRIPTION_LIMIT = 1024
 
-    Graph documents custom thumbnails as unsupported on OneDrive for
-    Business and SharePoint, so this returns False there rather than
-    pretending. The durable answer on any drive is to burn a title card
-    onto the front of the video, which is what `render/thumbnail.py`
-    already draws.
+
+def set_description(item_id: str, text: str) -> bool:
+    """Put the upload's description on the drive item.
+
+    OneDrive has no equivalent of a YouTube description, but a driveItem
+    carries a `description` the web UI shows in the details pane. It is
+    where a reel's timestamp index goes - the same string YouTube would
+    have received, since the upload job already carries it expanded.
+
+    Two things it is not: clickable (OneDrive does not linkify a
+    timecode the way YouTube does) and untouched (the service HTML-
+    escapes `:` into `&#58;` on the way in). Both are why the captions
+    burnt into the reel are the primary answer and this is the index.
+    """
+    body = (text or "").strip()
+    if not body:
+        return False
+    if len(body) > DESCRIPTION_LIMIT:
+        # Cut on a line boundary: half a timecode is worse than fewer.
+        body = body[:DESCRIPTION_LIMIT].rsplit("\n", 1)[0].rstrip()
+    try:
+        token = access_token()
+        r = requests.patch(
+            f"{GRAPH}/me/drive/items/{item_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"description": body},
+            timeout=30,
+        )
+        if r.status_code in (200, 201, 204):
+            return True
+        logger.warning(
+            "could not set description (%s): %s", r.status_code, r.text[:300]
+        )
+        return False
+    except (RuntimeError, requests.RequestException) as exc:
+        logger.warning("set_description failed: %s", exc)
+        return False
+
+
+def set_thumbnail(item_id: str, image: Path, size: str = "source") -> bool:
+    """Attach a custom thumbnail to an uploaded item.
+
+    ### Why `source` and not a named size
+
+    A thumbnail set looks like `{id: "0", small, medium, large}` and the
+    obvious reading is that you overwrite the size you want. You cannot:
+    `small`/`medium`/`large` are *derived* renditions and a PUT to one
+    answers 404 `itemNotFound` even when a GET of the same set returns
+    it happily. `source` is the only writable member - upload there and
+    Graph regenerates the rest. Verified against this drive; every other
+    segment 404s.
+
+    That 404 is also why this used to look like a permissions problem.
+    It is not: custom thumbnails are documented as OneDrive **Personal**
+    only, and a Business or SharePoint drive refuses them - but it does
+    so with 403, not 404. The two failures are reported separately below
+    so the next person does not chase the wrong one.
+
+    Returns False rather than raising: an upload that succeeded should
+    not be failed over its cover image. The host-independent answer is
+    the title card baked into the render.
     """
     try:
         token = access_token()
@@ -361,13 +443,23 @@ def set_thumbnail(item_id: str, image: Path, size: str = "medium") -> bool:
             data=image.read_bytes(),
             timeout=60,
         )
-        if r.status_code not in (200, 201, 204):
+        if r.status_code in (200, 201, 204):
+            return True
+        if r.status_code in (401, 403):
             logger.info(
                 "custom thumbnail refused (%s) - expected on Business/SharePoint",
                 r.status_code,
             )
-            return False
-        return True
+        else:
+            # Anything else is a real surprise and the body is the only
+            # thing that will explain it, so do not swallow it.
+            logger.warning(
+                "custom thumbnail failed (%s) on size %r: %s",
+                r.status_code,
+                size,
+                r.text[:300],
+            )
+        return False
     except (RuntimeError, OSError, requests.RequestException) as exc:
         logger.warning("set_thumbnail failed: %s", exc)
         return False

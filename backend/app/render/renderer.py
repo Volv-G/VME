@@ -17,6 +17,7 @@ from ..domain.roster import Roster
 from .frame_map import FrameEntry, FrameMap
 from .condensed import build_condensed_frame_map
 from .frame_map_builder import build_frame_map
+from .overlays.caption import CaptionOverlayRenderer, ReelCaption
 from .overlays.message import MessageOverlayRenderer
 from .overlays.scoreboard import ScoreboardOverlay, TeamBranding
 from .settings import apply_container_extension, load_settings, scale_filter
@@ -101,6 +102,7 @@ class MatchRenderer:
         source_frame_ranges: Optional[list[tuple[int, int]]] = None,
         condensed: bool = False,
         cancel_check: Optional[CancelCheck] = None,
+        captions: Optional[list[ReelCaption]] = None,
     ) -> Path:
         """Render the match to ``output_path``.
 
@@ -121,6 +123,12 @@ class MatchRenderer:
         the events, and popups from the removed footage have to be moved
         onto frames that remain. Mutually exclusive with the range
         arguments.
+
+        ``captions`` are lower thirds keyed to OUTPUT frame positions -
+        what a reel uses to name each play. They are addressed in output
+        coordinates because that is what a caller already has from
+        `segment_offsets()`; a source frame would have to be mapped back
+        through the cut regions to find out when it is actually shown.
         """
         if condensed and (source_frame_range or source_frame_ranges):
             raise ValueError(
@@ -193,12 +201,20 @@ class MatchRenderer:
         start_time = time.time()
         frames_done = [0]
 
+        caption_renderer = (
+            CaptionOverlayRenderer(captions, fps) if captions else None
+        )
+
         def make_frame(t: float) -> np.ndarray:
             if cancel_check is not None and cancel_check():
                 raise RenderCancelled("Render cancelled by user")
-            i = sequence[min(int(t * fps), total - 1)]
+            out_i = min(int(t * fps), total - 1)
+            i = sequence[out_i]
             entry = fmap[i]
             frame = self._compose_frame(entry, size, clip_offsets)
+            if caption_renderer is not None:
+                # Last, so a caption is never painted under a popup.
+                frame = caption_renderer.apply(frame, out_i)
             frames_done[0] += 1
             if progress and frames_done[0] % 30 == 0:
                 progress(

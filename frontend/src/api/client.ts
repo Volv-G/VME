@@ -190,7 +190,12 @@ export const api = {
     generated: boolean;
     pushed: boolean;
     message: string;
+    /** Where the render is hosted, or null when it isn't uploaded yet.
+     *  Decides whether `pushed: false` means "refused" or "nothing to
+     *  push to". */
+    destination: "youtube" | "onedrive" | null;
     video_id?: string;
+    item_id?: string;
     size_bytes?: number;
   }> {
     return fetchJson(

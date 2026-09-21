@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -627,17 +628,22 @@ def regenerate_render_thumbnail(
     filename: str,
     push: bool = True,
 ) -> dict:
-    """Rebuild a render's thumbnail, and push it to YouTube if uploaded.
+    """Rebuild a render's thumbnail and push it to wherever the render lives.
 
     The point of regenerating is that thumbnails bake in things the user
     keeps tuning - team colors, logos, the opponent's name. Rebuilding
-    alone would leave the *published* video showing the old image, so by
-    default (`push=true`) an already-uploaded render also gets
-    `thumbnails.set` called, which overwrites the live thumbnail.
+    alone would leave the *published* copy showing the old image, so by
+    default (`push=true`) an already-uploaded render gets the new one
+    pushed to its host.
 
-    Pushing is reported, never fatal: a channel that isn't verified for
-    custom thumbnails still gets a freshly generated local image, and
-    the response says why YouTube declined.
+    Which host is decided by the render's own sidecar rather than by the
+    team's current setting: a reel uploaded to OneDrive last month is
+    still on OneDrive after the team switches back to YouTube, and it is
+    that copy this replaces.
+
+    Pushing is reported, never fatal. A channel that isn't verified for
+    custom thumbnails, or a Business drive that refuses them, still gets
+    a freshly generated local image and a message saying why.
     """
     renders = paths.renders_dir(team, tournament, date, match)
     target = _safe_render_path(renders, filename)
@@ -653,20 +659,79 @@ def regenerate_render_thumbnail(
         "generated": True,
         "size_bytes": thumb.stat().st_size,
         "pushed": False,
+        "destination": None,
         "message": "Thumbnail regenerated.",
     }
 
-    sidecar = scanner.load_youtube_sidecar(target) or {}
-    video_id = sidecar.get("video_id")
-    if not push or not video_id:
-        if video_id:
-            result["message"] = "Thumbnail regenerated (not pushed to YouTube)."
+    yt = scanner.load_youtube_sidecar(target) or {}
+    od = scanner.load_onedrive_sidecar(target) or {}
+    video_id = yt.get("video_id")
+    item_id = od.get("item_id")
+
+    # A render carries one upload record in practice. When both are
+    # somehow present, YouTube wins - not because it is better, but
+    # because that is the copy the dashboard row links to and names in
+    # the button's tooltip, and a button that pushes somewhere other
+    # than where it says is worse than either choice.
+    if video_id:
+        result["destination"] = "youtube"
+        result["video_id"] = video_id
+    elif item_id:
+        result["destination"] = "onedrive"
+        result["item_id"] = item_id
+
+    if not push or not result["destination"]:
+        if result["destination"]:
+            result["message"] = (
+                "Thumbnail regenerated (not pushed to "
+                f"{'YouTube' if video_id else 'OneDrive'})."
+            )
         return result
 
-    result["video_id"] = video_id
+    if video_id:
+        return _push_thumbnail_youtube(target, thumb, video_id, result)
+    return _push_thumbnail_onedrive(target, thumb, item_id, result)
+
+
+def _push_thumbnail_onedrive(
+    target: Path, thumb: Path, item_id: str, result: dict
+) -> dict:
+    """Replace the custom thumbnail on an uploaded OneDrive item.
+
+    No digest check, unlike YouTube: that one exists to protect a
+    per-channel rate limit, and Graph has none to protect. Re-pushing an
+    identical image costs one request.
+    """
+    status = onedrive_uploader.get_status()
+    if not status.configured:
+        scanner.mark_onedrive_thumbnail(target, False)
+        result["message"] = (
+            f"Thumbnail regenerated, but OneDrive is not connected: {status.reason}"
+        )
+        return result
+    ok = onedrive_uploader.set_thumbnail(item_id, thumb)
+    scanner.mark_onedrive_thumbnail(target, ok)
+    result["pushed"] = ok
+    result["message"] = (
+        "Thumbnail regenerated and updated on OneDrive."
+        if ok
+        else (
+            "Thumbnail regenerated, but OneDrive would not take a custom "
+            "image for this file (see the log). The copy in OneDrive keeps "
+            "its own frame grab."
+        )
+    )
+    return result
+
+
+def _push_thumbnail_youtube(
+    target: Path, thumb: Path, video_id: str, result: dict
+) -> dict:
+    """Replace the live thumbnail on an uploaded YouTube video."""
     # Identical image, already live: pushing it again would change
     # nothing and YouTube rate-limits thumbnail uploads per channel over
     # a multi-hour window, so spend that budget only on real changes.
+    sidecar = scanner.load_youtube_sidecar(target) or {}
     digest = scanner.file_digest(thumb)
     if (
         sidecar.get("thumbnail_synced")
@@ -877,8 +942,6 @@ def _safe_render_path(renders_root, filename: str):
     Rejects absolute paths, parent-traversal (`..`), and anything that
     escapes the root after normalization.
     """
-    from pathlib import Path
-
     if not filename or filename in (".", ".."):
         raise HTTPException(400, "Invalid filename")
     candidate = (renders_root / filename).resolve()

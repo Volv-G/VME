@@ -249,6 +249,14 @@ DESTINATIONS = ("youtube", "onedrive")
 
 DEFAULT_ONEDRIVE_FOLDER = "VME/{team}/{date} {opponent}"
 
+# Filename templates default to empty, which means "whatever the render
+# is already called". That is deliberately not a template: the render
+# names are built by `naming`, a team that likes them should not have to
+# restate them here, and an empty default means adding this field
+# renames nothing that is already in the drive.
+DEFAULT_ONEDRIVE_MATCH_NAME = ""
+DEFAULT_ONEDRIVE_REEL_NAME = ""
+
 
 @dataclass
 class UploadConfig:
@@ -264,6 +272,14 @@ class UploadConfig:
     # Folder path on the drive, relative to its root. Same placeholders
     # as the naming templates; the filename comes from the render.
     onedrive_folder: str = DEFAULT_ONEDRIVE_FOLDER
+    # Filename, without extension - that always comes from the render,
+    # because a `.mp4` renamed to something else stops playing. Empty
+    # keeps the render's own name. Two of them for the same reason the
+    # title templates come in pairs: one template across both would give
+    # every reel from a match the same filename, and OneDrive would
+    # cheerfully let them overwrite each other.
+    onedrive_match_name: str = DEFAULT_ONEDRIVE_MATCH_NAME
+    onedrive_reel_name: str = DEFAULT_ONEDRIVE_REEL_NAME
     # Ask Graph for an anonymous view link after each upload. Business
     # and SharePoint tenants often forbid these by policy, in which case
     # the upload still succeeds and simply has no shareable URL.
@@ -272,11 +288,16 @@ class UploadConfig:
     def destination_for(self, *, is_reel: bool) -> str:
         return self.reel_destination if is_reel else self.match_destination
 
+    def name_template_for(self, *, is_reel: bool) -> str:
+        return self.onedrive_reel_name if is_reel else self.onedrive_match_name
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "match_destination": self.match_destination,
             "reel_destination": self.reel_destination,
             "onedrive_folder": self.onedrive_folder,
+            "onedrive_match_name": self.onedrive_match_name,
+            "onedrive_reel_name": self.onedrive_reel_name,
             "onedrive_share_links": self.onedrive_share_links,
         }
 
@@ -298,6 +319,10 @@ class UploadConfig:
             onedrive_folder=(
                 data.get("onedrive_folder") or DEFAULT_ONEDRIVE_FOLDER
             ),
+            # `or ""` rather than `or DEFAULT`: empty IS the default
+            # here, and it is also a meaningful choice the user can make.
+            onedrive_match_name=str(data.get("onedrive_match_name") or ""),
+            onedrive_reel_name=str(data.get("onedrive_reel_name") or ""),
             onedrive_share_links=bool(data.get("onedrive_share_links", True)),
         )
 

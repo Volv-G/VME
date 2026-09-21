@@ -67,6 +67,10 @@ class UploadConfigOut(BaseModel):
     match_destination: str = "youtube"
     reel_destination: str = "youtube"
     onedrive_folder: Optional[str] = None
+    # Filename without extension. None/empty means "keep the render's
+    # own name", which is what every team had before these existed.
+    onedrive_match_name: Optional[str] = None
+    onedrive_reel_name: Optional[str] = None
     onedrive_share_links: bool = True
 
 
@@ -156,6 +160,10 @@ class FullRenderOut(BaseModel):
     onedrive_item_id: Optional[str] = None
     onedrive_uploaded_at: Optional[float] = None
     onedrive_url: Optional[str] = None
+    # Whether OneDrive accepted VME's custom thumbnail for this item.
+    # `thumbnail_synced` above is the YouTube answer and says nothing
+    # about a render that lives on OneDrive.
+    onedrive_thumbnail_set: bool = False
     youtube_video_id: Optional[str] = None
     youtube_uploaded_at: Optional[float] = None
     # `youtube_privacy_status` is what the video is set to *right now*

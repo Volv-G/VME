@@ -22,6 +22,56 @@ interface Props {
 
 const DEFAULT_FOLDER = "VME/{team}/{date} {opponent}";
 
+/** Suggested filename templates, offered as input placeholders. Empty is
+ *  the real default and means "keep the render's own name". */
+const SUGGEST_MATCH_NAME = "{date} {team} vs {opponent}";
+const SUGGEST_REEL_NAME = "{player_name} - {date} vs {opponent}";
+
+/** One representative match, for the preview under each field. A
+ *  numbered match on purpose: `{match_index}` renders empty for the
+ *  only match of a day, and a preview that silently dropped it would
+ *  teach the wrong thing about the placeholder. */
+const SAMPLE: Record<string, string> = {
+  team: "Eastlake",
+  opponent: "Woodinville",
+  date: "2026.09.16",
+  date_iso: "2026-09-16",
+  tournament: "KCC",
+  tournament_abbr: "KCC",
+  tournament_full: "KingCo Conference",
+  match_index: "2",
+  player: "#2 Sofia S",
+  player_number: "2",
+  player_name: "Sofia S",
+  clip_count: "7",
+};
+
+/** Mirror of the server's lenient rendering: known placeholders are
+ *  substituted, unknown ones are left visible so a typo shows up here
+ *  rather than in the drive. */
+function fill(template: string): string {
+  return Object.entries(SAMPLE).reduce(
+    (out, [k, v]) => out.split(`{${k}}`).join(v),
+    template
+  );
+}
+
+/** The full path a render would land on, for the preview line. */
+function previewPath(folder: string, name: string, isReel: boolean): string {
+  const dir = fill(folder || "")
+    .split("/")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join("/");
+  const leaf = fill(name || "").trim();
+  const file = leaf
+    ? `${leaf}.mp4`
+    : isReel
+      ? "2026.09.16_vs_Woodinville_02_Sofia_S_reel.mp4"
+      : "2026.09.16_vs_Woodinville.mp4";
+  return dir ? `${dir}/${file}` : file;
+}
+
 const ENGINES = [
   {
     id: "youtube",
@@ -35,6 +85,26 @@ const ENGINES = [
   },
 ] as const;
 
+/** The path a render would land on, under the field that decides it.
+ *  Cheaper than a round-trip and it updates as you type, which is the
+ *  point: the server renders these templates leniently, so a typo is
+ *  meant to be caught here rather than in the drive. */
+function Preview({ path }: { path: string }) {
+  return (
+    <p
+      className="muted"
+      style={{
+        fontSize: 12,
+        fontFamily: "var(--mono, monospace)",
+        wordBreak: "break-all",
+        margin: "2px 0 10px",
+      }}
+    >
+      {path}
+    </p>
+  );
+}
+
 export function TeamOneDriveSettings({ team, roster, onSaved, show }: Props) {
   const [cfg, setCfg] = useState<UploadConfigDto | null>(null);
   const [saving, setSaving] = useState(false);
@@ -47,6 +117,8 @@ export function TeamOneDriveSettings({ team, roster, onSaved, show }: Props) {
         match_destination: "youtube",
         reel_destination: "youtube",
         onedrive_folder: DEFAULT_FOLDER,
+        onedrive_match_name: "",
+        onedrive_reel_name: "",
         onedrive_share_links: true,
       }
     );
@@ -135,10 +207,73 @@ export function TeamOneDriveSettings({ team, roster, onSaved, show }: Props) {
             />
           </label>
           <p className="muted" style={{ fontSize: 12 }}>
-            Relative to the drive root. Takes <code>{"{team}"}</code>,{" "}
-            <code>{"{tournament}"}</code>, <code>{"{date}"}</code> and{" "}
-            <code>{"{opponent}"}</code>. The filename comes from the render,
-            so reels keep the per-player names they already have.
+            Relative to the drive root. <code>/</code> makes a folder level.
+          </p>
+          <Preview path={previewPath(cfg.onedrive_folder ?? "", "", false)} />
+
+          <label>
+            Match filename
+            <input
+              value={cfg.onedrive_match_name ?? ""}
+              placeholder={`${SUGGEST_MATCH_NAME}   (blank = as rendered)`}
+              onChange={(e) => set("onedrive_match_name", e.target.value)}
+            />
+          </label>
+          <Preview
+            path={previewPath(
+              cfg.onedrive_folder ?? "",
+              cfg.onedrive_match_name ?? "",
+              false
+            )}
+          />
+
+          <label>
+            Reel filename
+            <input
+              value={cfg.onedrive_reel_name ?? ""}
+              placeholder={`${SUGGEST_REEL_NAME}   (blank = as rendered)`}
+              onChange={(e) => set("onedrive_reel_name", e.target.value)}
+            />
+          </label>
+          <Preview
+            path={previewPath(
+              cfg.onedrive_folder ?? "",
+              cfg.onedrive_reel_name ?? "",
+              true
+            )}
+          />
+
+          <p className="muted" style={{ fontSize: 12 }}>
+            Leave a filename blank to keep the name the render already has.
+            The extension is always the render's — a <code>.mp4</code> named
+            something else stops playing. Give reels a template that includes
+            the player, or a match's twelve reels all land on one name and
+            overwrite each other.
+          </p>
+          <p className="muted" style={{ fontSize: 12 }}>
+            Placeholders, the same ones the YouTube title templates use:{" "}
+            {[
+              "team",
+              "opponent",
+              "date",
+              "date_iso",
+              "tournament_abbr",
+              "tournament_full",
+              "match_index",
+              "player",
+              "player_name",
+              "player_number",
+              "clip_count",
+            ].map((v, i) => (
+              <span key={v}>
+                {i > 0 && " "}
+                <code>{`{${v}}`}</code>
+              </span>
+            ))}
+            . The player ones are blank outside a reel.{" "}
+            <code>{"{match_index}"}</code> is blank for the only match of a
+            day, and an <code>M</code> or <code>#</code> in front of it is
+            dropped with it.
           </p>
 
           <label className="checkbox-row">
