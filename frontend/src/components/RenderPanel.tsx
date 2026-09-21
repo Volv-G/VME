@@ -493,6 +493,34 @@ export function RenderPanel({
     }
   }
 
+  /** Queue a finished job's parameters again.
+   *
+   *  Confirmed only for a completed YouTube upload, which is the one
+   *  case where running it again is not idempotent: it publishes a
+   *  second video rather than replacing the first. Everything else
+   *  overwrites its own output or had no output to begin with.
+   */
+  async function retryJob(job: RenderJobDto) {
+    if (
+      job.kind === "youtube_upload" &&
+      job.status === "done" &&
+      !confirm(
+        `This render is already on YouTube.\n\n` +
+          `Uploading it again publishes a SECOND video — it does not ` +
+          `replace the first — and spends another 1600 units of today's ` +
+          `quota (6 uploads/day).\n\nUpload it again?`
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.retryJob(job.id);
+      await reloadJobs();
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+
   async function removeRender(filename: string) {
     if (!confirm(`Delete ${filename}?`)) return;
     try {
@@ -784,6 +812,7 @@ Clear the record anyway? The video on YouTube is not ` +
                 job={j}
                 onCancel={() => cancelJob(j.id)}
                 onDelete={() => deleteJob(j.id)}
+                onRetry={() => retryJob(j)}
                 downloadUrl={
                   j.output_filename
                     ? api.downloadUrl(
@@ -1042,16 +1071,44 @@ interface JobRowProps {
   job: RenderJobDto;
   onCancel: () => void;
   onDelete: () => void;
+  /** Queue the job's parameters again. Omitted by callers that have no
+   *  way to refresh the list afterwards. */
+  onRetry?: () => void;
   downloadUrl?: string;
   /** Open the finished output in the in-app player. Omitted by callers
    *  that don't have a player mounted (e.g. the team queue widget). */
   onPlay?: () => void;
 }
 
+/** Same button, different word. "Retry" reads as fixing something that
+ *  went wrong; next to a job that succeeded it would imply it hadn't. */
+function retryLabel(status: RenderJobDto["status"]): string {
+  return status === "done" ? "Rerun" : "Retry";
+}
+
+/** Rerunning a finished YouTube upload PUBLISHES A SECOND VIDEO - the
+ *  upload path has no already-uploaded guard. OneDrive replaces the file
+ *  in place, so only YouTube needs the warning, and only from `done`:
+ *  retrying a failure is the case where nothing was published. */
+function retryHint(job: RenderJobDto): string {
+  if (job.kind === "youtube_upload" && job.status === "done") {
+    return (
+      "Upload this render again. It does not replace the video that is " +
+      "already up — YouTube will get a second copy, and it spends another " +
+      "1600 units of the daily quota."
+    );
+  }
+  if (job.status === "done") {
+    return "Run this job again with the same settings, overwriting its output.";
+  }
+  return "Queue this job again with the same settings.";
+}
+
 export function JobRow({
   job,
   onCancel,
   onDelete,
+  onRetry,
   downloadUrl,
   onPlay,
 }: JobRowProps) {
@@ -1130,13 +1187,20 @@ export function JobRow({
           {job.cancel_requested ? "Cancelling…" : "Cancel"}
         </button>
       ) : (
-        <button
-          className="danger"
-          onClick={onDelete}
-          title="Remove this job from history"
-        >
-          Delete
-        </button>
+        <>
+          {onRetry && (
+            <button onClick={onRetry} title={retryHint(job)}>
+              {retryLabel(job.status)}
+            </button>
+          )}
+          <button
+            className="danger"
+            onClick={onDelete}
+            title="Remove this job from history"
+          >
+            Delete
+          </button>
+        </>
       )}
     </div>
   );

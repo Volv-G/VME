@@ -686,6 +686,11 @@ export const api = {
   async deleteJob(jobId: string): Promise<void> {
     await fetchJson<unknown>(`/jobs/${jobId}`, { method: "DELETE" });
   },
+  /** Queue a fresh copy of a finished job. Returns the NEW job - the
+   *  original keeps its error and its output for comparison. */
+  async retryJob(jobId: string): Promise<RenderJobDto> {
+    return fetchJson<RenderJobDto>(`/jobs/${jobId}/retry`, { method: "POST" });
+  },
   /** Forget finished jobs. `statuses` defaults to all terminal ones;
    *  pending/running jobs are never removed (cancel those instead). */
   async clearJobs(

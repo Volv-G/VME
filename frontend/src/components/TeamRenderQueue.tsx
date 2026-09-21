@@ -111,6 +111,34 @@ export function TeamRenderQueue({ team }: Props) {
     }
   }
 
+  /** Queue a finished job's parameters again.
+   *
+   *  Confirmed only for a completed YouTube upload, which is the one
+   *  case where running it again is not idempotent: it publishes a
+   *  second video rather than replacing the first. Everything else
+   *  overwrites its own output or had no output to begin with.
+   */
+  async function retryJob(job: RenderJobDto) {
+    if (
+      job.kind === "youtube_upload" &&
+      job.status === "done" &&
+      !window.confirm(
+        `This render is already on YouTube.\n\n` +
+          `Uploading it again publishes a SECOND video — it does not ` +
+          `replace the first — and spends another 1600 units of today's ` +
+          `quota (6 uploads/day).\n\nUpload it again?`
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.retryJob(job.id);
+      await reload();
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+
   /** Forget finished jobs in one go.
    *
    *  A match day is 14+ jobs, and every one of them stays in the list
@@ -256,6 +284,7 @@ export function TeamRenderQueue({ team }: Props) {
                 job={j}
                 onCancel={() => cancelJob(j.id)}
                 onDelete={() => deleteJob(j.id)}
+                onRetry={() => retryJob(j)}
                 downloadUrl={
                   j.output_filename
                     ? api.downloadUrl(

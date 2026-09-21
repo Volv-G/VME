@@ -507,6 +507,59 @@ def cancel_job(job_id: str) -> dict:
     return JOBS.get(job_id).to_dict()  # type: ignore[union-attr]
 
 
+@router.post("/jobs/{job_id}/retry")
+def retry_job(job_id: str) -> dict:
+    """Queue a fresh copy of a finished job.
+
+    "Retry" and "rerun" are the same operation - re-enqueue the job's
+    parameters - and differ only in what the button is called next to a
+    failure and next to a success. One endpoint rather than two, because
+    a second one would be the first copy with a different docstring.
+
+    A NEW job is created rather than the old one being reset: the
+    original row keeps its error, its timings and its output filename,
+    which is most of what makes a failure worth retrying from.
+
+    Only terminal jobs qualify. Re-running something already queued or
+    in flight would do the same work twice.
+    """
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    if job.status in {JobStatus.PENDING, JobStatus.RUNNING}:
+        raise HTTPException(
+            409,
+            f"Job is {job.status.value}; wait for it to finish or cancel it first",
+        )
+
+    clone = JOBS.enqueue(
+        team=job.team,
+        tournament=job.tournament,
+        date=job.date,
+        match=job.match,
+        label=job.label,
+        kind=job.kind,
+        playhead_frame=job.playhead_frame,
+        seconds_around=job.seconds_around,
+        opponent=job.opponent,
+        match_index=job.match_index,
+        immediate=job.immediate,
+        # Copied verbatim. An upload's payload holds the title and
+        # description as they were resolved when it was first queued;
+        # re-resolving them here would quietly publish something the
+        # operator never reviewed.
+        payload=dict(job.payload or {}),
+    )
+    # Previews bypass the dispatcher - it excludes immediate jobs from
+    # `next_pending()` - so a copy of one has to be started the same way
+    # the preview endpoint starts the original, or it would sit pending
+    # forever.
+    if clone.immediate:
+        kick_off_immediate(clone)
+    logger.info("job %s re-queued as %s (%s)", job_id, clone.id, job.kind)
+    return clone.to_dict()
+
+
 @router.delete("/jobs/{job_id}")
 def delete_job(job_id: str) -> dict:
     """Remove a terminal job from history. Running/pending must be
