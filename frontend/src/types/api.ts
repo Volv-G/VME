@@ -244,8 +244,9 @@ export interface RenderJobDto {
 }
 
 /** Aggregate state of the global render queue. */
-/** The two independent worker lanes. */
-export type QueueLane = "render" | "upload";
+/** The independent worker lanes. "upload" is YouTube's; the name
+ *  predates OneDrive and is what the API calls it. */
+export type QueueLane = "render" | "upload" | "onedrive";
 
 export interface QueueLaneStateDto {
   /** True when this lane's dispatcher is processing its pending jobs. */
@@ -261,11 +262,13 @@ export interface QueueStateDto {
    * separate lane that can be on while rendering is off.
    */
   active: boolean;
-  /** Counts across both lanes. */
+  /** Counts across every lane. */
   pending: number;
   running: number;
   total: number;
-  lanes: Record<QueueLane, QueueLaneStateDto>;
+  /** Partial: a server that predates a lane simply does not report it,
+   *  and a missing lane must read as "nothing there", not crash. */
+  lanes: Partial<Record<QueueLane, QueueLaneStateDto>>;
 }
 
 export interface RenderFileDto {

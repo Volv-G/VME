@@ -9,8 +9,8 @@ Lifecycle:
     pending job in it. If both, it runs the job synchronously in its own
     thread before looking for the next one.
 
-Concurrency: exactly one worker per lane, and today exactly two lanes
-(`render` and `upload`). Renders stay serialized because they are
+Concurrency: exactly one worker per lane, and today three lanes
+(`render`, `upload` for YouTube, and `onedrive`). Renders stay serialized because they are
 GPU/disk-heavy - parallelism rarely improves total throughput and often
 makes the machine unusable to edit on. Uploads get their own thread
 because they are network-bound and, far more importantly, because they
@@ -18,7 +18,9 @@ park: a YouTube upload waiting out a quota reset or the channel
 video-count cap can sit for hours, and in a shared queue that is hours
 of renders not happening. The lanes are independent in both directions -
 stopping uploads because YouTube is refusing you no longer stops
-rendering.
+rendering. OneDrive has its own worker for the same reason one step
+down: a match going up to YouTube for an hour was an hour of reels not
+going to OneDrive.
 """
 
 from __future__ import annotations

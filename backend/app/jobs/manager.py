@@ -6,8 +6,8 @@ the global queue is active. This lets the user line up several renders
 across matches and start them all at once from the team dashboard - the
 match editor stays responsive while editing.
 
-There are TWO independent lanes, each with its own worker thread and its
-own start/stop switch (see `LANES`):
+There are THREE independent lanes, each with its own worker thread and
+its own start/stop switch (see `LANES`):
 
   - `render` - everything that encodes video. Serialized on purpose: a
     render saturates the GPU and the disk, so running two makes both
@@ -18,6 +18,11 @@ own start/stop switch (see `LANES`):
     at the head of the queue while a day of renders waited behind it,
     and that stopping uploads (the thing you actually want when YouTube
     is refusing you) also stopped rendering.
+  - `onedrive` - OneDrive uploads. Split from YouTube's lane for the
+    same reason uploads were split from renders: one worker for both
+    engines meant a dozen small reels queued behind a match that was
+    spending an hour going up to YouTube. OneDrive has no quota to wait
+    out, so nothing it does should ever wait on YouTube.
 
 The manager owns:
   - the job registry (id -> RenderJob)
@@ -58,8 +63,11 @@ _TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
 # ---- Lanes -----------------------------------------------------------------
 
 RENDER_LANE = "render"
+# YouTube's lane. Still called "upload" because that is the name the API
+# (`?lane=upload`) and the dashboard already use for it.
 UPLOAD_LANE = "upload"
-LANES = (RENDER_LANE, UPLOAD_LANE)
+ONEDRIVE_LANE = "onedrive"
+LANES = (RENDER_LANE, UPLOAD_LANE, ONEDRIVE_LANE)
 
 # Job kinds that belong to the upload lane. `media_server_copy` stays in
 # the render lane: it is a local file copy that competes for the same
@@ -69,8 +77,49 @@ _UPLOAD_KINDS = {"youtube_upload"}
 
 
 def lane_for_kind(kind: str) -> str:
-    """Which lane runs a job of this kind."""
+    """Which lane runs a job of this kind, before asking where it uploads.
+
+    Only tells render work from upload work; `lane_for_job` is the one
+    that knows which upload lane.
+    """
     return UPLOAD_LANE if kind in _UPLOAD_KINDS else RENDER_LANE
+
+
+def _default_upload_lane(job: "RenderJob") -> str:
+    return UPLOAD_LANE
+
+
+# Which upload lane a job belongs to depends on the team's CURRENT
+# settings - matches and reels can go to different engines - and that is
+# the upload code's business, not the queue's: it means reading a roster
+# off disk. `render_job` installs the real resolver when it is imported.
+# Until then every upload is taken to be YouTube's, which is what they
+# all were before OneDrive existed.
+_upload_lane_resolver: Callable[["RenderJob"], str] = _default_upload_lane
+
+
+def set_upload_lane_resolver(fn: Callable[["RenderJob"], str]) -> None:
+    global _upload_lane_resolver
+    _upload_lane_resolver = fn
+
+
+def lane_for_job(job: "RenderJob") -> str:
+    """Which lane runs this job.
+
+    Resolved every time it is asked rather than stamped at enqueue. A
+    YouTube upload can wait days for quota, and if the team moves reels
+    to OneDrive in the meantime, the pending ones should move with it -
+    the same rule the upload itself follows, which reads its destination
+    when the bytes move, not when it was queued.
+    """
+    lane = lane_for_kind(job.kind)
+    if lane == RENDER_LANE:
+        return lane
+    try:
+        return _upload_lane_resolver(job)
+    except Exception:  # noqa: BLE001 - a bad roster must not stall a lane
+        logger.warning("could not resolve upload lane for %s", job.id, exc_info=True)
+        return UPLOAD_LANE
 
 
 class LaneWakes:
@@ -330,7 +379,7 @@ class JobManager:
             if j.status == JobStatus.PENDING
             and not j.immediate
             and j.defer_until <= now
-            and (lane is None or lane_for_kind(j.kind) == lane)
+            and (lane is None or lane_for_job(j) == lane)
         ]
         if not candidates:
             return None
@@ -475,7 +524,7 @@ class JobManager:
         return dict(self._active)
 
     def lane_summary(self, lane: str) -> dict[str, Any]:
-        jobs = [j for j in self._jobs.values() if lane_for_kind(j.kind) == lane]
+        jobs = [j for j in self._jobs.values() if lane_for_job(j) == lane]
         return {
             "active": self._active.get(lane, False),
             "pending": sum(1 for j in jobs if j.status == JobStatus.PENDING),

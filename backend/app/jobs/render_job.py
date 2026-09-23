@@ -13,7 +13,7 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from ..library import paths, scanner
 from ..render import naming as render_naming
@@ -33,7 +33,14 @@ from ..render.thumbnail import (
     write_jellyfin_sidecars,
     write_thumbnail,
 )
-from .manager import JOBS, JobStatus, RenderJob
+from .manager import (
+    JOBS,
+    ONEDRIVE_LANE,
+    UPLOAD_LANE,
+    JobStatus,
+    RenderJob,
+    set_upload_lane_resolver,
+)
 
 # Upload module is imported lazily inside `_run_upload` so the queue
 # can still operate (and the dispatcher start cleanly) on installs that
@@ -958,6 +965,44 @@ def _run_media_server_copy(job: RenderJob, cancel_check) -> None:
 # ---------------------------------------------------------------------------
 # YouTube upload path
 # ---------------------------------------------------------------------------
+
+
+# Roster upload settings by team, keyed on roster.json's mtime. The lane
+# resolver below runs for every upload job on every queue poll - three
+# lanes, every couple of seconds, per open dashboard - and re-parsing the
+# roster each time would be most of what the queue does.
+_UPLOAD_CFG_CACHE: dict[str, tuple[float, Any]] = {}
+
+
+def _upload_config(team: str):
+    try:
+        mtime = paths.team_roster_path(team).stat().st_mtime
+    except (OSError, AttributeError):
+        mtime = -1.0
+    hit = _UPLOAD_CFG_CACHE.get(team)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+    cfg = scanner.load_team_roster(team).upload
+    _UPLOAD_CFG_CACHE[team] = (mtime, cfg)
+    return cfg
+
+
+def _is_reel_filename(filename: str) -> bool:
+    """Reels live under `reels/<team>/<player>/`, as the render job puts them."""
+    parts = Path(filename).parts
+    return len(parts) > 2 and parts[0] == "reels"
+
+
+def _upload_lane(job: RenderJob) -> str:
+    """The lane an upload job runs in: the engine it would go to right now."""
+    filename = str((job.payload or {}).get("filename", ""))
+    dest = _upload_config(job.team).destination_for(
+        is_reel=_is_reel_filename(filename)
+    )
+    return ONEDRIVE_LANE if dest == "onedrive" else UPLOAD_LANE
+
+
+set_upload_lane_resolver(_upload_lane)
 
 
 def _upload_destination(team: str, *, is_reel: bool) -> str:

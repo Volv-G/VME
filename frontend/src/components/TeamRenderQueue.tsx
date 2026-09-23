@@ -17,19 +17,34 @@ const POLL_MS = 2000;
 // upload parked for hours on a YouTube quota reset must not be a reason
 // to leave rendering stopped, and stopping uploads while YouTube refuses
 // them must not stop rendering.
-const LANES: { lane: QueueLane; label: string; hint: string }[] = [
+// `noun` is what the Start/Stop button acts on. Separate from `label`
+// because deriving it by lower-casing turned brand names into
+// "Start youtube".
+const LANES: { lane: QueueLane; label: string; noun: string; hint: string }[] = [
   {
     lane: "render",
     label: "Rendering",
+    noun: "rendering",
     hint: "Encodes run one at a time - a render owns the GPU and the disk.",
   },
   {
     lane: "upload",
-    label: "Uploads",
+    label: "YouTube",
+    noun: "YouTube uploads",
     hint:
       "YouTube uploads. These can park for hours waiting on a quota " +
       "reset or the channel upload cap; they retry on their own as long " +
       "as this lane is running.",
+  },
+  // Its own lane so reels never wait behind a match that is spending an
+  // hour going up to YouTube. OneDrive has no quota to park on.
+  {
+    lane: "onedrive",
+    label: "OneDrive",
+    noun: "OneDrive uploads",
+    hint:
+      "OneDrive uploads. Separate from YouTube's lane, so they run " +
+      "alongside a YouTube upload instead of queueing behind it.",
   },
 ];
 
@@ -196,7 +211,13 @@ export function TeamRenderQueue({ team }: Props) {
             flexWrap: "wrap",
           }}
         >
-          {LANES.map(({ lane, label, hint }) => {
+          {/* Only lanes the server reports. The page is served the
+              moment it is built, the backend only after a restart, and
+              a lane it does not know about was drawn as "0 running ·
+              0 pending" with its Start button disabled - while 45 reels
+              sat in the old shared lane. A lane that does not exist
+              yet should not look like an empty one. */}
+          {LANES.filter(({ lane }) => !state || state.lanes?.[lane]).map(({ lane, label, noun, hint }) => {
             const s = state?.lanes?.[lane];
             const active = s?.active ?? false;
             const pending = s?.pending ?? 0;
@@ -216,11 +237,11 @@ export function TeamRenderQueue({ team }: Props) {
                   disabled={!active && pending === 0 && running === 0}
                   title={
                     active
-                      ? `Pause ${label.toLowerCase()}. The running job (if any) finishes; nothing else starts. The other lane keeps going.`
-                      : `Run pending ${label.toLowerCase()} jobs FIFO. The other lane is unaffected.`
+                      ? `Pause ${noun}. The running job (if any) finishes; nothing else starts. The other lanes keep going.`
+                      : `Run pending ${noun} jobs FIFO. The other lanes are unaffected.`
                   }
                 >
-                  {active ? `Stop ${label.toLowerCase()}` : `Start ${label.toLowerCase()}`}
+                  {active ? `Stop ${noun}` : `Start ${noun}`}
                 </button>
               </div>
             );
