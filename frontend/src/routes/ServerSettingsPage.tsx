@@ -29,7 +29,7 @@ export function ServerSettingsPage() {
   }
 
   return (
-    <div>
+    <div className="page page-narrow">
       <div className="page-head">
         <h1>Server settings</h1>
         <Link to="/">← All teams</Link>

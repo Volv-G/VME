@@ -396,6 +396,10 @@ export const EVENT_TYPES = [
   "replay",
   "cut_start",
   "cut_end",
+  // Tagged on the phone; cut from the render like a cut_start/cut_end
+  // pair (see components/cutTypes.ts).
+  "timeout_start",
+  "timeout_end",
   "clip_transition",
   "message",
   "focus_in",

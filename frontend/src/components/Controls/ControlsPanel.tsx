@@ -6,7 +6,7 @@ import { LiberoPicker } from "./LiberoPicker";
 import { RosterPicker } from "./RosterPicker";
 import { ScoreDisplay } from "./ScoreDisplay";
 import { ScoreFixDialog, MessageDialog } from "./InlineDialogs";
-import { frontRowLibero, liberoReplacements, stateAtPlayhead } from "./state";
+import { frontRowLibero, liberoPairs, stateAtPlayhead } from "./state";
 import { useHotkeyAction } from "../../hotkeys";
 import { eventIcon } from "../eventStyle";
 import { ColorPicker } from "../ColorPicker";
@@ -91,6 +91,7 @@ const PLAYER_ACTIONS: ActionDef[] = [
 // is chosen so each row is a natural pair:
 //   Ball Served | Replay        (rally markers)
 //   Cut Start   | Cut End       (cut boundaries)
+//   Timeout St. | Timeout End   (cut boundaries the phone usually logs)
 //   Game Start  | Game End      (game lifecycle)
 //   End Set     | Auto Cuts     (two singletons paired together)
 //   Score Fix   | Message       (annotations / dialogs)
@@ -104,6 +105,15 @@ const MATCH_ACTIONS: ActionDef[] = [
     type: "cut_end",
     label: "Cut End",
     needsPlayer: false,
+    payload: { fade_frames: 30, frame_shift: -30 },
+  },
+  { type: "timeout_start", label: "Timeout Start", needsPlayer: false },
+  {
+    type: "timeout_end",
+    label: "Timeout End",
+    needsPlayer: false,
+    // Same join as Cut End; the backend defaults to it too, for the
+    // ones that arrive from the phone.
     payload: { fade_frames: 30, frame_shift: -30 },
   },
   {
@@ -190,14 +200,25 @@ export function ControlsPanel({
   // start) ask, with liberos hidden from the picker.
   useEffect(() => {
     if (liberoCheckFrame == null) return;
+    // A Kill leaves the grid waiting for the assister. Barging in here
+    // would either cancel that flow outright - `commit` clears the
+    // overlays - or put two prompts over the same six buttons. The
+    // frame is kept, not dropped, so the rule runs the moment the
+    // assist is recorded or abandoned.
+    if (pendingAssistKiller != null) return;
     const frame = liberoCheckFrame;
     setLiberoCheckFrame(null);
     const after = stateAtPlayhead(data.events, frame);
     const hit = frontRowLibero(after.home_positions, liberos);
     if (!hit) return;
-    const back = liberoReplacements(data.events, liberos, frame)[hit.jersey];
+    const pairs = liberoPairs(data.events, liberos, frame);
+    // This set's pairing first; failing that, whoever this libero last
+    // came on for earlier in the match. The fallback is what stops the
+    // first rotation of every set asking a question the set before
+    // already answered - see `LiberoPairs.last`.
+    const back = pairs.current[hit.jersey] ?? pairs.last[hit.jersey];
     const onCourt = Object.values(after.home_positions);
-    if (back != null && !onCourt.includes(back)) {
+    if (back != null && !liberos.includes(back) && !onCourt.includes(back)) {
       void commit("substitution", {
         team: "home",
         position: hit.position,
@@ -210,7 +231,7 @@ export function ControlsPanel({
     // `commit` closes over props that are all current on the render
     // where `data.events` changed, which is the only render this runs on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.events, liberos, liberoCheckFrame]);
+  }, [data.events, liberos, liberoCheckFrame, pendingAssistKiller]);
 
   async function runAutoCuts() {
     setErr(null);

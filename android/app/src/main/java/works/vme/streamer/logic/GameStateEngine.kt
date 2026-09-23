@@ -139,6 +139,9 @@ object GameStateEngine {
             ballServedSinceLastScore = false,
             homePositions = (1..6).associateWith { null },
             liberoReplacements = emptyMap(),
+            // `liberoLastPartners` is deliberately NOT cleared here:
+            // it exists to outlive the set, so the next line-up entry
+            // does not have to ask who the libero covers.
             pointHistory = emptyList(),
             // Keep the set's final score before wiping the running
             // one, so the end-of-game card can list every set.
@@ -162,12 +165,21 @@ object GameStateEngine {
         // slot (lineup entry at set start) records nothing, which is
         // what makes the caller fall back to a picker later.
         val pairs = state.liberoReplacements.toMutableMap()
+        val lastPartners = state.liberoLastPartners.toMutableMap()
         if (outgoing != null && outgoing in liberos) pairs.remove(outgoing)
         if (jersey in liberos) {
-            if (outgoing != null && outgoing !in liberos) pairs[jersey] = outgoing
-            else pairs.remove(jersey)
+            if (outgoing != null && outgoing !in liberos) {
+                pairs[jersey] = outgoing
+                lastPartners[jersey] = outgoing
+            } else {
+                pairs.remove(jersey)
+            }
         }
-        return state.copy(homePositions = map, liberoReplacements = pairs)
+        return state.copy(
+            homePositions = map,
+            liberoReplacements = pairs,
+            liberoLastPartners = lastPartners,
+        )
     }
 
     /** Clockwise rotation used after a side-out: 2->1, 3->2, ..., 1->6. */

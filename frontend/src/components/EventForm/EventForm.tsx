@@ -46,6 +46,7 @@ export function EventForm({ clips, currentFrame, onCreate }: Props) {
       case "message":
         return { text };
       case "cut_end":
+      case "timeout_end":
         return { fade_frames: fadeFrames, frame_shift: frameShift };
       case "clip_transition":
         return { from_clip_id: fromClip, to_clip_id: toClip, fade_frames: fadeFrames, frame_shift: frameShift };
@@ -82,8 +83,8 @@ export function EventForm({ clips, currentFrame, onCreate }: Props) {
   const showPosition = type === "substitution";
   const showCorrection = type === "score_correction";
   const showText = type === "message";
-  const showFadeFrames = ["cut_end", "clip_transition", "game_start", "game_end", "set_end"].includes(type);
-  const showFrameShift = ["cut_end", "clip_transition"].includes(type);
+  const showFadeFrames = ["cut_end", "timeout_end", "clip_transition", "game_start", "game_end", "set_end"].includes(type);
+  const showFrameShift = ["cut_end", "timeout_end", "clip_transition"].includes(type);
   const showClipPair = type === "clip_transition";
 
   return (

@@ -18,7 +18,10 @@ export function ScoreDisplay({ state, homeName, opponentName, homeColor, opponen
           {serving === "home" && <span className="serve-dot" title="Serving">●</span>}
         </div>
         <div className="score-points">{state.home_score}</div>
-        {state.home_sets > 0 && <div className="score-sets">sets {state.home_sets}</div>}
+        {/* Always rendered, zero included. Hiding it on the side with no
+            sets yet left the two halves different heights, and the card
+            changed shape the moment the first set was won. */}
+        <div className="score-sets">sets {state.home_sets}</div>
       </div>
       <div className="score-sep">-</div>
       <div className="score-side">
@@ -27,7 +30,7 @@ export function ScoreDisplay({ state, homeName, opponentName, homeColor, opponen
           {serving === "away" && <span className="serve-dot" title="Serving">●</span>}
         </div>
         <div className="score-points">{state.away_score}</div>
-        {state.away_sets > 0 && <div className="score-sets">sets {state.away_sets}</div>}
+        <div className="score-sets">sets {state.away_sets}</div>
       </div>
     </div>
   );

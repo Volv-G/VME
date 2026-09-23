@@ -142,8 +142,8 @@ export function UploadConnections() {
           const needsWebClient = id === "google" && s?.client.kind === "installed";
           const canConnect = s?.client.present === true && !needsWebClient;
           return (
-            <div key={id} className="list-row">
-              <div style={{ flex: 1 }}>
+            <div key={id} className="list-row conn-row">
+              <div className="conn-info">
                 <strong>{label}</strong>
                 {s?.connected && <span className="ok-badge">connected</span>}
                 <div className="muted" style={{ fontSize: 12 }}>

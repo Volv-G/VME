@@ -37,6 +37,9 @@ button {
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
+  /* A label broken over two lines ("Start / rendering") reads as two
+     buttons. Let the row it sits in wrap instead. */
+  white-space: nowrap;
 }
 button:hover:not(:disabled) { background: var(--bg-elev-2); border-color: var(--accent); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -71,6 +74,10 @@ label {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* On phones `100vh` includes the area under the browser's own toolbar,
+     so the bottom of every page sat behind it. `dvh` is the visible
+     height; the line above stays as the fallback for older browsers. */
+  height: 100dvh;
 }
 
 .app-header {
@@ -91,10 +98,14 @@ label {
 .app-main { flex: 1; overflow: auto; }
 
 .page {
-  padding: 24px;
+  padding: 24px 32px;
   max-width: 1280px;
   margin: 0 auto;
 }
+
+/* Forms read badly at 1280px: a text field the width of the screen and
+   a label at the far end of it. Settings sit in a column instead. */
+.page-narrow { max-width: 860px; }
 
 .card {
   background: var(--bg-elev);
@@ -108,6 +119,12 @@ label {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* Headers carry status next to the title ("YouTube: ready", a quota
+     line, queue controls). Wrapping drops those under the title when
+     there is no room, instead of squeezing the title to one word a
+     line. */
+  flex-wrap: wrap;
+  gap: 8px 12px;
   margin-bottom: 12px;
 }
 
@@ -119,6 +136,8 @@ label {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* Without it, neighbouring buttons ("Reconnect" "Disconnect") touched. */
+  gap: 8px;
   padding: 10px 12px;
   background: var(--bg-elev-2);
   border-radius: 6px;
@@ -306,6 +325,24 @@ label {
   cursor: pointer;
   font-size: 12px;
 }
+/* --- Drag to reorder -------------------------------------------------
+   The row is the drag source; the grip is the affordance, since a row
+   that is also clickable gives no hint that it can be carried. The drop
+   indicator is drawn as an inset line on the row nearest the gap, so it
+   needs no element of its own between rows. */
+.event-grip {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  cursor: grab;
+  font-size: 13px;
+  line-height: 1;
+  user-select: none;
+}
+.event-grip:active { cursor: grabbing; }
+.event-row.dragging { opacity: 0.45; }
+.event-row.drop-above { box-shadow: inset 0 2px 0 0 var(--accent); }
+.event-row.drop-below { box-shadow: inset 0 -2px 0 0 var(--accent); }
+
 /* Search-match row: magenta tint + left bar. Sits below .orphan in cascade
    order so a row that's both orphan and a search match still flags orphan,
    but the magenta inline <mark> still shows where the text matched. */
@@ -436,9 +473,13 @@ label {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 8px 16px;
   margin-bottom: 12px;
 }
+/* The browser's default h1 is 32px with a 21px margin - a banner, where
+   this is a page title over a form. */
+.page-head h1 { font-size: 22px; margin: 0; }
 .settings-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -504,6 +545,10 @@ label {
 
 .checkbox-row {
   display: flex;
+  /* Explicit, because `label` is a column by default (a field's label
+     over its input) and this is a label too: without it the box sat
+     centred ABOVE its own text. */
+  flex-direction: row;
   align-items: center;
   gap: 8px;
   margin-top: 14px;
@@ -532,7 +577,37 @@ label {
   word-break: break-all;
   user-select: all;
 }
+/* A render row is a checkbox, a thumbnail, the file details and up to
+   six buttons plus "▶ on YouTube". Sharing one line, the details were
+   squeezed to a column one word wide and the buttons were drawn over
+   the file size, so below a certain width the action block - always the
+   row's last child - takes a line of its own.
+
+   A container query, not a media query: what matters is how wide the
+   LIST is, not the screen. A 640px viewport breakpoint missed a large
+   phone, a phone in landscape and a narrow desktop window, all of which
+   squeeze the row just as badly. 760px is roughly where the details
+   stop getting a usable ~300px beside six buttons. */
+.render-list { container-type: inline-size; }
+@container (max-width: 760px) {
+  .render-row { flex-wrap: wrap; row-gap: 8px; }
+  .render-row > :last-child { flex-basis: 100%; }
+}
+
+/* Reel filenames are one long run of underscores and dots
+   (`2026.09.09_vs_Mercer_Island_14_Brooke_M_reel.mp4`), which gives the
+   browser no place to break - so on a narrow card the name ran straight
+   past the edge. `anywhere` lets it break mid-name instead. */
+.render-row .row-meta { overflow-wrap: anywhere; }
+
+/* In a class, not inline: the phone rule below has to be able to widen
+   it, and an inline `flex` would win over any stylesheet. */
+.conn-info { flex: 1; min-width: 0; }
+
 .ok-badge {
+  display: inline-block;
+  margin-left: 8px;
+  vertical-align: middle;
   padding: 2px 8px;
   border-radius: 10px;
   background: rgba(46, 158, 79, 0.18);
@@ -988,4 +1063,20 @@ label {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   color: var(--text-dim);
   min-width: 110px;
+}
+
+/* ---- Phones ----------------------------------------------------------
+   Everything above is laid out for a desktop. Below 640px the page and
+   card padding shrink - 24px + 16px a side is a fifth of a 390px screen -
+   and rows whose actions compete with their text for width put the
+   actions on a line of their own. */
+@media (max-width: 640px) {
+  .app-header { padding: 10px 12px; }
+  .page { padding: 14px 12px; }
+  .card { padding: 12px; }
+  .page-head h1 { font-size: 19px; }
+
+  /* An upload connection: the account on one line, its buttons under. */
+  .conn-row { flex-wrap: wrap; }
+  .conn-info { flex-basis: 100%; }
 }

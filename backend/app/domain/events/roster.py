@@ -53,9 +53,17 @@ class SubstitutionEvent(MatchEvent):
         # No `title_scale` override needed - the renderer's global
         # TITLE_FONT_SCALE now matches what we previously hand-tuned
         # here (small bold title, larger-feeling subtitle below).
+        out_number = getattr(self, "_player_out_number", None)
+        # A slot that was empty - a placeholder in the line-up, or the
+        # line-up being filled in at set start - has nobody to swap
+        # out, so "Sub" describes something that did not happen: the
+        # player is taking the court, not replacing anyone. The
+        # subtitle already drops the "out -> in" arrow in this case.
+        # The phone's live overlay has always said "Entering" here;
+        # this is VME catching up with it.
         return PlayerPopupEffect(
-            text="Sub",
+            text="Sub" if out_number is not None else "Entering",
             player_number=self.player_in_number,
-            player_out_number=getattr(self, "_player_out_number", None),
+            player_out_number=out_number,
             team=self.team,
         )

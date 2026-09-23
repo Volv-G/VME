@@ -14,6 +14,7 @@
  */
 
 import type { EventDto } from "../types/api";
+import { isCutEnd, isCutStart } from "./cutTypes";
 
 export interface CutRegion {
   /** Global frame where the cut begins (the cut_start event). */
@@ -67,11 +68,11 @@ export function analyzeCuts(events: EventDto[]): CutAnalysis {
 
   for (let idx = 0; idx < sorted.length; idx++) {
     const ev = sorted[idx];
-    if (ev.type === "cut_start") {
+    if (isCutStart(ev.type)) {
       // Nested cut_start (no end before it) → previous one is unpaired.
       if (open) orphans.push({ idx: open.idx, ev: sorted[open.idx] });
       open = { idx, id: ev.id, frame: ev.global_frame as number };
-    } else if (ev.type === "cut_end") {
+    } else if (isCutEnd(ev.type)) {
       if (open) {
         regions.push({
           start: open.frame,
@@ -90,7 +91,7 @@ export function analyzeCuts(events: EventDto[]): CutAnalysis {
 
   const orphanIds = new Set<number>();
   for (const { idx, ev } of orphans) {
-    const forward = ev.type === "cut_start";
+    const forward = isCutStart(ev.type);
     const step = forward ? 1 : -1;
     let partner: EventDto | null = null;
     for (let j = idx + step; j >= 0 && j < sorted.length; j += step) {

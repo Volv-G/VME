@@ -45,6 +45,52 @@ class CutEndEvent(MatchEvent):
         )
 
 
+# Matches the editor's Cut End button, so a timeout joins the footage
+# the way a cut the user placed by hand would: half a second of
+# crossfade at 60 fps rather than a hard jump from the huddle to a
+# serve. Frames rather than seconds because that is what every cut end
+# stores; the event form shows both.
+TIMEOUT_FADE_FRAMES = 30
+
+
+@register_event
+@dataclass
+class TimeoutStartEvent(CutStartEvent):
+    """A timeout was called. Tagged live, on the phone.
+
+    Subclasses `CutStartEvent` because, for now, a timeout is exactly a
+    cut: the span to its `TimeoutEndEvent` is dropped from the render.
+    Every consumer of cuts - the frame map, highlight rally bounds, the
+    auto-cut idempotency check - asks `isinstance`, so a timeout is
+    treated as a cut everywhere without any of them knowing timeouts
+    exist. When a timeout should do something a cut does not (a
+    "TIMEOUT" card instead of dropping the footage, say), this stops
+    being a subclass and those call sites choose.
+
+    A start with no end - the operator never closed it - behaves like
+    any unpaired cut start: it pairs with a set/game end only if no
+    serve comes first, so a forgotten timeout cannot eat a rally.
+    """
+
+    type_name: ClassVar[str] = "timeout_start"
+
+
+@register_event
+@dataclass
+class TimeoutEndEvent(CutEndEvent):
+    """Play resumed after a timeout. Closes the cut its start opened.
+
+    The phone logs this when the operator ends the timeout, or - if
+    they go straight to Ball Served - just ahead of that serve, at the
+    same instant.
+    """
+
+    type_name: ClassVar[str] = "timeout_end"
+
+    fade_frames: int = TIMEOUT_FADE_FRAMES
+    frame_shift: int = -TIMEOUT_FADE_FRAMES
+
+
 @register_event
 @dataclass
 class ClipTransitionEvent(MatchEvent):

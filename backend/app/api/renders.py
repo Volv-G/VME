@@ -9,9 +9,10 @@ Queue control lives at the top level (`/queue/start`, `/queue/stop`,
 the whole machine. The per-team list endpoint (`/teams/{team}/jobs`) is
 the natural feed for the team-dashboard queue widget.
 
-There are two lanes (`render` and `upload`) with independent switches;
-`?lane=` selects one, and omitting it acts on both, which is what a
-client that predates the split expects from a single Start button.
+There are three lanes (`render`, `upload` for YouTube, and `onedrive`)
+with independent switches; `?lane=` selects one, and omitting it acts on
+all of them, which is what a client that predates the split expects from
+a single Start button.
 """
 
 from __future__ import annotations

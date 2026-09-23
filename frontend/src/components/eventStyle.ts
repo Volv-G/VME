@@ -15,7 +15,7 @@
  *
  *   Family                  Hue   Members
  *   ----------------------- ----- ----------------------------------------
- *   Cuts (red)              ~5    cut_start, cut_end
+ *   Cuts (red)              ~5    cut_start, cut_end, timeout_start/_end
  *   Offense (orange/gold)   ~30   kill, ace, assist
  *   Set boundary (gold)     ~45   set_end
  *   Lifecycle (green)       ~130  game_start, game_end
@@ -35,6 +35,10 @@ export const EVENT_COLORS: Record<string, string> = {
   // --- Cuts (red - reads as "warning / edit zone") ---
   cut_start: "#f85149",
   cut_end: "#ff7b72",
+  // Timeouts ARE cuts for now, so they stay in the family - a shade
+  // deeper, to tell a called timeout from dead time trimmed by hand.
+  timeout_start: "#da3633",
+  timeout_end: "#e5534b",
 
   // --- Player offense (orange -> gold) ---
   kill: "#f78166",
@@ -124,6 +128,8 @@ export const EVENT_ICONS: Record<string, string> = {
   set_end: "📍",
   cut_start: "✂️",
   cut_end: "🎬",
+  timeout_start: "⏸️",
+  timeout_end: "⏯️",
 
   // Annotations / structural
   message: "💬",

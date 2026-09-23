@@ -34,6 +34,33 @@ function rowId(r: FullRenderDto): string {
   return `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
 }
 
+/** Which match a render belongs to. Tournament is part of it: two
+ *  tournaments can each have a `01_Bellevue` on the same date, and the
+ *  folder name alone would merge them into one group. */
+function matchKey(r: FullRenderDto): string {
+  return `${r.tournament}/${r.date}/${r.match}`;
+}
+
+/** One entry in the match picker. */
+interface MatchGroup {
+  key: string;
+  date: string;
+  matchIndex: number | null;
+  opponent: string;
+  tournament: string;
+  count: number;
+}
+
+/** "2026-09-16 · M2 vs Woodinville · KingCo Conference". The number is
+ *  left out for the only match of a day, where it would be noise. */
+function matchOptionLabel(g: MatchGroup): string {
+  const num = g.matchIndex ? `M${g.matchIndex} ` : "";
+  return (
+    `${g.date} · ${num}vs ${displayName(g.opponent)} · ` +
+    `${displayName(g.tournament)} (${g.count})`
+  );
+}
+
 /** Has this render been uploaded anywhere?
  *
  *  Both engines write a sidecar, so a row is done if either did.
@@ -143,13 +170,16 @@ export function TeamFullRendersPanel({ team }: Props) {
   // Regenerate result. `ok` is false when YouTube declined the push -
   // that is a failure, not a footnote, so it must not be styled as one.
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
-  // Which match date is on screen. A single match day produces one full
+  // Which match is on screen, by `matchKey`. A match produces one full
   // render plus a reel per player, so a season's worth of rows is
   // unusable as one list - and the natural unit to work through is a
-  // day: render it, thumbnail it, upload it, move on. Stored as the date
-  // itself rather than an index so polling (which replaces the array)
-  // can't silently slide the user onto a different day.
-  const [activeDate, setActiveDate] = useState<string | null>(null);
+  // match: render it, thumbnail it, upload it, move on. A match rather
+  // than a day because a tournament day is often two or three of them,
+  // and their reels interleaved into one list is exactly the mess this
+  // grouping is here to prevent. Stored as the key rather than an index
+  // so polling (which replaces the array) can't silently slide the user
+  // onto a different match.
+  const [activeMatch, setActiveMatch] = useState<string | null>(null);
   // Render currently open in the player dialog, if any.
   const [playing, setPlaying] = useState<FullRenderDto | null>(null);
   // Media-server folder from the team profile. Null until loaded; the
@@ -417,7 +447,7 @@ export function TeamFullRendersPanel({ team }: Props) {
 
   async function bulkUpload(rows: FullRenderDto[]) {
     // Already-uploaded rows are skipped rather than refused: selecting a
-    // whole match day and pressing upload should do the remaining ones,
+    // whole match and pressing upload should do the remaining ones,
     // not error because one is done.
     const todo = rows.filter((r) => !isUploaded(r));
     const skipped = rows.length - todo.length;
@@ -510,29 +540,48 @@ export function TeamFullRendersPanel({ team }: Props) {
     }
   }
 
-  // Match days, newest first. Sorted by the MATCH date, not by when the
-  // files were written: `renders` arrives ordered by created_at, so
-  // re-rendering a match from last month would otherwise jump that day
-  // to the front of the pager and make the season order meaningless.
-  // Dates are ISO (`YYYY-MM-DD`), so a string compare is a date compare.
-  const countByDate = new Map<string, number>();
+  // Matches, latest first. Sorted by the MATCH's own date and number,
+  // not by when the files were written: `renders` arrives ordered by
+  // created_at, so re-rendering a match from last month would otherwise
+  // jump it to the top and make the season order meaningless. Within a
+  // day the higher number is the later match. Dates are ISO
+  // (`YYYY-MM-DD`), so a string compare is a date compare.
+  const groupsByKey = new Map<string, MatchGroup>();
   for (const r of renders) {
-    countByDate.set(r.date, (countByDate.get(r.date) ?? 0) + 1);
+    const key = matchKey(r);
+    const g = groupsByKey.get(key);
+    if (g) {
+      g.count += 1;
+    } else {
+      groupsByKey.set(key, {
+        key,
+        date: r.date,
+        matchIndex: r.match_index,
+        opponent: r.opponent || r.match,
+        tournament: r.tournament,
+        count: 1,
+      });
+    }
   }
-  const dates: string[] = [...countByDate.keys()].sort((a, b) =>
-    b.localeCompare(a)
+  const matches: MatchGroup[] = [...groupsByKey.values()].sort(
+    (a, b) =>
+      b.date.localeCompare(a.date) ||
+      (b.matchIndex ?? 0) - (a.matchIndex ?? 0) ||
+      a.tournament.localeCompare(b.tournament) ||
+      a.key.localeCompare(b.key)
   );
-  // Fall back to the newest date when nothing is chosen yet, or when the
-  // chosen day no longer has renders (deleted on disk).
-  const currentDate =
-    activeDate && countByDate.has(activeDate) ? activeDate : dates[0] ?? null;
-  const dateIndex = currentDate ? dates.indexOf(currentDate) : -1;
-  const visible = currentDate
-    ? renders.filter((r) => r.date === currentDate)
+  // Fall back to the latest match when nothing is chosen yet, or when
+  // the chosen one no longer has renders (deleted on disk).
+  const currentMatch =
+    activeMatch && groupsByKey.has(activeMatch)
+      ? activeMatch
+      : matches[0]?.key ?? null;
+  const visible = currentMatch
+    ? renders.filter((r) => matchKey(r) === currentMatch)
     : [];
 
-  // Selection is only ever over the visible day: a bulk delete that
-  // also took rows from a day you can't see would be indefensible.
+  // Selection is only ever over the visible match: a bulk delete that
+  // also took rows from a match you can't see would be indefensible.
   const visibleIds = visible.map(rowId);
   const selectedRows = visible.filter((r) => selected.has(rowId(r)));
   const allVisibleSelected =
@@ -556,14 +605,13 @@ export function TeamFullRendersPanel({ team }: Props) {
     setSelected(next);
   }
 
-  // Changing day clears the selection. Carrying it across would leave
+  // Changing match clears the selection. Carrying it across would leave
   // ticked rows off-screen, and a bulk delete whose scope you cannot see
   // is not something to be clever about.
-  function goToDate(d: string | undefined) {
-    if (!d) return;
+  function goToMatch(key: string) {
     setSelected(new Set());
     lastClickedRef.current = null;
-    setActiveDate(d);
+    setActiveMatch(key);
   }
 
   function selectWhere(pred: (r: FullRenderDto) => boolean) {
@@ -591,7 +639,7 @@ export function TeamFullRendersPanel({ team }: Props) {
       <div className="card-header">
         <h2>
           Full renders ({visible.length}
-          {dates.length > 1 ? ` of ${renders.length}` : ""})
+          {matches.length > 1 ? ` of ${renders.length}` : ""})
         </h2>
         {status && (
           <span
@@ -687,48 +735,25 @@ export function TeamFullRendersPanel({ team }: Props) {
         </div>
       )}
 
-      {dates.length > 1 && currentDate && (
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            alignItems: "center",
-            marginBottom: 8,
-          }}
+      {/* The match picker is the group header, so it shows even when
+          there is only one match: the rows below no longer repeat which
+          match they belong to, and this is where that is said. No
+          previous/next arrows - a season is dozens of matches, and the
+          one you want is almost never adjacent to the one you are on. */}
+      {currentMatch && (
+        <select
+          value={currentMatch}
+          onChange={(e) => goToMatch(e.target.value)}
+          disabled={!!bulk}
+          style={{ width: "100%", marginBottom: 8 }}
+          title="Choose a match. Latest first."
         >
-          <button
-            onClick={() => goToDate(dates[dateIndex - 1])}
-            disabled={dateIndex <= 0}
-            title="Newer match day"
-            style={{ padding: "2px 8px" }}
-          >
-            ‹
-          </button>
-          {/* A dropdown as well as arrows: stepping through a season one
-              day at a time to reach a specific match would be tedious. */}
-          <select
-            value={currentDate}
-            onChange={(e) => goToDate(e.target.value)}
-            style={{ flex: 1, minWidth: 0 }}
-          >
-            {dates.map((d) => (
-              <option key={d} value={d}>
-                {d} ({countByDate.get(d)})
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={() => goToDate(dates[dateIndex + 1])}
-            disabled={dateIndex < 0 || dateIndex >= dates.length - 1}
-            title="Older match day"
-            style={{ padding: "2px 8px" }}
-          >
-            ›
-          </button>
-          <span className="row-meta" style={{ whiteSpace: "nowrap" }}>
-            day {dateIndex + 1} / {dates.length}
-          </span>
-        </div>
+          {matches.map((g) => (
+            <option key={g.key} value={g.key}>
+              {matchOptionLabel(g)}
+            </option>
+          ))}
+        </select>
       )}
 
       {/* Selection toolbar. Always present (not only once something is
@@ -748,8 +773,14 @@ export function TeamFullRendersPanel({ team }: Props) {
           }}
         >
           <label
-            style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}
-            title="Select or clear every render on this match day"
+            style={{
+              display: "flex",
+              flexDirection: "row",
+              gap: 6,
+              alignItems: "center",
+              fontSize: 12,
+            }}
+            title="Select or clear every render in this match"
           >
             <input
               type="checkbox"
@@ -770,12 +801,12 @@ export function TeamFullRendersPanel({ team }: Props) {
             />
             All
           </label>
-          {/* One click for the case this list exists for: a match day is
+          {/* One click for the case this list exists for: a match is
               one full render plus a reel per player. */}
           <button
             onClick={() => selectWhere((r) => r.kind === "reel")}
             disabled={!!bulk || !visible.some((r) => r.kind === "reel")}
-            title="Add every player reel on this day to the selection"
+            title="Add every player reel in this match to the selection"
             style={{ padding: "1px 8px", fontSize: 11 }}
           >
             + reels
@@ -871,7 +902,7 @@ export function TeamFullRendersPanel({ team }: Props) {
           page.
         </p>
       ) : (
-        <div className="list">
+        <div className="list render-list">
           {visible.map((r, rowIndex) => {
             const id = `${r.tournament}/${r.date}/${r.match}/${r.filename}`;
             // A row belongs to one engine. `destination` is where a
@@ -907,11 +938,6 @@ export function TeamFullRendersPanel({ team }: Props) {
               : onOneDrive
                 ? "OneDrive"
                 : null;
-            // Title line: "<date>  M<n>. <opponent>  (<tournament>)".
-            // Uses displayName so underscored slugs render with spaces.
-            const matchLabel = r.match_index
-              ? `M${r.match_index}. ${displayName(r.opponent || r.match)}`
-              : displayName(r.opponent || r.match);
             const isReel = r.kind === "reel";
             const isCondensed = r.kind === "condensed";
             // Reels are one row per player: lead with the player so a
@@ -921,7 +947,7 @@ export function TeamFullRendersPanel({ team }: Props) {
             return (
               <div
                 key={id}
-                className="list-row"
+                className="list-row render-row"
                 style={{
                   alignItems: "center",
                   background: selected.has(id)
@@ -1009,29 +1035,12 @@ export function TeamFullRendersPanel({ team }: Props) {
                       flexWrap: "wrap",
                     }}
                   >
-                    {/* Redundant once the pager is showing the date;
-                        without a pager it's the only place it appears. */}
-                    {dates.length <= 1 && (
-                      <strong style={{ fontSize: 13 }}>{r.date}</strong>
-                    )}
-                    {/* A condensed render is the same match at half the
-                        length; without a badge the pair looks like one
-                        of them failed. */}
-                    {isCondensed && (
-                      <span
-                        style={{
-                          fontSize: 10,
-                          padding: "1px 6px",
-                          borderRadius: 3,
-                          border: "1px solid var(--border)",
-                          color: "var(--text-dim)",
-                        }}
-                        title="Condensed: only the plays, set breaks faded"
-                      >
-                        condensed
-                      </span>
-                    )}
-                    {isReel && (
+                    {/* Rows lead with WHAT they are. Which match they
+                        belong to is the picker above - every row on
+                        screen shares it, so repeating date, opponent and
+                        tournament fourteen times was the noise that
+                        buried the one thing that differs. */}
+                    {isReel ? (
                       <>
                         <span
                           style={{
@@ -1045,17 +1054,22 @@ export function TeamFullRendersPanel({ team }: Props) {
                         >
                           reel
                         </span>
-                        {r.player_label && (
-                          <strong style={{ fontSize: 13 }}>
-                            {r.player_label}
-                          </strong>
-                        )}
+                        <strong style={{ fontSize: 13 }}>
+                          {r.player_label || leaf}
+                        </strong>
                       </>
+                    ) : isCondensed ? (
+                      // Same match at half the length; named, or the
+                      // pair looks like one of them failed.
+                      <strong
+                        style={{ fontSize: 13 }}
+                        title="Condensed: only the plays, set breaks faded"
+                      >
+                        Condensed match
+                      </strong>
+                    ) : (
+                      <strong style={{ fontSize: 13 }}>Full match</strong>
                     )}
-                    <span>{matchLabel}</span>
-                    <span className="muted" style={{ fontSize: 11 }}>
-                      {displayName(r.tournament)}
-                    </span>
                     <PendingBadges r={r} />
                   </div>
                   <div className="row-meta" style={{ marginTop: 2 }}>

@@ -392,6 +392,21 @@ export const api = {
   },
 
   /** Shift one event along the timeline by `seconds` (may be negative). */
+  /** Drop `id` immediately after `afterId` (null = the very start).
+   *  The moved event lands one frame past its new neighbour. */
+  async moveEvent(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    id: number,
+    afterId: number | null
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(
+      `${matchBase(team, tournament, date, match)}/events/${id}/move`,
+      { method: "POST", body: JSON.stringify({ after_event_id: afterId }) }
+    );
+  },
   async nudgeEvent(
     team: string,
     tournament: string,

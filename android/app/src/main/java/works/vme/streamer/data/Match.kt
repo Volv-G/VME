@@ -25,12 +25,16 @@ enum class EventType(val wire: String) {
     GameStart("game_start"),
     GameEnd("game_end"),
     SetEnd("set_end"),
-    /** Not in VME's original `EVENT_TYPES`; added to both sides
-     *  together. A timeout is a real broadcast moment -- play stops
-     *  and the stream needs something on screen -- and recording it
-     *  as a generic `message` would lose the fact that it *is* a
-     *  timeout for anything downstream that wants to cut on it. */
-    Timeout("timeout"),
+    /** A timeout, as the two moments that bound it: called, and play
+     *  resumed. VME cuts the span between them, so both have to be in
+     *  the log -- the card coming down is not enough on its own.
+     *
+     *  This replaces a single `timeout` logged at the start only,
+     *  which VME never registered: every one of them was dropped as an
+     *  unknown type on import. [fromWire] still reads that old name,
+     *  as a start, so match files already on the phone keep loading. */
+    TimeoutStart("timeout_start"),
+    TimeoutEnd("timeout_end"),
 
     // Serve flow.
     FirstServe("first_serve"),
@@ -64,7 +68,12 @@ enum class EventType(val wire: String) {
     Message("message");
 
     companion object {
-        fun fromWire(s: String): EventType? = values().firstOrNull { it.wire == s }
+        fun fromWire(s: String): EventType? =
+            if (s == LEGACY_TIMEOUT) TimeoutStart
+            else values().firstOrNull { it.wire == s }
+
+        /** What a timeout start was called before it had an end. */
+        private const val LEGACY_TIMEOUT = "timeout"
     }
 }
 
@@ -148,6 +157,20 @@ data class GameState(
      * libero leaves the court.
      */
     val liberoReplacements: Map<Int, Int> = emptyMap(),
+    /**
+     * The same pairing, but never cleared: who each libero last came
+     * on for at any point in the match.
+     *
+     * It answers the case [liberoReplacements] cannot. A line-up
+     * entered at set start puts the libero into an EMPTY slot, so they
+     * displaced nobody and there is nothing to remember - and the first
+     * rotation of every set would stop to ask a question the previous
+     * set already answered. A libero covers the same player set after
+     * set, so the last pairing is the right guess. It is only a guess,
+     * so the caller uses it just when that player is off court, and
+     * Undo is one tap.
+     */
+    val liberoLastPartners: Map<Int, Int> = emptyMap(),
 )
 
 /**

@@ -1,3 +1,4 @@
+import { cutNoun, isCutEnd, isCutStart } from "./cutTypes";
 import {
   useCallback,
   useEffect,
@@ -24,6 +25,10 @@ interface Props {
   /** Shift an event along the timeline. Optional: without it the
    *  nudge buttons are not rendered at all, rather than rendered dead. */
   onNudge?: (id: number, seconds: number) => Promise<void>;
+  /** Drop an event immediately after another (null = the very start);
+   *  it lands one frame past its new neighbour. Optional: without it
+   *  rows are not draggable at all, rather than draggable and inert. */
+  onMove?: (id: number, afterId: number | null) => Promise<void>;
   onSeek: (globalFrame: number) => void;
   /**
    * Insert a cut_start/cut_end pair over a global-frame span. Optional:
@@ -44,6 +49,7 @@ export function EventList({
   onSelect,
   onDelete,
   onNudge,
+  onMove,
   onSeek,
   onInsertCut,
   fps,
@@ -55,6 +61,42 @@ export function EventList({
   // Which event is mid-nudge, so its buttons can be disabled without
   // freezing the whole list. Null = nothing in flight.
   const [nudgingId, setNudgingId] = useState<number | null>(null);
+
+  // Drag-to-reorder. `draggingId` is the row being carried; `dropAt` is
+  // where it would land - an index into the list plus which edge, so the
+  // indicator sits in the gap between rows rather than on one of them.
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const [dropAt, setDropAt] = useState<{ index: number; below: boolean } | null>(
+    null
+  );
+  const [movingId, setMovingId] = useState<number | null>(null);
+
+  /** The event a drop at `target` would land behind, or null for the top. */
+  function anchorFor(target: { index: number; below: boolean }): number | null {
+    const before = target.below ? target.index : target.index - 1;
+    return before < 0 ? null : events[before]?.id ?? null;
+  }
+
+  async function handleDrop(target: { index: number; below: boolean }) {
+    const id = draggingId;
+    setDraggingId(null);
+    setDropAt(null);
+    if (id === null || !onMove) return;
+    const afterId = anchorFor(target);
+    // Dropping a row back where it already is: the anchor is the row
+    // itself, or the one it already follows. Either way there is
+    // nothing to do, and asking would still cost a frame of movement.
+    if (afterId === id) return;
+    const from = events.findIndex((e) => e.id === id);
+    const landsAfter = afterId === null ? -1 : events.findIndex((e) => e.id === afterId);
+    if (from >= 0 && landsAfter === from - 1) return;
+    setMovingId(id);
+    try {
+      await onMove(id, afterId);
+    } finally {
+      setMovingId(null);
+    }
+  }
 
   // Local-only search state - fresh per match-editor mount, not persisted.
 
@@ -291,11 +333,10 @@ export function EventList({
                   : "");
         const isMatch =
           lowerQuery !== "" && summary.toLowerCase().includes(lowerQuery);
-        const orphanReason =
-          ev.type === "cut_start"
-            ? "Cut Start without a matching Cut End (and no Set End / Game End before the next serve to close it)"
-            : ev.type === "cut_end"
-            ? "Cut End without a preceding Cut Start (and no Set End / Game End after the previous serve to open it)"
+        const orphanReason = isCutStart(ev.type)
+          ? `${cutNoun(ev.type)} Start without a matching end (and no Set End / Game End before the next serve to close it)`
+          : isCutEnd(ev.type)
+            ? `${cutNoun(ev.type)} End without a preceding start (and no Set End / Game End after the previous serve to open it)`
             : ev.type === "focus_in"
             ? "Focus In without a matching Focus Out - this focus will be skipped at render time"
             : "Orphan event";
@@ -307,7 +348,7 @@ export function EventList({
           ? `${summary} - ${orphanReason}`
           : isOpenEnded
             ? `${summary} - open cut, closed by the neighbouring ${
-                ev.type === "cut_start" ? "Set End / Game End" : "Set End / Game Start"
+                isCutStart(ev.type) ? "Set End / Game End" : "Set End / Game Start"
               }`
             : gapReason
               ? `${summary} - ${gapReason}`
@@ -323,13 +364,54 @@ export function EventList({
               (ev.id === selectedId ? " selected" : "") +
               (gapLabel && !isOrphan ? " warn" : "") +
               (isOrphan ? " orphan" : "") +
-              (isMatch ? " match" : "")
+              (isMatch ? " match" : "") +
+              (ev.id === draggingId ? " dragging" : "") +
+              (dropAt?.index === i && !dropAt.below ? " drop-above" : "") +
+              (dropAt?.index === i && dropAt.below ? " drop-below" : "")
             }
+            draggable={!!onMove && movingId === null}
+            onDragStart={(e) => {
+              setDraggingId(ev.id);
+              e.dataTransfer.effectAllowed = "move";
+              // Firefox starts no drag at all without payload.
+              e.dataTransfer.setData("text/plain", String(ev.id));
+            }}
+            onDragEnd={() => {
+              setDraggingId(null);
+              setDropAt(null);
+            }}
+            onDragOver={(e) => {
+              if (draggingId === null) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              // Which half of the row the pointer is over decides which
+              // gap it lands in - without it the first position would be
+              // unreachable, since every drop would be "after" something.
+              const r = e.currentTarget.getBoundingClientRect();
+              const below = e.clientY > r.top + r.height / 2;
+              setDropAt((d) =>
+                d && d.index === i && d.below === below ? d : { index: i, below }
+              );
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const r = e.currentTarget.getBoundingClientRect();
+              void handleDrop({ index: i, below: e.clientY > r.top + r.height / 2 });
+            }}
             onClick={() => {
               onSelect(ev.id);
               if (ev.global_frame !== null) onSeek(ev.global_frame);
             }}
           >
+            {onMove && (
+              <span
+                className="event-grip"
+                aria-hidden="true"
+                title="Drag to reorder. The event lands one frame after the one you drop it behind."
+              >
+                ⠿
+              </span>
+            )}
             {/* Two-line content column: summary on top, frame/time below.
                 Giving the summary the full row width avoids the previous
                 mid-name truncation when the timestamp shared the line. */}

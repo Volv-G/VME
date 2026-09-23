@@ -159,23 +159,24 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         mapOf(Side.Home to TeamChrome(), Side.Away to TeamChrome())
 
     /**
-     * When the timeout card should come down.
+     * Whether a timeout is on: the log's last event is its start.
      *
-     * A timeout is a fixed 30 s in every code we stream, so the
-     * card times itself out rather than needing a second "resume"
-     * tap the operator would forget while watching the huddle. Any
-     * event recorded in the meantime also clears it -- if play has
-     * restarted enough to tag something, the timeout is over.
-     */
-    /**
-     * True from a Timeout tap until the operator ends it.
+     * Derived from the log rather than kept as a flag. With the end
+     * now recorded too, the log already says whether a timeout is
+     * running, and a separate flag could only disagree with it: it
+     * reset to false if the activity was recreated mid-timeout, and
+     * Undo of an end left the card down over a timeout that was, by
+     * the log, still on. It is the LAST event because nothing else
+     * can be recorded during one -- [record] closes the timeout before
+     * anything else lands.
      *
      * No clock. A volleyball timeout is 30 s on paper, but the
      * operator is watching the court and the referee, not a phone,
      * and a card that vanished on a timer while the teams were still
      * huddled was worse than one that waits for a tap.
      */
-    private var timeoutShown = false
+    private val timeoutShown: Boolean
+        get() = match.events.lastOrNull()?.type == EventType.TimeoutStart
     private var currentTab: Tab = Tab.Events
     /** Rolling upload rate, refreshed by [onNewBitrate]. */
     private var lastBitrateKbps: Long = 0
@@ -1057,8 +1058,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // and "stop this" is the only thing the button can usefully
         // mean in that state.
         timeoutButton = gated(simpleButton(LBL_TIMEOUT, BG_NEUTRAL) {
-            if (timeoutShown) endTimeout("timeout: ended by operator")
-            else record(EventType.Timeout)
+            record(if (timeoutShown) EventType.TimeoutEnd else EventType.TimeoutStart)
         })
         col.addView(rowOf(
             gated(simpleButton("\uD83D\uDD04 Replay", BG_NEUTRAL) {
@@ -1286,21 +1286,6 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         log("armed: $label - tap the player")
     }
 
-    /**
-     * Take the timeout down.
-     *
-     * No event is recorded: the Timeout itself is already in the log
-     * and that is the thing that happened. How long the card stayed
-     * up is presentation, which the renderer decides on import.
-     */
-    private fun endTimeout(why: String) {
-        if (!timeoutShown) return
-        timeoutShown = false
-        refreshAllViews()
-        pushOverlay()
-        log(why)
-    }
-
     // ---- liberos ----------------------------------------------------
 
     /**
@@ -1513,34 +1498,39 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * after a crash.
      */
     private fun record(type: EventType, payload: Map<String, Any?> = emptyMap()) {
-        val nextId = (match.events.maxOfOrNull { it.id } ?: 0L) + 1L
-        val event = MatchEvent(
-            id = nextId, type = type, payload = payload,
-            at = System.currentTimeMillis(),
-        )
+        val at = System.currentTimeMillis()
+        // Play resuming ends a timeout, however the operator left it.
+        // While one is on, the only other live control is Ball Served,
+        // and VME cuts from a timeout's start to its END - so the end
+        // must be in the log, not just the card coming down. Logged
+        // first, at the same instant, so it sorts ahead of the serve.
+        if (timeoutShown && type != EventType.TimeoutEnd) {
+            append(EventType.TimeoutEnd, emptyMap(), at)
+            log("event: ${EventType.TimeoutEnd.wire} (play resumed)")
+        }
         // Snapshot BEFORE the event lands. A substitution pop-up has
         // to name the player leaving the court, and by the time the
         // event is in the list that slot already holds the incoming
         // player -- which is why subs were reading "#7 -> #7".
         val before = gameState
-        match = match.copy(events = match.events + event)
+        append(type, payload, at)
         store.save(match)
-
-        // A timeout raises the card and leaves it up. The only two
-        // controls still live are the ones that resume play, so the
-        // one event that can arrive here during a timeout is Ball
-        // Served -- and that means the next rally has begun.
-        if (type == EventType.Timeout) {
-            timeoutShown = true
-        } else if (timeoutShown) {
-            timeoutShown = false
-        }
 
         refreshAllViews()
         pushOverlay()
         firePopup(type, payload, before)
         log("event: ${type.wire}${if (payload.isNotEmpty()) " $payload" else ""}")
         enforceLiberoRule(type)
+    }
+
+    /** Add one event to the in-memory match. The caller saves. */
+    private fun append(type: EventType, payload: Map<String, Any?>, at: Long) {
+        val nextId = (match.events.maxOfOrNull { it.id } ?: 0L) + 1L
+        match = match.copy(
+            events = match.events + MatchEvent(
+                id = nextId, type = type, payload = payload, at = at,
+            ),
+        )
     }
 
     // ---- libero rotation rule ---------------------------------------
@@ -1560,10 +1550,19 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * thing that cannot go into a front-row slot is another libero.
      */
     private fun enforceLiberoRule(after: EventType) {
-        if (after != EventType.Score && after != EventType.Kill && after != EventType.Ace) return
+        val scoring = after == EventType.Score ||
+            after == EventType.Kill ||
+            after == EventType.Ace
+        // A prompt held back from a Kill (see below) fires on the next
+        // event, whatever it turns out to be.
+        if (!scoring && !liberoPromptDeferred) return
         val s = gameState
-        val (pos, libero) = GameStateEngine.frontRowLibero(s, liberos) ?: return
-        val back = s.liberoReplacements[libero]
+        val hit = GameStateEngine.frontRowLibero(s, liberos)
+        if (hit == null) {
+            liberoPromptDeferred = false
+            return
+        }
+        val (pos, libero) = hit
         val sub = { jersey: Int ->
             record(EventType.Substitution, mapOf(
                 "team" to Side.Home.wire,
@@ -1571,14 +1570,35 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                 "player_in_number" to jersey,
             ))
         }
-        if (back != null && back !in liberos && back !in s.homePositions.values) {
+        // This set's pairing first, then whoever this libero last came
+        // on for earlier in the match. The fallback is what stops the
+        // first rotation of every set asking a question the set before
+        // already answered.
+        val back = (s.liberoReplacements[libero] ?: s.liberoLastPartners[libero])
+            ?.takeIf { it !in liberos && it !in s.homePositions.values }
+        if (back != null) {
+            liberoPromptDeferred = false
             log("libero: #$libero rotated to P$pos, #$back returns")
             sub(back)
             return
         }
+        // Nobody to put back automatically, so this has to be asked -
+        // but a Kill is normally followed straight away by the Assist,
+        // and a dialog over the grid eats that tap. Hold it for one
+        // event. Nothing is lost if the operator does something else:
+        // the rule re-reads live state every time it runs.
+        if (after == EventType.Kill && !liberoPromptDeferred) {
+            liberoPromptDeferred = true
+            log("libero: #$libero rotated to P$pos - asking after the assist")
+            return
+        }
+        liberoPromptDeferred = false
         log("libero: #$libero rotated to P$pos - pick who comes back")
         pickPlayer(Side.Home, excludeOnCourt = true, excludeLiberos = true, onPicked = sub)
     }
+
+    /** A libero prompt waiting for the Assist that follows a Kill. */
+    private var liberoPromptDeferred = false
 
     /**
      * Push the current state to the overlay, but never let an
@@ -1891,9 +1911,9 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // A timeout freezes the surface. Play has stopped, so nothing
         // is taggable, and the only taps that mean anything are the
         // two that resume: Ball Served (the next rally has begun) and
-        // Timeout itself (the operator is ending it). Both take the
-        // card down -- Ball Served through the clear in `record`,
-        // Timeout through `endTimeout`.
+        // Timeout itself (the operator is ending it). Both log the
+        // timeout's end -- Timeout directly, Ball Served through the
+        // close in `record` -- and the card follows the log.
         //
         // Deliberately overrides the within-rally rule above: if a
         // timeout was called after a serve, Ball Served must stay

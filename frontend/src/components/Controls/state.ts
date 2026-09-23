@@ -80,41 +80,79 @@ export function frontRowLibero(
   return null;
 }
 
+export interface LiberoPairs {
+  /**
+   * Who each libero came on for in THIS set. A libero coming on
+   * remembers who they replaced; a libero going off, for anyone by any
+   * route, forgets it. Cleared at a set end, because positions are.
+   */
+  current: Record<number, number>;
+  /**
+   * The same, but never cleared: who this libero last came on for at
+   * any point in the match.
+   *
+   * It exists for the case `current` cannot answer. A line-up entered
+   * at set start puts the libero into an EMPTY slot, so they displaced
+   * nobody and there is no pairing to remember - and the first rotation
+   * of every set would stop to ask a question the previous set already
+   * answered. A libero covers the same player set after set, so the
+   * last pairing is the right guess; it is only a guess, so the caller
+   * uses it just when that player is off court, and Undo is one tap.
+   */
+  last: Record<number, number>;
+}
+
 /**
- * Libero jersey -> jersey of the player they came on for, as of the
- * last event at or before `uptoFrame`.
+ * Libero pairings as of the last event at or before `uptoFrame`.
  *
- * A libero coming on remembers who they replaced; a libero going off,
- * for anyone by any route, forgets it. Placing a libero into an empty
- * slot (lineup entry at set start) records nothing - which is what
- * makes the caller fall back to the picker. Cleared on set end,
- * because positions are.
+ * Derived rather than stored, as a pure fold over the event list, so it
+ * survives reload, undo and reorder for free.
  */
-export function liberoReplacements(
+export function liberoPairs(
   events: EventDto[],
   liberos: readonly number[],
   uptoFrame: number
-): Record<number, number> {
+): LiberoPairs {
   const isLibero = (j: number | null): j is number =>
     j != null && liberos.includes(j);
-  const pairs: Record<number, number> = {};
+  const current: Record<number, number> = {};
+  const last: Record<number, number> = {};
   let prev: GameStateDto = EMPTY_STATE;
   for (const e of events) {
     if (e.global_frame === null || e.state == null) continue;
     if (e.global_frame > uptoFrame) break;
     if (e.type === "set_end") {
-      for (const k of Object.keys(pairs)) delete pairs[Number(k)];
-    } else if (e.type === "substitution" && e.payload.team === "home") {
+      for (const k of Object.keys(current)) delete current[Number(k)];
+      // `team` is ABSENT on a home substitution, not "home": the backend
+      // omits any field equal to its dataclass default, and every event
+      // family defaults `team` to HOME. Comparing against "home"
+      // therefore skipped every home sub, so no pairing was ever built
+      // and the rule asked who comes back at every single rotation.
+      // `eventSummary` mirrors the same default for the same reason.
+    } else if (e.type === "substitution" && (e.payload.team ?? "home") === "home") {
       const position = Number(e.payload.position);
       const incoming = Number(e.payload.player_in_number);
       const outgoing = prev.home_positions[position] ?? null;
-      if (isLibero(outgoing)) delete pairs[outgoing];
+      if (isLibero(outgoing)) delete current[outgoing];
       if (isLibero(incoming)) {
-        if (outgoing != null && !isLibero(outgoing)) pairs[incoming] = outgoing;
-        else delete pairs[incoming];
+        if (outgoing != null && !isLibero(outgoing)) {
+          current[incoming] = outgoing;
+          last[incoming] = outgoing;
+        } else {
+          delete current[incoming];
+        }
       }
     }
     prev = e.state;
   }
-  return pairs;
+  return { current, last };
+}
+
+/** Just the current-set pairings. */
+export function liberoReplacements(
+  events: EventDto[],
+  liberos: readonly number[],
+  uptoFrame: number
+): Record<number, number> {
+  return liberoPairs(events, liberos, uptoFrame).current;
 }

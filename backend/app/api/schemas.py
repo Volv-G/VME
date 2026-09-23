@@ -388,6 +388,17 @@ class EventUpdateIn(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class MoveEventIn(BaseModel):
+    """Drop one event immediately after another in the timeline.
+
+    Identified by the event it lands behind rather than by a frame: the
+    list is what the operator is looking at, and "just after that one"
+    is the thing they mean. `None` puts it at the very start.
+    """
+
+    after_event_id: Optional[int] = None
+
+
 class NudgeEventIn(BaseModel):
     """Shift one event along the timeline.
 

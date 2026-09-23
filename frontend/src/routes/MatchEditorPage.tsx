@@ -151,6 +151,16 @@ export function MatchEditorPage() {
    *  it moves by wall clock where the clips have recording times and by
    *  frames where they do not, and either way returns the whole match so
    *  the recomputed states arrive with it. */
+  /** Drop an event behind another; it lands one frame later. */
+  async function moveEvent(id: number, afterId: number | null) {
+    try {
+      setData(await api.moveEvent(team, tournament, date, match, id, afterId));
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function nudgeEvent(id: number, seconds: number) {
     try {
       setData(await api.nudgeEvent(team, tournament, date, match, id, seconds));
@@ -336,6 +346,7 @@ export function MatchEditorPage() {
             onSelect={setSelectedEventId}
             onDelete={(id) => void deleteEvent(id)}
             onNudge={nudgeEvent}
+            onMove={moveEvent}
             onSeek={seek}
             onInsertCut={insertCut}
             fps={data.fps}

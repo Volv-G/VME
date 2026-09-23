@@ -1,4 +1,5 @@
 import type { EventDto } from "../types/api";
+import { isCutEnd, isCutStart } from "./cutTypes";
 import { analyzeCuts } from "./cutAnalysis";
 
 /**
@@ -54,7 +55,10 @@ export const SERVE_GAP_WARN_SECONDS = 12;
 //
 // The safeguard above survives because only the END resets: an unclosed
 // cut_start still can't silence anything.
-const MARKER_TYPES = new Set(["cut_start", "clip_transition"]);
+//
+// A timeout follows the same split. Its start opens a cut, so it is a
+// marker; its end is where kept footage resumes, so it resets.
+const MARKER_TYPES = new Set(["cut_start", "timeout_start", "clip_transition"]);
 
 /**
  * Breathing room left at each end of a one-click cut.
@@ -122,7 +126,7 @@ export function analyzeServeGaps(
   for (const ev of events) {
     const f = ev.global_frame;
     if (f === null || f === undefined) continue;
-    if (ev.type === "cut_start" || ev.type === "cut_end") markerFrames.push(f);
+    if (isCutStart(ev.type) || isCutEnd(ev.type)) markerFrames.push(f);
   }
   let prevFrame: number | null = null;
   for (const ev of events) {

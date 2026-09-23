@@ -47,10 +47,10 @@ from .message import (
 # corner notification, and borrowing them is what made this read as a
 # footnote: a caption is the only thing on screen that says what the
 # viewer is watching, so it is sized like a broadcast score bug.
-FONT_SCALE = 0.075
-PAD_X_SCALE = 0.024
-PAD_Y_SCALE = 0.016
-ACCENT_SCALE = 0.013
+FONT_SCALE = 0.062
+PAD_X_SCALE = 0.022
+PAD_Y_SCALE = 0.015
+ACCENT_SCALE = 0.011
 
 BG_COLOR: tuple[int, int, int, int] = (12, 12, 18, 232)
 

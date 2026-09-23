@@ -18,6 +18,7 @@ from .schemas import (
     ImportEventsIn,
     ImportEventsOut,
     MatchOut,
+    MoveEventIn,
     NudgeEventIn,
 )
 
@@ -112,6 +113,70 @@ def update_event(
     return serialize_match(team, tournament, date, match, m)
 
 
+@router.post("/{event_id}/move", response_model=MatchOut)
+def move_event(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    event_id: int,
+    body: MoveEventIn,
+) -> MatchOut:
+    """Place one event directly after another - one frame later.
+
+    A frame is the smallest gap that still sorts, so the moved event
+    lands as close to its new neighbour as the timeline can express.
+    That keeps a reorder a reorder: it changes which side of an event
+    this one falls on without inventing a gap that says something about
+    when it happened.
+
+    `at_ms` is recomputed from the new frame rather than carried over.
+    It is the event's anchor to the wall clock, and leaving it pointing
+    at the old moment would let the next re-projection - a clip gaining
+    recording times, say - undo the move.
+    """
+    m = load_match_or_404(team, tournament, date, match)
+    e = m.get_event(event_id)
+    if e is None:
+        raise HTTPException(404, "Event not found")
+    if isinstance(e, ClipTransitionEvent):
+        raise HTTPException(
+            400,
+            "A clip transition sits at the boundary between two clips and "
+            "moves only when the clips do.",
+        )
+    if body.after_event_id == event_id:
+        raise HTTPException(400, "An event cannot be placed after itself.")
+
+    if body.after_event_id is None:
+        target = 0
+    else:
+        anchor = m.get_event(body.after_event_id)
+        if anchor is None:
+            raise HTTPException(404, "The event to place this after was not found")
+        anchor_frame = m.to_global_frame(anchor.clip_id, anchor.local_frame)
+        if anchor_frame is None:
+            raise HTTPException(
+                400,
+                "The event to place this after is not on any clip yet, so "
+                "there is no frame to go one past.",
+            )
+        target = anchor_frame + 1
+
+    target = max(0, min(target, max(0, m.total_frames() - 1)))
+    placed = m.from_global_frame(target)
+    if placed is None:
+        raise HTTPException(400, "Nowhere to move this event to.")
+    e.clip_id, e.local_frame = placed
+    e.at_ms = m.event_time_ms(e)
+
+    # Same bookkeeping `update_event` does: order changes when an event
+    # crosses another, and every state snapshot after it shifts.
+    m.update_event(event_id, {})
+    save_match(team, tournament, date, match, m)
+    return serialize_match(team, tournament, date, match, m)
+
+
 @router.post("/{event_id}/nudge", response_model=MatchOut)
 def nudge_event(
     team: str,
@@ -168,6 +233,14 @@ def nudge_event(
     return serialize_match(team, tournament, date, match, m)
 
 
+# Event names older phone builds wrote that VME knows under another name.
+# `timeout` was logged at a timeout's start only, and VME never had a
+# type for it, so every one of them was skipped on import; read as the
+# start it always was. Such a start has no end, so it pairs the way an
+# unclosed cut does - with a set/game end, never across a serve.
+LEGACY_PHONE_TYPES = {"timeout": "timeout_start"}
+
+
 @router.post("/import", response_model=ImportEventsOut)
 def import_events(
     team: str,
@@ -205,7 +278,7 @@ def import_events(
     skipped: list[str] = []
 
     for raw in body.events:
-        type_name = raw.get("type")
+        type_name = LEGACY_PHONE_TYPES.get(raw.get("type"), raw.get("type"))
         at = raw.get("_at", raw.get("at_ms"))
         if not type_name:
             skipped.append("an entry with no type")

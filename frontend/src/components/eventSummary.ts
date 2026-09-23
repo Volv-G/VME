@@ -52,7 +52,9 @@ export function summarizeEvent(
       const outLabel = playerLabel(rosterFor(team), outNum);
       const teamStr = teamSuffix(team);
       if (outNum == null) {
-        return `Sub: ${inLabel} enters at P${pos}${teamStr}`;
+        // Nobody went out, so this is not a substitution to describe as
+        // one - same wording as the popup and the phone's overlay.
+        return `Entering: ${inLabel} at P${pos}${teamStr}`;
       }
       return `Sub: ${inLabel} for ${outLabel} at P${pos}${teamStr}`;
     }
@@ -118,16 +120,16 @@ export function summarizeEvent(
 
     case "cut_start":
       return "Cut start";
-    case "cut_end": {
-      const fade = (p.fade_frames as number) ?? 0;
-      const shift = (p.frame_shift as number) ?? 0;
-      // Frame counts are fps-relative; show seconds so the reader doesn't
-      // have to do the math (and so the number doesn't silently change
-      // meaning between 30 and 60 fps matches).
-      const fadeS = (fade / ctx.fps).toFixed(2);
-      const shiftS = (shift / ctx.fps).toFixed(2);
-      return `Cut end (fade ${fadeS}s, shift ${shiftS}s)`;
-    }
+    case "timeout_start":
+      return "Timeout (cut from here)";
+    // Fade and shift are deliberately left out. They are settings of
+    // the join, not something that happened in the match, and they made
+    // every cut end the longest row in the list. The event form shows
+    // and edits both when the row is selected.
+    case "timeout_end":
+      return "Timeout over, cut ends";
+    case "cut_end":
+      return "Cut end";
     case "clip_transition": {
       const from = String(p.from_clip_id ?? "");
       const to = String(p.to_clip_id ?? "");

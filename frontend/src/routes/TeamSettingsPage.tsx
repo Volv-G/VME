@@ -72,7 +72,7 @@ export function TeamSettingsPage() {
   const base = `/teams/${encodeURIComponent(team)}/settings`;
 
   return (
-    <div>
+    <div className="page page-narrow">
       <div className="page-head">
         <h1>{displayName(team)} — settings</h1>
         <Link to={`/teams/${encodeURIComponent(team)}`}>← Back to team</Link>
