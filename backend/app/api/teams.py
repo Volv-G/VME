@@ -176,6 +176,7 @@ def list_full_renders(team: str) -> list[FullRenderOut]:
     is where "this one is waiting to go up" belongs.
     """
     pending_uploads = _pending_upload_index(team)
+    in_progress = _rendering_index(team)
     return [
         FullRenderOut(
             team=r.team,
@@ -189,6 +190,7 @@ def list_full_renders(team: str) -> list[FullRenderOut]:
             match_index=r.match_index,
             kind=r.kind,
             player_label=r.player_label,
+            rendering=(r.tournament, r.date, r.match, r.filename) in in_progress,
             has_thumbnail=r.has_thumbnail,
             thumbnail_synced=r.thumbnail_synced,
             upload_destination=r.upload_destination,
@@ -224,6 +226,29 @@ def list_full_renders(team: str) -> list[FullRenderOut]:
         )
         for r in scanner.list_team_full_renders(team)
     ]
+
+
+def _rendering_index(team: str) -> set[tuple[str, str, str, str]]:
+    """`(tournament, date, match, filename)` of files being written now.
+
+    The renderer writes straight to the final name, so a render that is
+    half done is already sitting in the listing looking exactly like a
+    finished one - same row, same size column, downloadable, uploadable.
+    A job records its current target as it starts each file (see
+    `render_job.py`), which is what this reads.
+
+    RUNNING only. A queued job has written nothing yet, so there is no
+    file of its to mark, and a failed one leaves a partial file that is
+    genuinely stuck rather than in progress - the queue reports that.
+    """
+    out: set[tuple[str, str, str, str]] = set()
+    for job in JOBS.list_team_jobs(team):
+        if job.status != JobStatus.RUNNING or job.kind == "youtube_upload":
+            continue
+        if not job.output_filename:
+            continue
+        out.add((job.tournament, job.date, job.match, job.output_filename))
+    return out
 
 
 def _pending_upload_index(team: str) -> dict[tuple[str, str, str, str], tuple[str, str]]:

@@ -9,6 +9,8 @@ import { EventList } from "../components/EventList";
 import { Modal } from "../components/Modal";
 import { RenderPanel } from "../components/RenderPanel";
 import { Timeline } from "../components/Timeline/Timeline";
+import { CurrentEventBadge } from "../components/CurrentEventBadge";
+import { VideoActionBar } from "../components/VideoActionBar";
 import { VideoPlayer, type VideoPlayerHandle } from "../components/VideoPlayer";
 import { displayName } from "../util/names";
 
@@ -28,6 +30,17 @@ export function MatchEditorPage() {
   const playerRef = useRef<VideoPlayerHandle | null>(null);
   // Set by the controls panel while a prompt is waiting on an answer.
   const [playbackLock, setPlaybackLock] = useState<string | null>(null);
+  // Which half of the editor a phone is showing. Ignored above the
+  // breakpoint, where all three columns are on screen at once.
+  const [mobilePane, setMobilePane] = useState<"video" | "panels">("video");
+  // Bumped to ask the event list to scroll the selected row into view
+  // even when the selection itself has not changed.
+  const [revealSelected, setRevealSelected] = useState(0);
+  // Frame of the scoring event just created, for the libero rotation
+  // rule in ControlsPanel. Raised here rather than there because a point
+  // can be scored from the bar under the video too, and the rule is
+  // about the line-up, not about which button was pressed.
+  const [liberoCheckFrame, setLiberoCheckFrame] = useState<number | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
   const [topH, setTopH] = useState<number | null>(() => {
     if (typeof window === "undefined") return null;
@@ -126,6 +139,88 @@ export function MatchEditorPage() {
   async function deleteClip(id: string) {
     setData(await api.deleteClip(team, tournament, date, match, id));
   }
+  /**
+   * The event before / after the playhead, in timeline order.
+   *
+   * Strictly before or after: an event exactly at the playhead is the
+   * one you are already on, so stepping onto it again would be a button
+   * that looks broken.
+   */
+  function adjacentEvent(dir: 1 | -1) {
+    const placed = (data?.events ?? []).filter((e) => e.global_frame != null);
+    return dir > 0
+      ? placed.find((e) => (e.global_frame as number) > currentFrame)
+      : [...placed].reverse().find((e) => (e.global_frame as number) < currentFrame);
+  }
+
+  /**
+   * Open the panels on the event the video is sitting on.
+   *
+   * The list is off screen on a phone, so arriving at it with the
+   * selection wherever it was last left means hunting for your place in
+   * a list of hundreds. Selecting the playhead event makes the list
+   * scroll to it (see `EventList`), and `revealSelected` forces that
+   * even when the selection did not change - the row can be anywhere in
+   * a pane that was hidden a moment ago.
+   */
+  function showPanels(): "panels" {
+    const placed = (data?.events ?? []).filter((e) => e.global_frame != null);
+    let current = null as (typeof placed)[number] | null;
+    for (const e of placed) {
+      if ((e.global_frame as number) <= currentFrame) current = e;
+      else break;
+    }
+    if (current) setSelectedEventId(current.id);
+    setRevealSelected((n) => n + 1);
+    return "panels";
+  }
+
+  /**
+   * The playhead's event, as a chip.
+   *
+   * Rendered over the top-left of the picture.
+   */
+  const currentEventBadge = data ? (
+    <CurrentEventBadge
+      events={data.events}
+      currentFrame={currentFrame}
+      fps={data.fps}
+      homeRoster={data.home_roster}
+      opponentRoster={data.opponent_roster}
+      homeName={data.home_roster.team_name || data.team}
+      opponentName={data.opponent_roster.team_name || data.opponent || "Away"}
+    />
+  ) : null;
+
+  /**
+   * Remember where the timeline is looking, on the match.
+   *
+   * Deliberately does NOT feed the response back into `data`: the view
+   * is the one piece of match state the editor is allowed to write
+   * without re-rendering from it, and re-rendering would push the
+   * restored view back at the timeline mid-gesture.
+   */
+  const saveTimelineView = useCallback(
+    (zoom: number, anchorFrame: number) => {
+      void api
+        .patchMatch(team, tournament, date, match, {
+          timeline_zoom: zoom,
+          timeline_anchor_frame: anchorFrame,
+        })
+        .catch(() => {
+          // A lost view is not worth an error banner over the editor.
+        });
+    },
+    [team, tournament, date, match],
+  );
+
+  function stepToEvent(dir: 1 | -1) {
+    const target = adjacentEvent(dir);
+    if (!target) return;
+    seek(target.global_frame as number);
+    setSelectedEventId(target.id);
+  }
+
   async function createEvent(body: Parameters<typeof api.createEvent>[4]) {
     // Capture the existing event ids BEFORE the call so we can identify
     // the newly added one in the response. The server returns the whole
@@ -135,6 +230,11 @@ export function MatchEditorPage() {
     const prevIds = new Set(data?.events.map((e) => e.id) ?? []);
     const updated = await api.createEvent(team, tournament, date, match, body);
     setData(updated);
+    // Only scoring events rotate, so only they can carry a libero into
+    // the front row. Checked once `data` reflects the new event.
+    if (body.type === "score" || body.type === "kill" || body.type === "ace") {
+      setLiberoCheckFrame(currentFrame);
+    }
     const created = updated.events.find((e) => !prevIds.has(e.id));
     if (created) {
       // Select it so the EventList scrolls to and highlights the new row.
@@ -276,6 +376,21 @@ export function MatchEditorPage() {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div className="editor-header">
+        {/* Phones only (CSS hides it above the breakpoint). The editor is
+            three columns of dense controls; on a phone there is room for
+            exactly one, so the panels take the video's place rather than
+            being squeezed alongside it. */}
+        <button
+          className="pane-toggle"
+          onClick={() => setMobilePane((p) => (p === "video" ? showPanels() : "video"))}
+          title={
+            mobilePane === "video"
+              ? "Show the controls and the event list"
+              : "Back to the video"
+          }
+        >
+          {mobilePane === "video" ? "▤ Panels" : "▶ Video"}
+        </button>
         <Link to={tournamentHref} className="muted">← {displayName(tournament)}</Link>
         <strong>
           {/* 0 means "unnumbered": there is only one match that day. */}
@@ -303,11 +418,15 @@ export function MatchEditorPage() {
       </div>
 
       <div
-        className="editor-grid"
+        className={`editor-grid pane-${mobilePane}`}
         ref={gridRef}
         style={topH !== null ? { gridTemplateRows: `${topH}px 6px auto` } : undefined}
       >
         <div className="editor-video">
+          {/* Over the picture: the point is to read it without looking
+              away from the video. Absolutely positioned, so it never
+              takes a row from the player underneath. */}
+          {currentEventBadge}
           <VideoPlayer
             ref={playerRef}
             playbackLock={playbackLock}
@@ -318,6 +437,19 @@ export function MatchEditorPage() {
             clips={data.clips}
             fps={data.fps}
             onFrame={(f) => setCurrentFrame(f)}
+          />
+          <VideoActionBar
+            clips={data.clips}
+            currentFrame={currentFrame}
+            homeName={data.home_roster.team_name || data.team}
+            opponentName={data.opponent_roster.team_name || data.opponent || "Away"}
+            homeColor={data.home_roster.team_color}
+            opponentColor={data.opponent_roster.team_color}
+            onCreate={createEvent}
+            onPrevEvent={() => stepToEvent(-1)}
+            onNextEvent={() => stepToEvent(1)}
+            hasPrevEvent={adjacentEvent(-1) != null}
+            hasNextEvent={adjacentEvent(1) != null}
           />
         </div>
 
@@ -330,6 +462,8 @@ export function MatchEditorPage() {
             onTeamColorChange={setTeamColor}
             onLiberosChange={setLiberos}
             onPlaybackLock={setPlaybackLock}
+            liberoCheckFrame={liberoCheckFrame}
+            onLiberoChecked={() => setLiberoCheckFrame(null)}
             onRosterChanged={load}
             team={team}
             tournament={tournament}
@@ -344,6 +478,7 @@ export function MatchEditorPage() {
             selectedId={selectedEventId}
             currentFrame={currentFrame}
             onSelect={setSelectedEventId}
+            revealSelected={revealSelected}
             onDelete={(id) => void deleteEvent(id)}
             onNudge={nudgeEvent}
             onMove={moveEvent}
@@ -368,6 +503,9 @@ export function MatchEditorPage() {
 
         <div className="editor-timeline">
           <Timeline
+            savedZoom={data.timeline_zoom}
+            savedAnchorFrame={data.timeline_anchor_frame}
+            onViewChange={saveTimelineView}
             clips={data.clips}
             events={data.events}
             currentFrame={currentFrame}

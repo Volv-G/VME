@@ -30,6 +30,17 @@ interface Props {
   /** Persist a new team color (team roster for home, match's embedded
    *  opponent roster for away). Wired to the swatch in each team card. */
   onTeamColorChange?: (which: "home" | "opponent", hex: string) => Promise<void>;
+  /**
+   * Frame of the scoring event that just landed, or null.
+   *
+   * Owned by the page rather than by this panel: a point can also be
+   * scored from the bar under the video, and a rule about the LINE-UP
+   * must not depend on which button was pressed. The panel still owns
+   * the prompt, because that is where the roster picker lives.
+   */
+  liberoCheckFrame?: number | null;
+  /** Called once the rule has been applied or dismissed. */
+  onLiberoChecked?: () => void;
   /** Persist the libero designation for this match (PATCH liberos). */
   onLiberosChange?: (liberos: number[]) => Promise<void>;
   /**
@@ -142,6 +153,8 @@ export function ControlsPanel({
   onCreate,
   onAutoCuts,
   onTeamColorChange,
+  liberoCheckFrame,
+  onLiberoChecked,
   onLiberosChange,
   onPlaybackLock,
   onRosterChanged,
@@ -176,11 +189,6 @@ export function ControlsPanel({
   const [pendingAssistKiller, setPendingAssistKiller] = useState<
     number | null
   >(null);
-  // Set by a scoring commit to the frame it landed on. The libero rule
-  // has to look at the state AFTER that event, and `data` only carries
-  // it once the parent has reloaded - hence an effect rather than a
-  // check inline in `commit`. `null` = nothing to check.
-  const [liberoCheckFrame, setLiberoCheckFrame] = useState<number | null>(null);
   // Why the roster picker is open when a rule opened it, not a click.
   const [subReason, setSubReason] = useState<string | null>(null);
 
@@ -207,7 +215,7 @@ export function ControlsPanel({
     // assist is recorded or abandoned.
     if (pendingAssistKiller != null) return;
     const frame = liberoCheckFrame;
-    setLiberoCheckFrame(null);
+    onLiberoChecked?.();
     const after = stateAtPlayhead(data.events, frame);
     const hit = frontRowLibero(after.home_positions, liberos);
     if (!hit) return;
@@ -297,11 +305,8 @@ export function ControlsPanel({
     try {
       await onCreate({ type, clip_id: r.clipId, local_frame: r.localFrame, payload });
       if (!opts.keepOverlays) clearOverlays();
-      // Only scoring events rotate, so only they can put a libero in
-      // the front row. Checked once `data` reflects the new event.
-      if (type === "score" || type === "kill" || type === "ace") {
-        setLiberoCheckFrame(currentFrame);
-      }
+      // The libero check is raised by the page, for every scoring
+      // event whatever created it - see `liberoCheckFrame`.
       return true;
     } catch (e) {
       setErr(String(e));

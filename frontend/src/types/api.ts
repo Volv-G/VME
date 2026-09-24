@@ -174,6 +174,11 @@ export interface MatchDto {
    *  instead of hardcoding numbers that live on the backend. */
   reel_lead_default: number;
   reel_tail_default: number;
+  /** Where the timeline was left: zoom factor, and the frame at its left
+   *  edge. Stored on the match, so it survives a reload and follows the
+   *  match between machines. */
+  timeline_zoom: number;
+  timeline_anchor_frame: number;
 }
 
 /** Which engine uploads what, per team. */
@@ -307,6 +312,9 @@ export interface FullRenderDto {
   kind?: "full" | "condensed" | "reel";
   /** For reels: the player the reel belongs to, e.g. "#8 Kate G". */
   player_label?: string;
+  /** A render job is writing this file right now - the renderer writes
+   *  straight to the final name, so it is already in the listing. */
+  rendering?: boolean;
   /** A generated `<file>.thumbnail.jpg` exists next to the render. */
   has_thumbnail?: boolean;
   thumbnail_synced?: boolean;

@@ -431,6 +431,12 @@ def run_render(job: RenderJob) -> None:
     # destination directory exists before the renderer tries to write.
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Record the target NOW, not on completion. The renderer writes
+    # straight to the final name, so a half-written file is already
+    # listed among the finished ones; this is what lets the dashboard
+    # tell them apart (see `teams.py`).
+    JOBS.update(job.id, output_filename=output_filename)
+
     media_dir = paths.match_dir(job.team, job.tournament, job.date, job.match)
 
     last_pct = [0.0]
@@ -638,6 +644,7 @@ def _run_batch(
             JOBS.update(
                 job.id,
                 message=f"[{i}/{len(clips)}] {bc.label}",
+                output_filename=relative_path,
             )
             try:
                 r.render(
@@ -777,6 +784,9 @@ def _run_player_reels(
             JOBS.update(
                 job.id,
                 message=f"[{i}/{len(reels)}] {spec.label}",
+                # Which file is being written right now, so the
+                # dashboard can mark it unfinished.
+                output_filename=relative_path,
             )
             # Computed once and used twice: the captions burnt into the
             # video and the timestamp index beside it must name the same

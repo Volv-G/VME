@@ -54,6 +54,9 @@ export function LineupGrid({
             }
           >
             <span className="lineup-pos">P{pos}</span>
+            {jersey != null && liberos.includes(jersey) && (
+              <span className="libero-badge" title="Libero">L</span>
+            )}
             <span className="lineup-name">
               {positionLabel(roster, jersey, liberos)}
             </span>

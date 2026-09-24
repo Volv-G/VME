@@ -100,6 +100,17 @@ class Match:
     # default later actually reaches matches nobody has customized.
     reel_lead_seconds: Optional[float] = None
     reel_tail_seconds: Optional[float] = None
+    # Where the timeline was left: the zoom factor and the FRAME at its
+    # left edge.
+    #
+    # In the match rather than in the browser because it belongs to the
+    # match: two people editing the same match from different machines
+    # are looking at the same footage and the same events, and having
+    # each of them re-find the passage they were working on is busywork
+    # the file can remove. A frame rather than a scroll offset, because
+    # pixels mean different things on different screens.
+    timeline_zoom: float = 1.0
+    timeline_anchor_frame: int = 0
     schema_version: int = SCHEMA_VERSION
 
     # ---- Clip operations -------------------------------------------------
@@ -456,6 +467,8 @@ class Match:
             "liberos": list(self.liberos),
             "reel_lead_seconds": self.reel_lead_seconds,
             "reel_tail_seconds": self.reel_tail_seconds,
+            "timeline_zoom": self.timeline_zoom,
+            "timeline_anchor_frame": self.timeline_anchor_frame,
         }
 
     @classmethod
@@ -470,6 +483,8 @@ class Match:
             liberos=[int(n) for n in (data.get("liberos") or [])],
             reel_lead_seconds=_opt_float(data.get("reel_lead_seconds")),
             reel_tail_seconds=_opt_float(data.get("reel_tail_seconds")),
+            timeline_zoom=float(data.get("timeline_zoom") or 1.0),
+            timeline_anchor_frame=int(data.get("timeline_anchor_frame") or 0),
             schema_version=int(data.get("schema_version", SCHEMA_VERSION)),
         )
         m._sort_events()

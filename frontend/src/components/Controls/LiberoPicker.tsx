@@ -77,10 +77,10 @@ export function LiberoPicker({ roster, value, onSave, onClose }: Props) {
                 aria-pressed={on}
                 title={p.name}
               >
-                <span className="chip-num">
-                  #{p.number}
-                  {on ? " (L)" : ""}
-                </span>
+                {on && (
+                  <span className="libero-badge" title="Libero">L</span>
+                )}
+                <span className="chip-num">#{p.number}</span>
                 <span className="chip-name">
                   {p.short_name || p.name.split(" ")[0]}
                 </span>

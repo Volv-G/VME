@@ -39,9 +39,21 @@ export function findPlayer(
   return roster.players.find((p) => p.number === number);
 }
 
-/** Jersey tag as shown on buttons and chips: `#7`, or `#7 (L)` for a libero. */
-export function jerseyLabel(jersey: number, liberos: readonly number[]): string {
-  return liberos.includes(jersey) ? `#${jersey} (L)` : `#${jersey}`;
+/**
+ * Jersey tag as shown on buttons and chips: `#7`.
+ *
+ * Liberos used to read `#7 (L)`, which cost four characters on every
+ * card in the narrowest column of the editor and pushed names into an
+ * ellipsis. The cards mark them with a corner badge instead (see
+ * `.libero-badge`); `liberos` is still taken so call sites do not all
+ * have to change when a caller wants it back.
+ */
+export function jerseyLabel(
+  jersey: number,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _liberos: readonly number[] = []
+): string {
+  return `#${jersey}`;
 }
 
 /** Display name for a player at a position; "?" when empty. */

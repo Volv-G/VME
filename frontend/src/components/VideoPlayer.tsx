@@ -392,7 +392,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   ];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+    <div className="player-root">
       <div className="editor-video">
         {playbackLock && (
           // Over the video rather than beside the controls: that is
@@ -450,8 +450,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         </TransformWrapper>
       </div>
       <div className="player-controls">
+        {/* `step-left` / `step-right` exist for the narrow layout, which
+            puts both step groups on one row and the play buttons on the
+            next - see the max-width rules. */}
         {leftSteps.map((s) => (
-          <button key={s.title} onClick={s.action} title={s.title} className="step-btn">
+          <button key={s.title} onClick={s.action} title={s.title} className="step-btn step-left">
             {s.label}
           </button>
         ))}
@@ -480,7 +483,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           })}
         </div>
         {rightSteps.map((s) => (
-          <button key={s.title} onClick={s.action} title={s.title} className="step-btn">
+          <button key={s.title} onClick={s.action} title={s.title} className="step-btn step-right">
             {s.label}
           </button>
         ))}

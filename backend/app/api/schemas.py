@@ -146,6 +146,10 @@ class FullRenderOut(BaseModel):
     # "full" (top-level match render), "condensed" (the plays only) or
     # "reel" (one player's plays).
     kind: str = "full"
+    # A render job is writing this file right now. The renderer writes
+    # straight to the final name, so without this a half-finished render
+    # is indistinguishable from a complete one.
+    rendering: bool = False
     # True when a `<file>.thumbnail.jpg` sidecar exists next to the render.
     has_thumbnail: bool = False
     thumbnail_synced: bool = False
@@ -280,6 +284,10 @@ class MatchOut(BaseModel):
     # hardcoding numbers that live on the backend.
     reel_lead_default: float = 0.0
     reel_tail_default: float = 0.0
+    # Where the timeline was left, saved with the match so it survives a
+    # reload and travels between machines.
+    timeline_zoom: float = 1.0
+    timeline_anchor_frame: int = 0
 
 
 class CreateTournamentIn(BaseModel):
@@ -314,6 +322,10 @@ class UpdateMatchIn(BaseModel):
     # would be no way to un-customize a match.
     reel_lead_seconds: Optional[float] = None
     reel_tail_seconds: Optional[float] = None
+    # Timeline view. Sent on its own by the editor as the user zooms or
+    # pans, so a save never carries anything else with it.
+    timeline_zoom: Optional[float] = None
+    timeline_anchor_frame: Optional[int] = None
 
 
 class ReorderClipsIn(BaseModel):

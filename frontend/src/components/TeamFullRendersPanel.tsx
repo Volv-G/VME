@@ -938,6 +938,10 @@ export function TeamFullRendersPanel({ team }: Props) {
               : onOneDrive
                 ? "OneDrive"
                 : null;
+            // Still being written: the row exists because the file
+            // does, but its size is a moving target and nothing should
+            // be uploaded, copied or thumbnailed from it yet.
+            const rendering = !!r.rendering;
             const isReel = r.kind === "reel";
             const isCondensed = r.kind === "condensed";
             // Reels are one row per player: lead with the player so a
@@ -947,7 +951,7 @@ export function TeamFullRendersPanel({ team }: Props) {
             return (
               <div
                 key={id}
-                className="list-row render-row"
+                className={`list-row render-row${rendering ? " is-rendering" : ""}`}
                 style={{
                   alignItems: "center",
                   background: selected.has(id)
@@ -958,7 +962,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                 <input
                   type="checkbox"
                   checked={selected.has(id)}
-                  disabled={!!bulk}
+                  disabled={!!bulk || rendering}
                   onChange={() => {}}
                   onClick={(e) => toggleRow(rowIndex, e.shiftKey)}
                   title="Select for a bulk action (shift-click to extend)"
@@ -1070,6 +1074,18 @@ export function TeamFullRendersPanel({ team }: Props) {
                     ) : (
                       <strong style={{ fontSize: 13 }}>Full match</strong>
                     )}
+                    {rendering && (
+                      <span
+                        className="rendering-badge"
+                        title={
+                          "This file is being written right now. Its size " +
+                          "will keep changing, and it cannot be uploaded " +
+                          "or copied until the render finishes."
+                        }
+                      >
+                        ● rendering
+                      </span>
+                    )}
                     <PendingBadges r={r} />
                   </div>
                   <div className="row-meta" style={{ marginTop: 2 }}>
@@ -1130,7 +1146,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                           so rather than the button disappearing. */}
                       <button
                         onClick={() => regenerateThumbnail(r)}
-                        disabled={busyId === id || !!bulk}
+                        disabled={busyId === id || !!bulk || rendering}
                         title={
                           "Regenerate the thumbnail from the current team " +
                           `colors, logos and names, and replace it on ${hostName} ` +
@@ -1142,7 +1158,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                       </button>
                       <button
                         onClick={() => forgetUpload(r)}
-                        disabled={busyId === id || !!bulk}
+                        disabled={busyId === id || !!bulk || rendering}
                         title={
                           "Forget this upload record so the render can be " +
                           "uploaded again (use after deleting the video on " +
@@ -1155,7 +1171,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                       {mediaServerPath && (
                         <button
                           onClick={() => copyToMediaServer(r)}
-                          disabled={busyId === id || !!bulk}
+                          disabled={busyId === id || !!bulk || rendering}
                           title={`Copy this render and its images to ${mediaServerPath}`}
                           style={{ padding: "1px 6px", fontSize: 11 }}
                         >
@@ -1169,7 +1185,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                       </a>
                       <button
                         onClick={() => remove(r)}
-                        disabled={busyId === id || !!bulk}
+                        disabled={busyId === id || !!bulk || rendering}
                         title={
                           "Delete this render from disk. The YouTube video " +
                           "is not touched."
@@ -1226,7 +1242,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <button
                     onClick={() => regenerateThumbnail(r)}
-                    disabled={busyId === id || !!bulk}
+                    disabled={busyId === id || !!bulk || rendering}
                     title={
                       "Generate the thumbnail for this render from the " +
                       "current team colors, logos and names. It is used " +
@@ -1239,7 +1255,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                   {mediaServerPath && (
                     <button
                       onClick={() => copyToMediaServer(r)}
-                      disabled={busyId === id || !!bulk}
+                      disabled={busyId === id || !!bulk || rendering}
                       title={`Copy this render and its images to ${mediaServerPath}`}
                       style={{ padding: "2px 8px" }}
                     >
@@ -1251,7 +1267,7 @@ export function TeamFullRendersPanel({ team }: Props) {
                   </a>
                   <button
                     onClick={() => remove(r)}
-                    disabled={busyId === id || !!bulk}
+                    disabled={busyId === id || !!bulk || rendering}
                     title="Delete this render from disk"
                     style={{ padding: "2px 8px" }}
                   >

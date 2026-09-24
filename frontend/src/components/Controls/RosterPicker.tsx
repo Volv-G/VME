@@ -75,6 +75,9 @@ export function RosterPicker({
             onClick={() => onPick(p.number)}
             title={onCourt.has(p.number) ? `${p.name} (currently on court)` : p.name}
           >
+            {liberos.includes(p.number) && (
+              <span className="libero-badge" title="Libero">L</span>
+            )}
             <span className="chip-num">{jerseyLabel(p.number, liberos)}</span>
             <span className="chip-name">{p.short_name || p.name.split(" ")[0]}</span>
           </button>

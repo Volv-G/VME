@@ -325,6 +325,154 @@ label {
   cursor: pointer;
   font-size: 12px;
 }
+/* VideoPlayer's own root. It used to carry `height: 100%` as an inline
+   style, which took the whole cell and left nothing for the action bar
+   under it - and the cell clips, so the bar's buttons simply were not
+   there. Here instead, so the rules below can let it give way. */
+.player-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+/* In the cell, the player gives way and the bar keeps its height. */
+.editor-video > .player-root { flex: 1 1 auto; min-height: 0; }
+.editor-video > .video-actions { flex: 0 0 auto; }
+/* Inside the player, the picture gives way and the transport does not. */
+.player-root > .editor-video { flex: 1 1 auto; min-height: 0; }
+.player-root > .player-controls { flex: 0 0 auto; }
+
+/* A render still being written. Amber rather than red: nothing is
+   wrong, it is just not finished. */
+.rendering-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--warn, #d29922);
+  color: var(--warn, #d29922);
+  background: rgba(210, 153, 34, 0.1);
+  white-space: nowrap;
+}
+.render-row.is-rendering { opacity: 0.72; }
+
+/* Libero mark: a small ringed "L" in a card's top-right corner.
+   It replaced the `(L)` that used to sit inside the jersey text, where
+   it cost four characters on the narrowest cards in the editor and
+   pushed names into an ellipsis. Absolute, so it takes no room from the
+   name, and non-interactive so it cannot eat a tap on the card. */
+.libero-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid var(--accent);
+  background: rgba(79, 139, 255, 0.16);
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+/* The cards it sits in have to be a positioning context. */
+.lineup-cell,
+.roster-chip { position: relative; }
+
+/* The playhead's event, over the top-left of the picture.
+   Absolute, so it never takes a row from the player underneath, and
+   click-through so it cannot swallow a tap meant for the frame. */
+.current-event {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  max-width: calc(100% - 16px);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: rgba(14, 17, 22, 0.82);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+}
+.current-event-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Actions beside the video ----------------------------------------
+   Sits under the transport, inside the black video pane, so the three
+   taps a rally needs are where the eye already is. Wraps rather than
+   clipping: the team names are in the buttons and can be long. */
+.video-actions {
+  display: flex;
+  /* One line. The team names and the chip give way (both truncate)
+     rather than the row wrapping, which on a desktop left "Event ▶"
+     stranded under everything else. */
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-elev);
+  border-top: 1px solid var(--border);
+}
+.video-actions button {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+.video-actions .va-serve { flex: 1 1 auto; }
+.video-actions .va-point {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  /* Colour comes from an inline style (the team's own), so only the
+     neutral fallback lives here. */
+  border-color: var(--border);
+}
+.video-actions .va-step { flex: 0 0 auto; }
+.video-actions .va-short { display: none; }
+/* Wide enough for one row, with the next-event button at the far end
+   where it reads as a pair with its twin. */
+.video-actions .va-next { order: 1; }
+
+@media (max-width: 860px) {
+  /* Touch targets, and the steppers on their own row so a thumb cannot
+     hit "+1" while reaching for "next event". */
+  .video-actions button { padding: 9px 10px; font-size: 13px; }
+  .video-actions .va-full { display: none; }
+  .video-actions .va-short { display: inline; font-size: 16px; }
+  /* The picture keeps a floor so landscape - where the whole pane is
+     barely taller than the transport - still shows some video rather
+     than collapsing to the controls alone. */
+  .player-root > .editor-video { min-height: 84px; }
+  /* Ball Served takes a row of its own and the two point buttons share
+     the next, so the pair that has to be told apart sits side by side
+     rather than one of them being orphaned on a line. */
+  .video-actions .va-serve { flex: 0 0 auto; min-width: 56px; }
+  .video-actions .va-point { flex: 1 1 auto; }
+  .video-actions .va-next { order: 0; }
+  /* The two steppers share the first row; `order` lifts them above the
+     tagging buttons so a thumb reaching for "next event" cannot land
+     on "+1". */
+  .video-actions .va-step { flex: 0 0 auto; min-width: 48px; }
+}
+
+
+
+
+
+
+
 /* --- Drag to reorder -------------------------------------------------
    The row is the drag source; the grip is the affordance, since a row
    that is also clickable gives no hint that it can be carried. The drop
@@ -690,6 +838,12 @@ label {
 .timeline-scroll {
   scrollbar-width: thin;
   scrollbar-color: var(--bg-elev-2) transparent;
+  /* Horizontal dragging is a scroll the browser should handle; pinching
+     is ours (see the touch listeners in `Timeline.tsx`). Without this
+     the browser claims the pinch and zooms the whole page, which pushes
+     the part you were looking at off screen. A vertical swipe still
+     scrolls the page, because `pan-x` only claims the one axis. */
+  touch-action: pan-x;
 }
 .timeline-scroll::-webkit-scrollbar { height: 8px; }
 .timeline-scroll::-webkit-scrollbar-thumb {
@@ -1079,4 +1233,174 @@ label {
   /* An upload connection: the account on one line, its buttons under. */
   .conn-row { flex-wrap: wrap; }
   .conn-info { flex-basis: 100%; }
+}
+
+/* ---- Small screens ---------------------------------------------------
+   These live at the END of the file on purpose. They were above the
+   base `.player-controls` rules, which are no more specific, so the
+   base won and the overrides silently did nothing - eight step buttons
+   kept their 40px minimum and the last one wrapped to a line of its
+   own. Broadest first, so narrower and shorter viewports refine it. */
+
+/* --- Editor on a phone ------------------------------------------------
+   The editor is three columns of dense controls plus a timeline. At
+   phone width there is room for exactly one of them, so the panels
+   REPLACE the video rather than being squeezed next to it, and a button
+   in the header swaps between them.
+
+   `!important` is not decoration here: the row splitter writes
+   `grid-template-rows` as an inline style, which no stylesheet rule can
+   outrank, and that splitter does not exist in this layout. */
+.pane-toggle { display: none; }
+
+@media (max-width: 860px) {
+  .pane-toggle {
+    display: inline-flex;
+    flex: 0 0 auto;
+  }
+  .editor-header {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  /* The frame counter is a desktop nicety and the widest thing in the
+     header; the timeline says the same in a form you can point at. */
+  .editor-header .frame-display { display: none; }
+  .editor-header .header-spacer { flex: 1 1 auto; }
+
+  .editor-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) auto !important;
+    gap: 6px;
+    padding: 6px;
+  }
+  /* One pane at a time, each taking the whole first row. */
+  .editor-grid > .editor-video,
+  .editor-grid > .editor-controls,
+  .editor-grid > .editor-events {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .editor-grid.pane-video > .editor-controls,
+  .editor-grid.pane-video > .editor-events { display: none; }
+  .editor-grid.pane-panels > .editor-video { display: none; }
+  /* Controls above the list, sharing the pane: the list is the taller
+     of the two and the one being scrolled. */
+  .editor-grid.pane-panels > .editor-controls,
+  .editor-grid.pane-panels > .editor-events {
+    grid-row: 1;
+    min-height: 0;
+  }
+  .editor-grid.pane-panels {
+    grid-template-rows: auto minmax(0, 1fr) !important;
+  }
+  /* The controls are taller than a phone screen on their own, and an
+     `auto` row would take all of it and push the event list off the
+     bottom. Capped, so both panes are reachable and each scrolls. */
+  .editor-grid.pane-panels > .editor-controls {
+    grid-row: 1;
+    max-height: 45vh;
+    overflow-y: auto;
+  }
+  .editor-grid.pane-panels > .editor-events {
+    grid-row: 2;
+    overflow-y: auto;
+  }
+
+  /* The timeline stays with the video - it is how you move through the
+     footage - and gets out of the way when the panels take over. */
+  .editor-grid > .editor-timeline {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .editor-grid.pane-panels > .editor-timeline { display: none; }
+
+  /* Dragging the split between video and timeline is a mouse gesture
+     for a layout that no longer exists here. */
+  .editor-grid > .row-splitter { display: none; }
+
+  /* The transport is a single row of a dozen buttons; at 390px the last
+     few were simply off the edge of the pane. */
+  .player-controls {
+    flex-wrap: wrap;
+    gap: 4px 6px;
+  }
+  /* `margin-left: auto` pushed the clip picker onto its own line's far
+     right once the row wrapped, leaving a gap the width of the pane. */
+  .player-controls select {
+    margin-left: 0;
+    max-width: 100%;
+    flex: 1 1 100%;
+  }
+}
+
+/* Narrow: everything still on one line each.
+   Keyed on width rather than on "phone" - a phone on its side is 780px
+   and has room to spare. */
+@media (max-width: 560px) {
+  /* The action bar stays a single row; the team names give way rather
+     than the buttons wrapping. A cropped "Woodinvi..." in the team's own
+     colour is still unmistakable next to "Eastlake". */
+  .video-actions { flex-wrap: nowrap; }
+  .video-actions .va-step { min-width: 40px; }
+  .video-actions .va-serve { min-width: 44px; }
+  .video-actions .va-point {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The transport in two rows: every step button on the first - clip
+     back, -1s, -10, -1, +1, +10, +1s, clip forward - and play / 2x / 4x
+     on the second, which is where the thumb wants them. Eight small
+     buttons only fit if they are actually small. */
+  .player-controls { flex-wrap: wrap; gap: 3px; row-gap: 4px; }
+  .player-controls .step-left { order: 0; }
+  .player-controls .step-right { order: 1; }
+  /* The eight share the row and shrink to fit, so a 360px phone gets
+     one line rather than seven buttons and an orphan. */
+  .player-controls .step-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 4px 2px;
+    font-size: 11px;
+  }
+  .player-controls .play-group {
+    order: 2;
+    flex: 1 0 100%;
+    margin: 0;
+    justify-content: center;
+  }
+  .player-controls .play-btn { min-width: 64px; }
+  /* No room for it, and the timeline already moves between clips: its
+     clip bands are labelled and a tap seeks straight into one. */
+  .player-controls select { display: none; }
+}
+
+/* A phone on its side. The whole editor is barely taller than the
+   transport, so the picture was a sliver and the rows under it were cut
+   off by the cell's clipping. The buttons shrink, the picture keeps a
+   usable floor, and the pane scrolls rather than hiding anything. */
+@media (max-height: 520px) and (max-width: 1100px) {
+  .editor-grid.pane-video > .editor-video { overflow-y: auto; }
+  /* Natural height, not a share of a cell that is shorter than the
+     content: squeezed, the player kept its picture and pushed its own
+     transport out of the box, which is why the step buttons vanished
+     in landscape. It now takes the height it needs and the pane
+     scrolls. */
+  .editor-video > .player-root { flex: 0 0 auto; height: auto; }
+  /* A fixed slice rather than a share: the picture letterboxes inside
+     it, and the rows under it all fit without scrolling. */
+  .player-root > .editor-video { flex: 0 0 auto; height: 108px; min-height: 0; }
+  .player-controls { padding: 4px 6px; gap: 3px; }
+  .player-controls .step-btn {
+    min-width: 30px;
+    padding: 3px 5px;
+    font-size: 11px;
+  }
+  .player-controls .play-btn { min-width: 38px; font-size: 12px; }
+  .video-actions { padding: 4px 6px; }
+  .video-actions button { padding: 6px 8px; }
 }

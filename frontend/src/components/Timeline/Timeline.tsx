@@ -12,12 +12,24 @@ interface Props {
   selectedEventId: number | null;
   onSeek: (globalFrame: number) => void;
   onSelectEvent: (eventId: number) => void;
+  /** Saved view to restore, from the match. */
+  savedZoom?: number;
+  savedAnchorFrame?: number;
+  /** Zoom or pan settled. Debounced by the caller's own save. */
+  onViewChange?: (zoom: number, anchorFrame: number) => void;
 }
 
-const TIMELINE_HEIGHT = 96;
+// One row, not two. The event ticks used to sit in a band of their own
+// below the clips, which doubled the height of the timeline for markers
+// that are about the same moments the clips are. Drawn OVER the clip
+// band instead - events are painted after the clips, so they read as
+// marks on the footage rather than a separate chart.
 const RULER_HEIGHT = 18;
 const CLIP_HEIGHT = 30;
-const EVENT_BAND_TOP = RULER_HEIGHT + CLIP_HEIGHT + 4;
+const TIMELINE_HEIGHT = RULER_HEIGHT + CLIP_HEIGHT + 6;
+// Ticks start just inside the clip band so the dots are not clipped by
+// the ruler above them.
+const EVENT_BAND_TOP = RULER_HEIGHT + 4;
 
 const MIN_ZOOM = 1;
 // Absolute ceiling. The effective cap is derived from the current
@@ -69,11 +81,19 @@ export function Timeline({
   selectedEventId,
   onSeek,
   onSelectEvent,
+  savedZoom,
+  savedAnchorFrame,
+  onViewChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [viewWidth, setViewWidth] = useState(800);
   const [zoom, setZoom] = useState(1);
+  // The saved view is applied once, when the canvas first has a width to
+  // measure against - not on every prop change, or a save coming back
+  // from the server would yank the view out from under the user.
+  const restoredRef = useRef(false);
+  const pendingRestoreRef = useRef<{ zoom: number; frame: number } | null>(null);
 
   // After a zoom change we want to keep a specific frame stuck under the
   // cursor. The handler stashes target details here; a layout effect applies
@@ -333,6 +353,162 @@ export function Timeline({
     containerRef.current.scrollLeft = clamp(target, 0, contentWidth - viewWidth);
   }, [zoom, contentWidth, viewWidth, totalFrames]);
 
+  // Pinch to zoom, for touch.
+  //
+  // Without this the browser owns the gesture and zooms the PAGE, which
+  // is useless here: the timeline is one row of a fixed layout, so
+  // magnifying the whole editor moves the bit you wanted off screen.
+  // `touch-action: pan-x` on the container (see the stylesheet) is the
+  // other half - it tells the browser that horizontal dragging is a
+  // scroll it should handle, and that pinching is ours.
+  //
+  // One-finger dragging is deliberately NOT handled here: with
+  // `pan-x` the browser scrolls the container natively, which is
+  // smoother than anything reimplemented on touchmove, and a vertical
+  // swipe still scrolls the page.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const spread = (t: TouchList) =>
+      Math.hypot(
+        t[0].clientX - t[1].clientX,
+        t[0].clientY - t[1].clientY,
+      );
+
+    // Anchored the same way the wheel zoom is: the frame under the
+    // midpoint of the two fingers stays put while the scale changes.
+    let pinch: { spread: number; zoom: number; frame: number; x: number } | null =
+      null;
+
+    const onStart = (e: TouchEvent) => {
+      const s = stateRef.current;
+      if (e.touches.length !== 2 || s.totalFrames === 0) return;
+      e.preventDefault();
+      const rect = container.getBoundingClientRect();
+      const midX = clamp(
+        (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left,
+        0,
+        s.viewWidth,
+      );
+      pinch = {
+        spread: spread(e.touches),
+        zoom: s.zoom,
+        frame:
+          ((container.scrollLeft + midX) / s.contentWidth) * s.totalFrames,
+        x: midX,
+      };
+    };
+
+    const onMove = (e: TouchEvent) => {
+      const s = stateRef.current;
+      if (!pinch || e.touches.length !== 2) return;
+      e.preventDefault();
+      const now = spread(e.touches);
+      if (pinch.spread <= 0) return;
+      const next = clamp(
+        pinch.zoom * (now / pinch.spread),
+        MIN_ZOOM,
+        s.maxZoom,
+      );
+      if (Math.abs(next - s.zoom) < 1e-3) return;
+      pendingScrollRef.current = { frame: pinch.frame, cursorX: pinch.x };
+      setZoom(next);
+    };
+
+    const onEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) pinch = null;
+    };
+
+    container.addEventListener("touchstart", onStart, { passive: false });
+    container.addEventListener("touchmove", onMove, { passive: false });
+    container.addEventListener("touchend", onEnd);
+    container.addEventListener("touchcancel", onEnd);
+    return () => {
+      container.removeEventListener("touchstart", onStart);
+      container.removeEventListener("touchmove", onMove);
+      container.removeEventListener("touchend", onEnd);
+      container.removeEventListener("touchcancel", onEnd);
+    };
+  }, []);
+
+  // Restore the match's saved view, once.
+  useLayoutEffect(() => {
+    if (restoredRef.current) return;
+    const container = containerRef.current;
+    if (!container || totalFrames === 0) return;
+    // Wait for the MEASURED width to reach state. `viewWidth` starts at
+    // a guess of 800, and restoring against that lands on the wrong
+    // frame - the anchor is converted to pixels with it, so a 1146px
+    // container was scrolled as though it were 800.
+    if (container.clientWidth === 0 || container.clientWidth !== viewWidth) return;
+    restoredRef.current = true;
+    const z = clamp(savedZoom ?? 1, MIN_ZOOM, maxZoom);
+    pendingRestoreRef.current = { zoom: z, frame: savedAnchorFrame ?? 0 };
+    setZoom(z);
+  }, [totalFrames, viewWidth, maxZoom, savedZoom, savedAnchorFrame]);
+
+  // ...and place its left edge once the canvas has actually grown.
+  //
+  // A plain effect, NOT a layout effect: the canvas is resized by one of
+  // the `useEffect`s above, and a layout effect runs before those. Set
+  // against a container that has not grown yet, `scrollLeft` is clamped
+  // by the browser to zero - which is exactly what "the position is not
+  // stored" looked like. The rAF pass repeats it after the resize has
+  // landed, and the ref is only cleared once that has happened.
+  useEffect(() => {
+    const target = pendingRestoreRef.current;
+    const container = containerRef.current;
+    if (!target || !container || totalFrames === 0) return;
+    if (Math.abs(zoom - target.zoom) > 1e-6) return;
+    const apply = () => {
+      container.scrollLeft = clamp(
+        (target.frame / totalFrames) * contentWidth,
+        0,
+        Math.max(0, container.scrollWidth - container.clientWidth),
+      );
+    };
+    apply();
+    const raf = requestAnimationFrame(() => {
+      apply();
+      pendingRestoreRef.current = null;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [zoom, contentWidth, viewWidth, totalFrames]);
+
+  // Report the view after it settles. Debounced because both gestures
+  // are continuous - a pinch or a scroll would otherwise be a hundred
+  // writes - and skipped until the restore has happened, so opening a
+  // match never saves the default over the stored view.
+  const viewRef = useRef({ zoom, contentWidth, totalFrames, onViewChange });
+  viewRef.current = { zoom, contentWidth, totalFrames, onViewChange };
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    let timer: number | undefined;
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const v = viewRef.current;
+        if (!restoredRef.current || !v.onViewChange || v.totalFrames === 0) return;
+        // A restore still in flight means the scroll position on screen
+        // is not the user's yet. Saving here would write a 0 over the
+        // stored anchor - losing the very thing being restored.
+        if (pendingRestoreRef.current) return;
+        const anchor = Math.round(
+          (container.scrollLeft / v.contentWidth) * v.totalFrames,
+        );
+        v.onViewChange(v.zoom, anchor);
+      }, 900);
+    };
+    container.addEventListener("scroll", schedule, { passive: true });
+    schedule(); // also covers a zoom change, which re-runs this effect
+    return () => {
+      window.clearTimeout(timer);
+      container.removeEventListener("scroll", schedule);
+    };
+  }, [zoom]);
+
   // Wheel handling: vertical wheel = zoom, horizontal wheel (deltaX or
   // shift+wheel) = pan. We attach a native non-passive listener so we can
   // actually preventDefault - React's synthetic onWheel is passive and
@@ -461,7 +637,9 @@ export function Timeline({
           }
         }}
       >
-        {zoom > 1 ? `${zoomPct}% (click to reset)` : "scroll to zoom · shift+scroll to pan"}
+        {zoom > 1
+          ? `${zoomPct}% (click to reset)`
+          : "scroll or pinch to zoom · shift+scroll or drag to pan"}
       </div>
     </div>
   );

@@ -21,6 +21,9 @@ interface Props {
   /** Playhead position, so the list can follow playback. */
   currentFrame: number;
   onSelect: (id: number) => void;
+  /** Bump to scroll the selected row into view again, for when the list
+   *  was hidden and the selection did not change. */
+  revealSelected?: number;
   onDelete: (id: number) => void;
   /** Shift an event along the timeline. Optional: without it the
    *  nudge buttons are not rendered at all, rather than rendered dead. */
@@ -47,6 +50,7 @@ export function EventList({
   selectedId,
   currentFrame,
   onSelect,
+  revealSelected,
   onDelete,
   onNudge,
   onMove,
@@ -258,6 +262,17 @@ export function EventList({
     if (el)
       el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [selectedId]);
+
+  // Same scroll, asked for explicitly. `scrollIntoView` on a hidden
+  // element does nothing, so the pane becoming visible needs its own
+  // nudge - centred, because arriving at a list you could not see is
+  // easier to read from the middle than from an edge.
+  useEffect(() => {
+    if (!revealSelected || selectedId == null) return;
+    listRef.current
+      ?.querySelector(`[data-event-id="${selectedId}"]`)
+      ?.scrollIntoView({ block: "center" });
+  }, [revealSelected, selectedId]);
 
   return (
     <div ref={listRef}>

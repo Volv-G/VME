@@ -101,6 +101,8 @@ def serialize_match(
         reel_tail_seconds=m.reel_tail_seconds,
         reel_lead_default=reels.REEL_MAX_LEAD_SECONDS,
         reel_tail_default=reels.REEL_MAX_TAIL_SECONDS,
+        timeline_zoom=m.timeline_zoom,
+        timeline_anchor_frame=m.timeline_anchor_frame,
     )
 
 
