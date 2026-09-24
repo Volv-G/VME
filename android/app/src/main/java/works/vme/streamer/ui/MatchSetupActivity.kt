@@ -15,8 +15,11 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import works.vme.streamer.data.MatchStore
+import works.vme.streamer.data.PhotoCache
+import works.vme.streamer.data.Settings
 import works.vme.streamer.data.Team
 import works.vme.streamer.data.TeamStore
+import works.vme.streamer.data.VmeClient
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -31,6 +34,14 @@ import java.util.Locale
  * There is no roster editor here for the opponent. The opponent's
  * roster starts empty; players can be added on the fly from the live
  * screen when a substitution or per-player action needs one.
+ *
+ * The fixture can also be pulled from VME, which is worth it when the
+ * match already exists there: the opponent's name as the library spells
+ * it, their colour and badge, the date and the tournament folder. Typed
+ * by hand, any of those can differ by a character, and then the export
+ * creates a near-duplicate match beside the real one instead of landing
+ * in it. Metadata only - the events are what this phone is about to
+ * produce, not something to copy in.
  */
 class MatchSetupActivity : ComponentActivity() {
 
@@ -38,6 +49,7 @@ class MatchSetupActivity : ComponentActivity() {
     private var selectedTeam: Team? = null
 
     private lateinit var teamButton: Button
+    private lateinit var importButton: Button
     private lateinit var opponentInput: EditText
     private lateinit var dateInput: EditText
     private lateinit var tournamentInput: EditText
@@ -50,6 +62,11 @@ class MatchSetupActivity : ComponentActivity() {
      * there is nothing to keep in step and nothing to clean up when the
      * last match of one is deleted.
      */
+    /** Opponent colour and badge from the last VME import, applied when
+     *  the match is created. Null when the fixture was typed by hand. */
+    private var importedColor: String? = null
+    private var importedLogo: ByteArray? = null
+
     private val knownTournaments: List<String> by lazy {
         MatchStore(this).list()
             .sortedByDescending { it.date }
@@ -97,6 +114,20 @@ class MatchSetupActivity : ComponentActivity() {
             setOnClickListener { pickTeam() }
         }
         root.addView(teamButton)
+
+        importButton = Button(this).apply {
+            text = "Import fixture from VME..."
+            isEnabled = Settings.isConfigured(this@MatchSetupActivity)
+            setOnClickListener { importFromVme() }
+        }
+        root.addView(importButton)
+        if (!Settings.isConfigured(this)) {
+            root.addView(TextView(this).apply {
+                text = "Set the VME address in Settings to import fixtures."
+                setTextColor(Color.GRAY)
+                textSize = 11f
+            })
+        }
 
         root.addView(label("Opponent"))
         opponentInput = EditText(this).apply {
@@ -192,10 +223,24 @@ class MatchSetupActivity : ComponentActivity() {
         val date = dateInput.text.toString().trim()
         val tournament = tournamentInput.text.toString().trim()
             .ifBlank { DEFAULT_TOURNAMENT }
-        val match = MatchStore(this).createMatch(
+        var match = MatchStore(this).createMatch(
             homeTeam = team, opponentName = opponent,
             date = date, tournament = tournament,
         )
+        // Branding from a VME import, if there was one. Written here
+        // rather than at import time because the badge is cached under
+        // the match slug, which does not exist until now.
+        if (importedColor != null || importedLogo != null) {
+            val logoPath = importedLogo?.let {
+                PhotoCache.storeLogo(this, PhotoCache.opponentKey(match.slug), it)
+            }
+            match = match.copy(
+                opponentRoster = match.opponentRoster.copy(
+                    teamColor = importedColor ?: match.opponentRoster.teamColor,
+                    localLogoPath = logoPath ?: match.opponentRoster.localLogoPath,
+                ),
+            )
+        }
         MatchStore(this).save(match)
         // Jump straight into the live screen — this button is called
         // "Create + open" and the two things reliably happen together.
@@ -204,6 +249,128 @@ class MatchSetupActivity : ComponentActivity() {
         })
         finish()
     }
+
+    // ---- import from VME ------------------------------------------
+
+    /**
+     * Tournament, then match, then fill the form.
+     *
+     * Two pickers rather than one long list of every match the team has
+     * ever played: a season is hundreds, and the tournament is the
+     * thing the operator actually knows at the gym.
+     */
+    private fun importFromVme() {
+        val team = selectedTeam ?: return
+        val base = Settings.baseUrl(this)
+        if (base.isBlank()) return
+        val creds = Settings.credentials(this)
+        busy(true, "Loading tournaments...")
+        Thread {
+            val result = runCatching {
+                VmeClient.listTournaments(base, team.slug, creds)
+            }
+            runOnUiThread {
+                busy(false, null)
+                result.onSuccess { tournaments ->
+                    if (tournaments.isEmpty()) {
+                        toast("No tournaments for ${team.slug} in VME.")
+                    } else {
+                        pickImportTournament(team, base, creds, tournaments)
+                    }
+                }.onFailure { toast("Could not reach VME: ${it.message}") }
+            }
+        }.start()
+    }
+
+    private fun pickImportTournament(
+        team: Team,
+        base: String,
+        creds: VmeClient.Credentials?,
+        tournaments: List<String>,
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle("Tournament")
+            .setItems(tournaments.toTypedArray()) { _, which ->
+                loadMatches(team, base, creds, tournaments[which])
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun loadMatches(
+        team: Team,
+        base: String,
+        creds: VmeClient.Credentials?,
+        tournament: String,
+    ) {
+        busy(true, "Loading matches...")
+        Thread {
+            val result = runCatching {
+                VmeClient.listMatches(base, team.slug, tournament, creds)
+            }
+            runOnUiThread {
+                busy(false, null)
+                result.onSuccess { matches ->
+                    if (matches.isEmpty()) {
+                        toast("No matches in $tournament.")
+                    } else {
+                        val labels = matches
+                            .map { "${it.date}  ${it.label()}" }
+                            .toTypedArray()
+                        AlertDialog.Builder(this)
+                            .setTitle(tournament)
+                            .setItems(labels) { _, which ->
+                                loadMeta(team, base, creds, tournament, matches[which])
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                }.onFailure { toast("Could not list matches: ${it.message}") }
+            }
+        }.start()
+    }
+
+    private fun loadMeta(
+        team: Team,
+        base: String,
+        creds: VmeClient.Credentials?,
+        tournament: String,
+        summary: VmeClient.MatchSummary,
+    ) {
+        busy(true, "Loading fixture...")
+        Thread {
+            val result = runCatching {
+                VmeClient.fetchMatchMeta(
+                    base, team.slug, tournament, summary.date, summary.name, creds,
+                )
+            }
+            runOnUiThread {
+                busy(false, null)
+                result.onSuccess { meta ->
+                    opponentInput.setText(meta.opponent)
+                    dateInput.setText(meta.date)
+                    tournamentInput.setText(meta.tournament)
+                    importedColor = meta.opponentColor
+                    importedLogo = meta.opponentLogo
+                    toast(
+                        "Imported ${meta.opponent}" +
+                            (if (meta.opponentColor != null) ", colour" else "") +
+                            (if (meta.opponentLogo != null) ", badge" else ", no badge")
+                    )
+                }.onFailure { toast("Could not load the fixture: ${it.message}") }
+            }
+        }.start()
+    }
+
+    /** Disable the button while a request is in flight, so a double tap
+     *  cannot start two. */
+    private fun busy(on: Boolean, label: String?) {
+        importButton.isEnabled = !on && Settings.isConfigured(this)
+        importButton.text = label ?: "Import fixture from VME..."
+    }
+
+    private fun toast(msg: String) =
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
 
     /** Choose from the tournaments already on this phone. */
     private fun pickTournament() {

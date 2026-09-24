@@ -108,6 +108,114 @@ object VmeClient {
         return runCatching { getBytes(url, creds) }.getOrNull()
     }
 
+    /** One match as the fixture list shows it. */
+    data class MatchSummary(
+        val date: String,
+        /** Folder leaf, the API identifier - e.g. `01_Bellevue`. */
+        val name: String,
+        val matchIndex: Int?,
+        val opponent: String,
+    ) {
+        /** "M2 vs Bellevue" / "vs Bellevue" for the only match of a day. */
+        fun label(): String =
+            (if (matchIndex != null && matchIndex > 0) "M$matchIndex " else "") +
+                "vs ${opponent.ifBlank { name }}"
+    }
+
+    /**
+     * A match's fixture details, without its events or rosters.
+     *
+     * Deliberately metadata only: the phone is about to score this
+     * match itself, so the editor's event log is not something to copy
+     * in - it is the thing this phone will produce. What is worth
+     * having is the part that is tedious and easy to get subtly wrong
+     * courtside: the opponent's exact name as the library spells it,
+     * their colour and badge, the date and the tournament folder. Get
+     * those right and the export lands in the match that already
+     * exists instead of creating a near-duplicate beside it.
+     */
+    data class MatchMeta(
+        val tournament: String,
+        val date: String,
+        val name: String,
+        val matchIndex: Int?,
+        val opponent: String,
+        val opponentColor: String?,
+        val opponentLogo: ByteArray?,
+    )
+
+    /** Tournament folder names for a team, as VME lists them. */
+    fun listTournaments(
+        baseUrl: String,
+        teamSlug: String,
+        creds: Credentials? = null,
+    ): List<String> {
+        val url = "${normalize(baseUrl)}/api/teams/${enc(teamSlug)}/tournaments"
+        val arr = JSONArray(get(url, creds))
+        return (0 until arr.length()).mapNotNull {
+            arr.getJSONObject(it).optString("name").ifBlank { null }
+        }
+    }
+
+    /** Matches in one tournament, newest first. */
+    fun listMatches(
+        baseUrl: String,
+        teamSlug: String,
+        tournament: String,
+        creds: Credentials? = null,
+    ): List<MatchSummary> {
+        val url = "${normalize(baseUrl)}/api/teams/${enc(teamSlug)}" +
+            "/tournaments/${enc(tournament)}/matches"
+        val arr = JSONArray(get(url, creds))
+        return (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            MatchSummary(
+                date = o.optString("date"),
+                name = o.optString("name"),
+                matchIndex = if (o.isNull("match_index")) null else o.optInt("match_index"),
+                opponent = o.optString("opponent"),
+            )
+        }.sortedWith(compareByDescending<MatchSummary> { it.date }
+            .thenBy { it.matchIndex ?: 0 })
+    }
+
+    /**
+     * Fixture details for one match, badge included.
+     *
+     * The colour lives on the match's opponent roster rather than
+     * anywhere team-wide: an opponent is per-match in VME, so the same
+     * club can be a different shade in two tournaments and the one that
+     * matters is this fixture's.
+     */
+    fun fetchMatchMeta(
+        baseUrl: String,
+        teamSlug: String,
+        tournament: String,
+        date: String,
+        match: String,
+        creds: Credentials? = null,
+    ): MatchMeta {
+        val base = "${normalize(baseUrl)}/api/teams/${enc(teamSlug)}" +
+            "/tournaments/${enc(tournament)}/dates/${enc(date)}/matches/${enc(match)}"
+        val o = JSONObject(get(base, creds))
+        val opponentRoster = o.optJSONObject("opponent_roster")
+        val color = opponentRoster?.optString("team_color")?.ifBlank { null }
+        // Best effort: plenty of opponents have no badge on file, and a
+        // missing one is not a reason to refuse the rest.
+        val logo = runCatching { getBytes("$base/opponent-logo", creds) }.getOrNull()
+        return MatchMeta(
+            tournament = tournament,
+            date = o.optString("date").ifBlank { date },
+            name = match,
+            matchIndex = if (o.isNull("match_index")) null else o.optInt("match_index"),
+            opponent = o.optString("opponent").ifBlank {
+                opponentRoster?.optString("team_name").orEmpty()
+            },
+            opponentColor = color,
+            opponentLogo = logo,
+        )
+    }
+
     /** What the server made of an import. */
     data class ImportResult(
         val imported: Int,
