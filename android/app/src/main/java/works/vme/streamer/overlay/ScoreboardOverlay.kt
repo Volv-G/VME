@@ -149,9 +149,40 @@ class ScoreboardOverlay(
      *  the slanted section without touching either edge. */
     private val logoPx: Float = mainH * 0.70f
     private val logoGapPx: Float = mainH * 0.16f
+
+    /**
+     * The serve indicator: a small yellow disc on the serving team's
+     * side of the bar, next to the score.
+     *
+     * Who is serving is the one thing a viewer joining mid-set cannot
+     * work out from the score, and it changes the meaning of
+     * everything that follows -- a side-out is only readable if you
+     * knew who had the ball. Yellow because no team colour in use is
+     * anywhere near it, so the dot never disappears into the block it
+     * sits on.
+     *
+     * Room is reserved on BOTH sides whether or not either is serving:
+     * the bar's width becomes a `setScale` at [attach] and cannot be
+     * changed afterwards, so the layout has to be the same width for
+     * every state it will ever be in.
+     */
+    private val serveDotPx: Float = mainH * 0.22f
+    private val serveGapPx: Float = mainH * 0.16f
+    private val serveSlotW: Float = serveDotPx + serveGapPx
     private val logoPaint = Paint().apply {
         isAntiAlias = true
         isFilterBitmap = true
+    }
+    private val servePaint = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.FILL
+        color = SERVE_COLOR
+    }
+    private val serveRingPaint = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.STROKE
+        strokeWidth = (serveDotPx * 0.12f).coerceAtLeast(1f)
+        color = Color.argb(150, 25, 25, 25)
     }
 
     // Measure ONCE using the widest plausible values. Any real score
@@ -186,8 +217,8 @@ class ScoreboardOverlay(
         measurePaint.textSize = scoreFontPx
         val scoreW = measurePaint.measureText("99  -  99")
 
-        hSection = (homeW + padPx * 2 + skewPx).toInt()
-        aSection = (awayW + padPx * 2 + skewPx).toInt()
+        hSection = (homeW + serveSlotW + padPx * 2 + skewPx).toInt()
+        aSection = (awayW + serveSlotW + padPx * 2 + skewPx).toInt()
         sSection = (setsW + padPx * 2 + skewPx).toInt()
         cSection = (scoreW + padPx * 2 + skewPx).toInt()
 
@@ -283,11 +314,24 @@ class ScoreboardOverlay(
         // was reserved for it.
         val homeX = padPx.toFloat()
         drawLogo(c, homeLogo, homeX, textCy)
-        drawTextLeft(c, homeName, homeX + logoSlotW(homeLogo), textCy)
+        val homeNameX = homeX + logoSlotW(homeLogo)
+        drawTextLeft(c, homeName, homeNameX, textCy)
+        // Both dots sit on the inner edge of their block, flanking the
+        // score, so the pair reads as one indicator with two states.
+        if (state.servingTeam == Side.Home) {
+            drawServeDot(
+                c,
+                homeNameX + textPaint.measureText(homeName) + serveGapPx + serveDotPx / 2,
+                textCy,
+            )
+        }
 
         val awayX = (hSec + sSec + cSec + sSec + padPx).toFloat()
-        drawLogo(c, awayLogo, awayX, textCy)
-        drawTextLeft(c, awayName, awayX + logoSlotW(awayLogo), textCy)
+        if (state.servingTeam == Side.Away) {
+            drawServeDot(c, awayX + serveDotPx / 2, textCy)
+        }
+        drawLogo(c, awayLogo, awayX + serveSlotW, textCy)
+        drawTextLeft(c, awayName, awayX + serveSlotW + logoSlotW(awayLogo), textCy)
 
         textPaint.textSize = setsFontPx
         drawTextCentre(c, state.homeSets.toString(),
@@ -314,6 +358,18 @@ class ScoreboardOverlay(
 
     /** Five sections with slant-edged dividers: sets sections lean
      *  outward, matching VME's Python `_draw_slanted_blocks`. */
+    /**
+     * The serve indicator, centred on ([cx], [cy]).
+     *
+     * A dark ring around it so the disc still has an edge if a team
+     * ever picks a yellow of their own.
+     */
+    private fun drawServeDot(c: Canvas, cx: Float, cy: Float) {
+        val r = serveDotPx / 2f
+        c.drawCircle(cx, cy, r, servePaint)
+        c.drawCircle(cx, cy, r, serveRingPaint)
+    }
+
     /** Horizontal room a badge needs, including the gap after it.
      *  Zero when there is no badge, so a team without one is laid
      *  out exactly as before. */
@@ -431,6 +487,10 @@ class ScoreboardOverlay(
         private val SECTION_SETS_COLOR = Color.rgb(80, 60, 100)
         /** Darker purple; matches Python `(45, 35, 75)` (score + strip). */
         private val SECTION_CENTER_COLOR = Color.rgb(45, 35, 75)
+        /** Serve indicator yellow. Kept identical to VME's renderer so
+         *  a live stream and the edited video mark the serve the same
+         *  way. */
+        val SERVE_COLOR = Color.rgb(255, 209, 0)
         /** Gap between the bar and the bottom edge, as a fraction of
          *  frame height. ~32 px at 1080p, matching VME's 30 px. */
         private const val BOTTOM_MARGIN_FRAC = 0.03f

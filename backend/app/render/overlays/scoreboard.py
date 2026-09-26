@@ -15,6 +15,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from ...domain.game_state import GameState
+from ...domain.team import Team
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,15 @@ SKEW_SCALE = 0.34
 # exactly where that shows. Text and logos are drawn afterwards at
 # native resolution so they stay crisp.
 SHAPE_SUPERSAMPLE = 4
+# Serve indicator: diameter and the gap to the team name, both as a
+# fraction of the main bar height.
+SERVE_DOT_SCALE = 0.22
+SERVE_GAP_SCALE = 0.16
+# Yellow, and a dark ring so the disc keeps an edge if a team ever
+# picks a yellow of their own. Matched to the phone app's
+# ScoreboardOverlay.SERVE_COLOR.
+SERVE_COLOR = (255, 209, 0, 255)
+SERVE_RING = (25, 25, 25, 150)
 
 
 @dataclass
@@ -95,6 +105,9 @@ class ScoreboardOverlay:
             self.away.color,
             self.home.logo_path,
             self.away.logo_path,
+            # Part of the key, or the bar would keep the serve dot on
+            # the side that had it when the frame was first cached.
+            state.serving_team,
         )
         if self._cache is not None and self._cache_key == cache_key:
             return self._cache
@@ -124,6 +137,13 @@ class ScoreboardOverlay:
         home_extra = (logo_d + logo_gap) if home_logo is not None else 0
         away_extra = (logo_d + logo_gap) if away_logo is not None else 0
 
+        # Serve indicator. Room is reserved on both sides in every
+        # state, so the bar is the same width all match and the dot
+        # appearing does not nudge the names sideways.
+        serve_d = max(6, int(main_h * SERVE_DOT_SCALE))
+        serve_gap = max(3, int(main_h * SERVE_GAP_SCALE))
+        serve_extra = serve_d + serve_gap
+
         # Section dividers are slanted, broadcast-style: they lean toward
         # the center block going down, mirrored either side of the score.
         # `skew` is the half-offset, so a divider moves 2*skew across the
@@ -131,8 +151,8 @@ class ScoreboardOverlay:
         # slant eats into padding rather than into the text.
         skew = max(1, int(main_h * SKEW_SCALE))
 
-        home_section = home_w + pad * 2 + home_extra + skew
-        away_section = away_w + pad * 2 + away_extra + skew
+        home_section = home_w + pad * 2 + home_extra + serve_extra + skew
+        away_section = away_w + pad * 2 + away_extra + serve_extra + skew
         sets_section = single_set_w + pad * 2 + skew
         center_section = score_w + pad * 2 + skew
 
@@ -184,6 +204,10 @@ class ScoreboardOverlay:
             fill=(255, 255, 255, 255),
             anchor="lm",
         )
+        # Both dots sit on the inner edge of their block, flanking the
+        # score, so the pair reads as one indicator with two states.
+        if state.serving_team == Team.HOME:
+            _serve_dot(draw, pad + home_extra + home_w + serve_gap, text_y, serve_d)
 
         x = home_section
         draw.text(
@@ -213,8 +237,14 @@ class ScoreboardOverlay:
         )
         x += sets_section
 
+        if state.serving_team == Team.AWAY:
+            _serve_dot(draw, x + pad + skew, text_y, serve_d)
         draw.text(
-            (x + pad + skew, text_y), self.away.name, font=team_font, fill=(255, 255, 255, 255), anchor="lm"
+            (x + pad + skew + serve_extra, text_y),
+            self.away.name,
+            font=team_font,
+            fill=(255, 255, 255, 255),
+            anchor="lm",
         )
         if away_logo is not None:
             overlay.alpha_composite(
@@ -438,6 +468,23 @@ def _fit_cover(img: Image.Image, box: int, y_bias: float = 0.5) -> Image.Image:
 
 
 _MASK_CACHE: dict[int, Image.Image] = {}
+
+
+def _serve_dot(draw: ImageDraw.ImageDraw, left: float, cy: float, d: int) -> None:
+    """Who has the ball: a yellow disc, left edge at *left*, centred on *cy*.
+
+    Deliberately a plain disc rather than a ball glyph: at the size this
+    ends up on a 1080p bar (~5 px at 1080p) seams and shading turn into
+    mud, while a flat circle stays a circle.
+    """
+    r = d / 2
+    cx = left + r
+    draw.ellipse(
+        [cx - r, cy - r, cx + r, cy + r],
+        fill=SERVE_COLOR,
+        outline=SERVE_RING,
+        width=max(1, int(d * 0.12)),
+    )
 
 
 def _circle_mask(diameter: int) -> Image.Image:
