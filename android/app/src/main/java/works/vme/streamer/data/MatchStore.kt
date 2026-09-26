@@ -78,6 +78,11 @@ class MatchStore(context: Context) {
         opponentName: String,
         date: String = today(),
         tournament: String = "Streamed",
+        /** Set when this fixture came from VME, so events can be sent
+         *  back to the match they came from rather than to a path
+         *  rebuilt from these fields - which would not agree (see
+         *  [Match.vmeOrigin]). */
+        vmeOrigin: VmeOrigin? = null,
     ): Match {
         val sameDayCount = list().count { it.date == date && it.team == homeTeam.slug }
         val matchIndex = sameDayCount + 1
@@ -100,6 +105,7 @@ class MatchStore(context: Context) {
                 teamName = opponentName.trim().ifBlank { "Opponent" },
                 players = emptyList(),
             ),
+            vmeOrigin = vmeOrigin,
         )
     }
 

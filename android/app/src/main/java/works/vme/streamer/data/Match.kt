@@ -220,6 +220,26 @@ data class Match(
     /** Unix millis when the app pressed "start streaming". Used as the
      *  clock anchor for event timestamps on export. */
     val streamStartedAt: Long? = null,
+    /**
+     * The VME match this fixture was imported from, when it was.
+     *
+     * The phone cannot reconstruct VME's address for a match: it
+     * numbers the matches of a day from 01 while VME numbers from 00,
+     * so a fixture imported from `00_Mount_Si` was sent back to
+     * `01_Mount_Si` and the server had nothing there. Names, dates and
+     * tournaments can all be edited afterwards too. So the address is
+     * remembered verbatim at import rather than derived at send time.
+     */
+    val vmeOrigin: VmeOrigin? = null,
+)
+
+/** Where a match lives in VME: exactly the four path segments its API
+ *  is addressed by. */
+data class VmeOrigin(
+    val team: String,
+    val tournament: String,
+    val date: String,
+    val name: String,
 )
 
 /** Jersey label as it appears on buttons and in pickers for a *home*
@@ -267,6 +287,15 @@ fun matchFromJson(slug: String, obj: JSONObject): Match {
         youtubeBroadcastId = obj.optString("_youtube_broadcast_id").ifBlank { null },
         streamStartedAt = if (obj.has("_stream_started_at"))
             obj.optLong("_stream_started_at") else null,
+        vmeOrigin = obj.optJSONObject("_vme_origin")?.let { o ->
+            val name = o.optString("match").ifBlank { null }
+            if (name == null) null else VmeOrigin(
+                team = o.optString("team"),
+                tournament = o.optString("tournament"),
+                date = o.optString("date"),
+                name = name,
+            )
+        },
     )
 }
 
@@ -298,6 +327,16 @@ fun Match.toJson(): JSONObject {
     if (youtubeVideoUrl != null) obj.put("_youtube_video_url", youtubeVideoUrl)
     if (youtubeBroadcastId != null) obj.put("_youtube_broadcast_id", youtubeBroadcastId)
     if (streamStartedAt != null) obj.put("_stream_started_at", streamStartedAt)
+    // Underscore-prefixed, like every other phone-only field: VME's
+    // importer ignores what it does not know, and this is the phone's
+    // own bookkeeping about where the fixture came from.
+    if (vmeOrigin != null) {
+        obj.put("_vme_origin", JSONObject()
+            .put("team", vmeOrigin.team)
+            .put("tournament", vmeOrigin.tournament)
+            .put("date", vmeOrigin.date)
+            .put("match", vmeOrigin.name))
+    }
     return obj
 }
 

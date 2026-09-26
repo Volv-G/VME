@@ -17,10 +17,12 @@ import androidx.activity.ComponentActivity
 import androidx.core.content.FileProvider
 import works.vme.streamer.data.Match
 import works.vme.streamer.data.MatchStore
+import works.vme.streamer.data.PhotoCache
 import works.vme.streamer.data.Settings
 import works.vme.streamer.data.Team
 import works.vme.streamer.data.TeamStore
 import works.vme.streamer.data.VmeClient
+import works.vme.streamer.data.slugify
 import works.vme.streamer.data.toJson
 
 /**
@@ -205,6 +207,7 @@ class HomeActivity : ComponentActivity() {
         row.addView(label, LinearLayout.LayoutParams(
             0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
         ))
+        row.addView(secondaryButton("Copy") { cloneTeam(team) })
         row.addView(deleteButton { confirmDeleteTeam(team) })
         return row
     }
@@ -386,12 +389,20 @@ class HomeActivity : ComponentActivity() {
         toast("Sending ${events.length()} events...")
         Thread {
             val result = runCatching {
+                // Where VME keeps this match. For a fixture imported
+                // from VME that is the address it came from, kept
+                // verbatim; for a match created on the phone it is the
+                // one these fields describe. Rebuilding it from the
+                // phone's own numbering sent imported fixtures to a
+                // match that does not exist - the phone counts a day's
+                // matches from 01, VME from 00.
+                val origin = match.vmeOrigin
                 VmeClient.importEvents(
                     baseUrl = base,
-                    team = match.team,
-                    tournament = match.tournament,
-                    date = match.date,
-                    match = match.name,
+                    team = origin?.team ?: match.team,
+                    tournament = origin?.tournament ?: match.tournament,
+                    date = origin?.date ?: match.date,
+                    match = origin?.name ?: match.name,
                     events = events,
                     liberos = match.liberos,
                     replace = replace,
@@ -408,12 +419,98 @@ class HomeActivity : ComponentActivity() {
                     if (r.skipped.isNotEmpty()) parts.add("${r.skipped.size} skipped")
                     toast(parts.joinToString(", "))
                 }.onFailure { exc ->
-                    AlertDialog.Builder(this)
-                        .setTitle("Send failed")
-                        .setMessage(exc.message ?: exc.toString())
-                        .setPositiveButton("OK", null)
-                        .show()
+                    val msg = exc.message ?: exc.toString()
+                    // "The server has no such match" is the one failure
+                    // the operator can actually fix from here, so it
+                    // gets a way out rather than an error to write down.
+                    // Matches created before the fixture address was
+                    // recorded land here, as does anything renamed in
+                    // VME since.
+                    if (msg.contains("404") || msg.contains("Match not found")) {
+                        AlertDialog.Builder(this)
+                            .setTitle("No such match in VME")
+                            .setMessage("$msg\n\nPick the match these events belong to?")
+                            .setPositiveButton("Pick match...") { _, _ ->
+                                pickVmeTarget(match, replace)
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    } else {
+                        AlertDialog.Builder(this)
+                            .setTitle("Send failed")
+                            .setMessage(msg)
+                            .setPositiveButton("OK", null)
+                            .show()
+                    }
                 }
+            }
+        }.start()
+    }
+
+    /**
+     * Point a match at the VME fixture its events belong to, then send.
+     *
+     * Two pickers - tournament, then match - because that is how VME
+     * addresses a match and the phone cannot infer either one. The
+     * choice is saved on the match ([Match.vmeOrigin]), so a re-send or
+     * a later correction goes to the same place without asking again.
+     */
+    private fun pickVmeTarget(match: Match, replace: Boolean) {
+        val base = Settings.baseUrl(this)
+        val creds = Settings.credentials(this)
+        val team = match.vmeOrigin?.team ?: match.team
+        toast("Loading tournaments...")
+        Thread {
+            val tours = runCatching { VmeClient.listTournaments(base, team, creds) }
+            runOnUiThread {
+                tours.onSuccess { list ->
+                    if (list.isEmpty()) { toast("No tournaments for $team"); return@onSuccess }
+                    AlertDialog.Builder(this)
+                        .setTitle("Tournament")
+                        .setItems(list.toTypedArray()) { _, i ->
+                            pickVmeMatch(match, replace, team, list[i])
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }.onFailure { toast("Could not list tournaments: ${it.message}") }
+            }
+        }.start()
+    }
+
+    private fun pickVmeMatch(
+        match: Match, replace: Boolean, team: String, tournament: String,
+    ) {
+        val base = Settings.baseUrl(this)
+        val creds = Settings.credentials(this)
+        Thread {
+            val res = runCatching { VmeClient.listMatches(base, team, tournament, creds) }
+            runOnUiThread {
+                res.onSuccess { list ->
+                    if (list.isEmpty()) { toast("No matches in $tournament"); return@onSuccess }
+                    // The date is part of the label rather than a
+                    // filter: a match tagged past midnight, or a
+                    // fixture VME files under the day it was played,
+                    // would otherwise be hidden by an exact match.
+                    val labels = list.map { "${it.date}  ${it.label()}" }.toTypedArray()
+                    AlertDialog.Builder(this)
+                        .setTitle(tournament)
+                        .setItems(labels) { _, i ->
+                            val chosen = list[i]
+                            val updated = match.copy(
+                                vmeOrigin = works.vme.streamer.data.VmeOrigin(
+                                    team = team,
+                                    tournament = tournament,
+                                    date = chosen.date,
+                                    name = chosen.name,
+                                ),
+                            )
+                            matchStore.save(updated)
+                            refresh()
+                            sendMatch(updated, replace)
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }.onFailure { toast("Could not list matches: ${it.message}") }
             }
         }.start()
     }
@@ -433,6 +530,81 @@ class HomeActivity : ComponentActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    /**
+     * Duplicate a team, photos and all.
+     *
+     * For trying things against a real roster without risking it --
+     * renaming players, rewriting the stream templates, running a
+     * throwaway match -- and for the club that fields two sides from
+     * one squad, where the second roster starts as the first.
+     *
+     * The copy is independent on disk: its own team folder and its own
+     * photo directory, with the roster's absolute photo paths rewritten
+     * to point inside it. Sharing the image files would have meant a
+     * re-import of either team wiping the other's faces.
+     *
+     * Matches are not copied. A match already holds its own snapshot of
+     * the roster it was created with, so nothing here is left dangling,
+     * and cloning a season's worth of matches is not what "copy this
+     * team" asks for.
+     */
+    private fun cloneTeam(team: Team) {
+        val sourceName = team.roster.teamName.ifBlank { team.slug }
+        val input = android.widget.EditText(this).apply {
+            setText("$sourceName (copy)")
+            setSelection(text.length)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Copy team")
+            .setMessage("A new team with the same roster, colours, photos and stream settings.")
+            .setView(input)
+            .setPositiveButton("Copy") { _, _ ->
+                val name = input.text.toString().trim().ifBlank { "$sourceName (copy)" }
+                doCloneTeam(team, name)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun doCloneTeam(team: Team, newName: String) {
+        val slug = freeSlug(slugify(newName))
+        // Photos first: the rewritten roster paths have to point at
+        // files that already exist, or a failed copy would leave a
+        // roster claiming faces that are not there.
+        val photoDir = PhotoCache.copy(this, team.slug, slug)
+        fun remap(path: String?): String? =
+            path?.let { java.io.File(photoDir, java.io.File(it).name).absolutePath }
+        val roster = team.roster.copy(
+            teamName = newName,
+            localLogoPath = remap(team.roster.localLogoPath),
+            players = team.roster.players.map { p ->
+                p.copy(localPhotoPath = remap(p.localPhotoPath))
+            },
+        )
+        teamStore.save(
+            team.copy(
+                slug = slug,
+                roster = roster,
+                // Not imported from anywhere: this one came off the
+                // phone, and claiming a source URL would make a later
+                // re-import look like a refresh of the original.
+                sourceUrl = "",
+                importedAt = 0L,
+            )
+        )
+        refresh()
+        toast("Copied to $newName")
+    }
+
+    /** `slug`, or `slug_2`, `slug_3`... - the first one no team is
+     *  using. Two copies of the same team is a normal thing to want. */
+    private fun freeSlug(base: String): String {
+        if (teamStore.load(base) == null) return base
+        var n = 2
+        while (teamStore.load("${base}_$n") != null) n++
+        return "${base}_$n"
     }
 
     private fun confirmDeleteTeam(team: Team) {

@@ -20,6 +20,7 @@ import works.vme.streamer.data.Settings
 import works.vme.streamer.data.Team
 import works.vme.streamer.data.TeamStore
 import works.vme.streamer.data.VmeClient
+import works.vme.streamer.data.VmeOrigin
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -66,6 +67,8 @@ class MatchSetupActivity : ComponentActivity() {
      *  the match is created. Null when the fixture was typed by hand. */
     private var importedColor: String? = null
     private var importedLogo: ByteArray? = null
+    /** VME's address for the imported fixture. See [Match.vmeOrigin]. */
+    private var importedOrigin: VmeOrigin? = null
 
     private val knownTournaments: List<String> by lazy {
         MatchStore(this).list()
@@ -223,9 +226,17 @@ class MatchSetupActivity : ComponentActivity() {
         val date = dateInput.text.toString().trim()
         val tournament = tournamentInput.text.toString().trim()
             .ifBlank { DEFAULT_TOURNAMENT }
+        // The imported address only applies to the fixture that was
+        // imported: if the operator has since changed the date or the
+        // tournament, this is a different match and sending its events
+        // to the old one would file them under the wrong fixture.
+        val origin = importedOrigin?.takeIf {
+            it.date == date && it.tournament == tournament
+        }
         var match = MatchStore(this).createMatch(
             homeTeam = team, opponentName = opponent,
             date = date, tournament = tournament,
+            vmeOrigin = origin,
         )
         // Branding from a VME import, if there was one. Written here
         // rather than at import time because the badge is cached under
@@ -352,6 +363,16 @@ class MatchSetupActivity : ComponentActivity() {
                     tournamentInput.setText(meta.tournament)
                     importedColor = meta.opponentColor
                     importedLogo = meta.opponentLogo
+                    // VME's own address for this fixture, kept verbatim.
+                    // Everything else here is a display field the
+                    // operator may edit; this is the identifier events
+                    // go back to.
+                    importedOrigin = VmeOrigin(
+                        team = team.slug,
+                        tournament = tournament,
+                        date = meta.date,
+                        name = meta.name,
+                    )
                     toast(
                         "Imported ${meta.opponent}" +
                             (if (meta.opponentColor != null) ", colour" else "") +

@@ -123,6 +123,29 @@ object PhotoCache {
 
     /** Delete every cached photo for a team. Used when a re-import
      *  should not leave a departed player's face behind. */
+    /**
+     * Duplicate one team's cached photos under another slug.
+     *
+     * For cloning a team: the copy has to own its own image files, or
+     * re-importing the clone's roster -- which [clear]s its cache --
+     * would empty the original's faces too. Copying a dozen small
+     * files is cheap next to re-fetching them from the server, which
+     * may not even be reachable from the hall.
+     *
+     * Returns the destination directory so the caller can rewrite the
+     * absolute paths its roster carries.
+     */
+    fun copy(context: Context, fromSlug: String, toSlug: String): File {
+        val dest = dirFor(context, toSlug)
+        runCatching {
+            dest.deleteRecursively()
+            val src = dirFor(context, fromSlug)
+            if (src.isDirectory) src.copyRecursively(dest, overwrite = true)
+            else dest.mkdirs()
+        }
+        return dest
+    }
+
     fun clear(context: Context, teamSlug: String) {
         runCatching { dirFor(context, teamSlug).deleteRecursively() }
     }
