@@ -125,12 +125,24 @@ class MatchEvent:
         score = self.score_effect
         if isinstance(score, PointScoredEffect):
             team = score.team
-            if state.serving_team is not None and team is not state.serving_team:
-                new_state.rotate_team(team)
-            new_state.add_point(team)
-            new_state.serving_team = team
-            new_state.ball_served_since_last_score = False
-            new_state.last_score_frame = self.local_frame
+            if not state.ball_served_since_last_score and _tracks_serves(all_events):
+                # A point with no serve behind it is a correction, not a
+                # rally: nobody can win one that was never started, so
+                # this is the operator adding a point that went
+                # unrecorded. The score and the history strip move; the
+                # serve and the rotation stay where the actual rallies
+                # left them. Inventing a side-out here would seat the
+                # wrong player in the serving slot for the rest of the
+                # set - far harder to spot, and to unpick, than a wrong
+                # score. Mirrors the phone app's `onScore`.
+                new_state.add_point(team)
+            else:
+                if state.serving_team is not None and team is not state.serving_team:
+                    new_state.rotate_team(team)
+                new_state.add_point(team)
+                new_state.serving_team = team
+                new_state.ball_served_since_last_score = False
+                new_state.last_score_frame = self.local_frame
         elif isinstance(score, ScoreDeltaEffect):
             new_state.home_score = max(0, new_state.home_score + score.home_delta)
             new_state.away_score = max(0, new_state.away_score + score.away_delta)
@@ -180,3 +192,20 @@ class MatchEvent:
     def team(self) -> Optional[Team]:
         """Convenience accessor used by some renderers; returns None if N/A."""
         return getattr(self, "_team", None)
+
+
+def _tracks_serves(all_events: list["MatchEvent"]) -> bool:
+    """Does this match mark the start of rallies at all?
+
+    A log with no Ball Served in it cannot tell a rally from a
+    correction, so it keeps the original rule: every point moves the
+    serve. Without this, matches tagged before Ball Served was part of
+    the routine would replay with the serve frozen on whoever opened
+    the set - and with it, the rotation, which feeds ace attribution
+    and the libero check.
+
+    Scanned rather than stored because `apply` is a pure function of
+    (state, event, log) and the log is already in hand. A match is a
+    few hundred events; the whole replay is microseconds either way.
+    """
+    return any(isinstance(e.roster_effect, BallServedEffect) for e in all_events)

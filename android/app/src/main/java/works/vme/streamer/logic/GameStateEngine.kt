@@ -19,6 +19,9 @@ import works.vme.streamer.data.Side
  *     - +1 to that team's score.
  *     - Serve transfers to them.
  *     - `ball_served_since_last_score` resets to false.
+ *     - **Unless the ball was never served**, in which case the point
+ *       is a correction: the score moves, the serve and the rotation
+ *       do not. See [onScore].
  * - **ScoreCorrection** — apply `home_delta` / `away_delta` (never
  *   below zero). Does not touch serve or positions.
  * - **SetEnd** — whichever side leads takes the set; scores reset;
@@ -54,14 +57,26 @@ object GameStateEngine {
      *  (integer arithmetic, <100 events per match) to recompute on
      *  every mutation. */
     fun compute(events: List<MatchEvent>, liberos: Set<Int> = emptySet()): GameState {
+        // Does this match mark serves at all? A log with no Ball Served
+        // in it cannot distinguish a rally from a correction, so it
+        // keeps the old rule (every point moves the serve). Without
+        // this, a match tagged before Ball Served was part of the
+        // routine would replay with the serve frozen on whoever opened
+        // the set.
+        val tracksServes = events.any { it.type == EventType.BallServed }
         var s = GameState()
-        for (e in events) s = apply(s, e, liberos)
+        for (e in events) s = apply(s, e, liberos, tracksServes)
         return s
     }
 
     /** Apply one event, returning the next state. Kept public so a UI
      *  can preview the effect of a proposed event before committing. */
-    fun apply(state: GameState, e: MatchEvent, liberos: Set<Int> = emptySet()): GameState = when (e.type) {
+    fun apply(
+        state: GameState,
+        e: MatchEvent,
+        liberos: Set<Int> = emptySet(),
+        tracksServes: Boolean = true,
+    ): GameState = when (e.type) {
         EventType.GameStart -> state.copy(
             gameStarted = true, gameEnded = false, setScores = emptyList(),
         )
@@ -70,9 +85,9 @@ object GameStateEngine {
         EventType.FirstServe -> state.copy(servingTeam = teamOf(e))
         EventType.BallServed -> state.copy(ballServedSinceLastScore = true)
         EventType.Replay -> state.copy(ballServedSinceLastScore = false)
-        EventType.Score -> onScore(state, teamOf(e) ?: return state)
-        EventType.Kill -> onScore(state, teamOf(e) ?: return state)
-        EventType.Ace -> onScore(state, teamOf(e) ?: return state)
+        EventType.Score -> onScore(state, teamOf(e) ?: return state, tracksServes)
+        EventType.Kill -> onScore(state, teamOf(e) ?: return state, tracksServes)
+        EventType.Ace -> onScore(state, teamOf(e) ?: return state, tracksServes)
         EventType.ScoreCorrection -> onCorrection(state, e)
         EventType.Substitution -> onSubstitution(state, e, liberos)
         else -> state   // stat-only or timeline-only events
@@ -98,7 +113,31 @@ object GameStateEngine {
 
     // ---- individual transitions --------------------------------------
 
-    private fun onScore(state: GameState, winner: Side): GameState {
+    private fun onScore(
+        state: GameState,
+        winner: Side,
+        tracksServes: Boolean = true,
+    ): GameState {
+        // A point with no serve behind it is a correction, not a rally.
+        //
+        // Nobody can win a rally that was never started, so this is the
+        // operator fixing the score: a point that went unrecorded, or a
+        // tap on the wrong team a moment ago. The score moves and the
+        // history strip keeps its length, but the serve stays where the
+        // actual rallies left it and nobody rotates -- inventing a
+        // side-out here would put the wrong player in the serving slot
+        // for the rest of the set, which is much harder to notice than
+        // a wrong score and much harder to unpick.
+        if (tracksServes && !state.ballServedSinceLastScore) {
+            val (ch, ca) = if (winner == Side.Home)
+                (state.homeScore + 1) to state.awayScore
+            else state.homeScore to (state.awayScore + 1)
+            return state.copy(
+                homeScore = ch,
+                awayScore = ca,
+                pointHistory = state.pointHistory + (winner == Side.Home),
+            )
+        }
         val positions =
             if (state.servingTeam != null && winner != state.servingTeam && winner == Side.Home)
                 rotate(state.homePositions) else state.homePositions
