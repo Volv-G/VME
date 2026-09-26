@@ -179,6 +179,8 @@ export interface MatchDto {
    *  match between machines. */
   timeline_zoom: number;
   timeline_anchor_frame: number;
+  /** Where the playhead was left, as a global frame. */
+  playhead_frame: number;
 }
 
 /** Which engine uploads what, per team. */

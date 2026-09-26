@@ -146,6 +146,19 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       // Same-clip "switch" still needs to honour the requested seek.
       const v = videoRef.current;
       if (v && clips[newIdx]) {
+        // ...but only once the element knows how long it is. Assigning
+        // `currentTime` at readyState 0 is dropped on the floor, and
+        // this is the ordinary case at mount: the first clip is already
+        // the active one, so a seek arriving before its metadata - the
+        // editor restoring where the playhead was left, or a click on an
+        // event straight after load - silently did nothing. Hand it to
+        // the same pending-seek slot a clip switch uses; it is applied
+        // in `handleLoadedMetadata`.
+        if (v.readyState < 1) {
+          pendingSeekRef.current = localSeekFrame;
+          playOnLoadRef.current = autoPlay;
+          return;
+        }
         targetFrameRef.current = localSeekFrame;
         v.currentTime = timeForFrame(localSeekFrame, clips[newIdx].fps || fps);
         if (autoPlay && !lockRef.current) void v.play();

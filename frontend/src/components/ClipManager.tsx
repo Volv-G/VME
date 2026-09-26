@@ -20,6 +20,50 @@ interface Props {
   ) => Promise<string[]>;
   onReorder: (ids: string[]) => Promise<void>;
   onDelete: (clipId: string) => Promise<void>;
+  /** Correct a clip's recording time (Unix seconds, or null for
+   *  "unknown"). `shiftFollowing` applies the same correction to every
+   *  later clip - what a camera with a wrong clock needs. */
+  onSetClipTime: (
+    clipId: string,
+    startRecordingTime: number | null,
+    shiftFollowing: boolean
+  ) => Promise<void>;
+}
+
+/**
+ * "23 Sep 2026, 17:18:49.89" in local time, or "unknown".
+ *
+ * Hundredths are shown only when there are any. At 60fps half a second
+ * is thirty frames, so the fraction is the difference between an event
+ * landing on the right rally and the one before it - but printing
+ * ".00" on every clip ffprobe reported to the second is noise.
+ */
+function formatClipStart(seconds: number | null | undefined): string {
+  if (seconds == null) return "unknown";
+  const d = new Date(seconds * 1000);
+  const base = d.toLocaleString(undefined, {
+    day: "numeric", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  const ms = d.getMilliseconds();
+  if (ms === 0) return base;
+  // Splice the fraction in after the seconds rather than reformatting:
+  // the locale decides where the seconds are and what follows them.
+  const frac = String(Math.round(ms / 10)).padStart(2, "0");
+  return base.replace(/(\d{1,2}:\d{2}:\d{2})/, `$1.${frac}`);
+}
+
+/** Unix seconds -> the value a `datetime-local` input wants: local
+ *  time, no zone marker, no trailing Z. Milliseconds included, because
+ *  the input is stepped finer than a second. */
+function toLocalInput(seconds: number): string {
+  const d = new Date(seconds * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const ms = String(d.getMilliseconds()).padStart(3, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${ms}`
+  );
 }
 
 /** Queue row state machine:
@@ -47,6 +91,7 @@ export function ClipManager({
   onImportPath,
   onReorder,
   onDelete,
+  onSetClipTime,
 }: Props) {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -63,6 +108,63 @@ export function ClipManager({
   const [importBusy, setImportBusy] = useState(false);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+
+  // Recording-time editor: the clip being corrected, plus its draft.
+  const [editing, setEditing] = useState<ClipDto | null>(null);
+  const [timeDraft, setTimeDraft] = useState("");
+  const [shiftFollowing, setShiftFollowing] = useState(true);
+  const [timeBusy, setTimeBusy] = useState(false);
+
+  function openEditor(c: ClipDto) {
+    setEditing(c);
+    setTimeDraft(
+      c.start_recording_time != null ? toLocalInput(c.start_recording_time) : ""
+    );
+    // Defaulted OFF. The two reasons a time is wrong pull in opposite
+    // directions: a camera clock is wrong by the same amount for every
+    // file it wrote (shift them all), while an editor export is wrong
+    // on its own (shift nothing else). Guessing the first and being
+    // wrong drags every other clip hours out of place, so the operator
+    // opts in - with the consequence spelled out below.
+    setShiftFollowing(false);
+  }
+
+  // The clips a shift would move, and where it would put them.
+  const PREVIEW_ROWS = 4;
+  const shiftDelta = (() => {
+    if (!editing || !timeDraft || editing.start_recording_time == null) return null;
+    const next = new Date(timeDraft).getTime() / 1000;
+    if (Number.isNaN(next)) return null;
+    return next - editing.start_recording_time;
+  })();
+  const following = editing
+    ? clips
+        .slice(clips.findIndex((c) => c.id === editing.id) + 1)
+        .filter((c) => c.start_recording_time != null)
+    : [];
+  const shiftPreview =
+    shiftDelta === null
+      ? []
+      : following.slice(0, PREVIEW_ROWS).map((c) => ({
+          filename: c.filename,
+          when: formatClipStart((c.start_recording_time as number) + shiftDelta),
+        }));
+  const shiftMore = Math.max(0, following.length - PREVIEW_ROWS);
+
+  async function saveClipTime() {
+    if (!editing) return;
+    // An empty field means "unknown" rather than "epoch": a clip with no
+    // time is a real state, and it is better than a fabricated one.
+    const seconds = timeDraft ? new Date(timeDraft).getTime() / 1000 : null;
+    if (seconds !== null && Number.isNaN(seconds)) return;
+    setTimeBusy(true);
+    try {
+      await onSetClipTime(editing.id, seconds, shiftFollowing);
+      setEditing(null);
+    } finally {
+      setTimeBusy(false);
+    }
+  }
 
   function syncQueue(next: QueueItem[]) {
     queueRef.current = next;
@@ -367,6 +469,20 @@ export function ClipManager({
                 {c.frame_count} frames @ {c.fps.toFixed(2)} fps - {c.width}×
                 {c.height}
               </div>
+              <div className="row-meta">
+                {/* Recording time is invisible until it is wrong, and when
+                    it is wrong every imported event lands on the wrong
+                    frame - so it is shown on every row, not hidden behind
+                    the edit. */}
+                recorded {formatClipStart(c.start_recording_time)}{" "}
+                <button
+                  className="clip-time-edit"
+                  onClick={() => openEditor(c)}
+                  disabled={busy}
+                >
+                  edit
+                </button>
+              </div>
             </div>
             <div className="toolbar">
               <button onClick={() => move(i, -1)} disabled={i === 0 || busy}>
@@ -476,6 +592,76 @@ export function ClipManager({
           >
             {importBusy ? "Importing…" : "Import"}
           </button>
+        </div>
+      </Modal>
+
+      <Modal
+        open={editing !== null}
+        title={`Recording time - ${editing?.filename ?? ""}`}
+        onClose={() => setEditing(null)}
+        width="min(560px, 92vw)"
+      >
+        <p className="muted" style={{ marginTop: 0 }}>
+          When this clip started recording. Events imported from the phone
+          are placed by wall clock, so a wrong time here puts them on the
+          wrong frames - or on frame zero. Cameras that write local time
+          into a field meant for UTC, and editor exports carrying the time
+          they were exported, are the usual culprits.
+        </p>
+        <label style={{ display: "block", marginBottom: 10 }}>
+          Started recording
+          <br />
+          <input
+            type="datetime-local"
+            // Milliseconds, not seconds: a frame at 60fps is 17ms, and
+            // the times worth correcting by hand are read off an editor
+            // that quotes hundredths.
+            step="0.001"
+            value={timeDraft}
+            onChange={(e) => setTimeDraft(e.target.value)}
+            style={{ width: "100%" }}
+          />
+        </label>
+        <label style={{ display: "block", marginBottom: 12, fontSize: 13 }}>
+          <input
+            type="checkbox"
+            checked={shiftFollowing}
+            onChange={(e) => setShiftFollowing(e.target.checked)}
+          />{" "}
+          Move every later clip by the same amount
+          <span className="muted"> - for a camera whose clock was wrong all match</span>
+        </label>
+        {/* What that would actually do. A shift is the difference
+            between the old time and the new one, and applied to a clip
+            whose time was wrong for an unrelated reason it drags the
+            rest of the match hours away - visibly, here, before the
+            save rather than after it. */}
+        {shiftFollowing && shiftPreview.length > 0 && (
+          <div className="muted" style={{ marginBottom: 12, fontSize: 12 }}>
+            {shiftPreview.map((p) => (
+              <div key={p.filename}>
+                {p.filename} → {p.when}
+              </div>
+            ))}
+            {shiftMore > 0 && <div>…and {shiftMore} more</div>}
+          </div>
+        )}
+        <div className="toolbar" style={{ justifyContent: "space-between" }}>
+          <button
+            onClick={() => setTimeDraft("")}
+            disabled={timeBusy || !timeDraft}
+            title="Forget the recording time for this clip"
+          >
+            Clear
+          </button>
+          <span>
+            <button onClick={() => setEditing(null)} disabled={timeBusy}>
+              Cancel
+            </button>{" "}
+            <button className="primary" onClick={saveClipTime} disabled={timeBusy}>
+              {timeBusy ? "Saving…" : "Save"}
+            </button>
+          </span>
         </div>
       </Modal>
     </div>

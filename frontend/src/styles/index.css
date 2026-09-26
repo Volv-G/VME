@@ -291,7 +291,11 @@ label {
   border-bottom: 1px solid var(--border);
 }
 .event-search input {
-  flex: 1;
+  flex: 1 1 0;
+  /* Flex items refuse to shrink past their intrinsic width unless told,
+     and a text input's is about twenty characters - so the input held
+     its size and pushed Shift and Clear out of the pane instead. */
+  min-width: 0;
   font-size: 12px;
   padding: 4px 8px;
 }
@@ -942,7 +946,10 @@ label {
 }
 .score-display .serve-dot {
   margin-left: 4px;
-  color: var(--warn);
+  /* The same yellow the rendered scoreboard and the phone's stream
+     use for the serve, rather than the UI's amber warning colour:
+     the three surfaces mark the same thing and should agree. */
+  color: #ffd100;
 }
 
 /* --- Team card --- */
@@ -1218,6 +1225,92 @@ label {
   color: var(--text-dim);
   min-width: 110px;
 }
+
+/* Point steppers, one at each end of the scoreboard. Quiet until
+   hovered: they flank the number the eye actually comes here for, and
+   two bright arrows either side of the score would compete with it. */
+.score-step {
+  flex: 0 0 auto;
+  align-self: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 6px 7px;
+  cursor: pointer;
+}
+.score-step:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--bg-elev-2);
+}
+
+/* Editor error banner. Fixed, centred and loud: it reports a tap that
+   did NOT reach the server, and the operator is looking at the court,
+   not the screen. Stays until dismissed - an auto-hiding toast is the
+   same silence with extra steps. */
+.editor-error {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: min(720px, 92vw);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #4a1d1d;
+  color: #ffd9d9;
+  border: 1px solid var(--danger, #f85149);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+}
+.editor-error button {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+/* Shift and Clear all live at the end of the event search bar, pushed
+   right so neither sits against the field it shares a row with - a
+   destructive button beside a text input invites the wrong click.
+   Shift is not styled as a danger: it moves events, it does not lose
+   them, and it is undone by shifting back.
+
+   Both are the fixed part of the row and never shrink or wrap; the
+   search field is the elastic one. Whichever comes first carries the
+   `auto` margin, so the pair stays right-aligned when only one of them
+   is rendered. */
+.event-shift-all,
+.event-clear-all {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  margin-left: auto;
+  font-size: 11px;
+  padding: 3px 7px;
+}
+.event-shift-all + .event-clear-all { margin-left: 0; }
+
+/* The recording time on a clip row reads as metadata; its edit is a
+   quiet link rather than a third button competing with Delete. */
+.clip-time-edit {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font: inherit;
+  color: var(--accent, #6aa6ff);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.clip-time-edit:disabled { color: var(--text-dim); cursor: default; }
 
 /* ---- Phones ----------------------------------------------------------
    Everything above is laid out for a desktop. Below 640px the page and

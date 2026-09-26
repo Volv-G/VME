@@ -12,6 +12,8 @@ import { EMPTY_STATE } from "./Controls/state";
 import { analyzeCuts } from "./cutAnalysis";
 import { analyzeFocus } from "./focusAnalysis";
 import { GAP_CUT_PAD_SECONDS, analyzeServeGaps } from "./serveGaps";
+import { analyzeLiberoSwaps, type LiberoSwap } from "./liberoSwaps";
+import { analyzeAceServers } from "./aceServers";
 import { summarizeEvent } from "./eventSummary";
 import { eventIcon } from "./eventStyle";
 
@@ -32,6 +34,14 @@ interface Props {
    *  it lands one frame past its new neighbour. Optional: without it
    *  rows are not draggable at all, rather than draggable and inert. */
   onMove?: (id: number, afterId: number | null) => Promise<void>;
+  /** Delete every event on the match. Optional: without it the button
+   *  is not rendered at all. The caller owns the confirmation. */
+  onClearAll?: () => void;
+  /** Open the global shift dialog. Optional, same rule. */
+  onShiftAll?: () => void;
+  /** The match's libero jerseys, for spotting a libero substitution
+   *  whose two halves drifted apart. Without them nothing is flagged. */
+  liberos?: readonly number[];
   onSeek: (globalFrame: number) => void;
   /**
    * Insert a cut_start/cut_end pair over a global-frame span. Optional:
@@ -54,6 +64,9 @@ export function EventList({
   onDelete,
   onNudge,
   onMove,
+  onClearAll,
+  onShiftAll,
+  liberos,
   onSeek,
   onInsertCut,
   fps,
@@ -140,6 +153,33 @@ export function EventList({
       }
     },
     [onInsertCut, cuttingId]
+  );
+
+  // Libero exit/entry pairs that drifted apart, and the same one-at-a-
+  // time guard: the list only re-analyzes once the match comes back, so
+  // a second click before then would be aimed at stale positions.
+  const [aligningId, setAligningId] = useState<number | null>(null);
+  // Aces credited to somebody who was not serving. Pure inspection, so
+  // no busy state and no action - the fix is a judgement about which of
+  // the two records is wrong.
+  const aceMismatches = useMemo(() => analyzeAceServers(events), [events]);
+  const liberoSwaps = useMemo(
+    () => (onMove ? analyzeLiberoSwaps(events, liberos ?? [], fps) : new Map()),
+    [events, liberos, fps, onMove]
+  );
+  const alignSwap = useCallback(
+    async (swap: LiberoSwap) => {
+      if (!onMove || aligningId !== null) return;
+      setAligningId(swap.id);
+      try {
+        // Onto the exit, which lands it one frame later - the same dead
+        // ball, and it keeps the pair in the order they happened.
+        await onMove(swap.id, swap.anchorId);
+      } finally {
+        setAligningId(null);
+      }
+    },
+    [onMove, aligningId]
   );
 
   // Pre-compute summary strings so the empty-list check below still has a
@@ -325,6 +365,29 @@ export function EventList({
             </div>
           </>
         )}
+        {/* Only offered when the caller can actually do it, and only
+            when there is something to clear - a live "Clear all" on an
+            empty list is a trap with no upside. */}
+        {onShiftAll && events.length > 0 && !trimmed && (
+          <button
+            type="button"
+            className="event-shift-all"
+            onClick={onShiftAll}
+            title="Move every event earlier or later, together"
+          >
+            ⇄ Shift
+          </button>
+        )}
+        {onClearAll && events.length > 0 && !trimmed && (
+          <button
+            type="button"
+            className="danger event-clear-all"
+            onClick={onClearAll}
+            title="Delete every event on this match"
+          >
+            Clear all
+          </button>
+        )}
       </div>
 
       {events.length === 0 && (
@@ -335,6 +398,8 @@ export function EventList({
         const summary = summaries[i];
         const isOrphan = orphanIds.has(ev.id);
         const gap = serveGaps.get(ev.id);
+        const swap = liberoSwaps.get(ev.id) as LiberoSwap | undefined;
+        const aceBad = aceMismatches.get(ev.id);
         const gapLabel = gap === undefined ? null : `${gap.seconds.toFixed(1)}s`;
         const canCut = !!gap?.cut && !!onInsertCut;
         const gapReason =
@@ -433,6 +498,18 @@ export function EventList({
             <div className="event-row-body">
               <div className="event-row-text" title={title}>
                 {isOrphan && <span className="orphan-badge" title={orphanReason}>!</span>}
+                {aceBad && (
+                  <span
+                    className="orphan-badge"
+                    title={
+                      `Credited to #${aceBad.credited}, but #${aceBad.server} was ` +
+                      "serving. An ace is won by the server, so one of the two " +
+                      "is wrong - check the rotation around this point."
+                    }
+                  >
+                    !
+                  </span>
+                )}
                 {isOpenEnded && (
                   <span className="open-cut-badge" title={title}>⇥</span>
                 )}
@@ -457,6 +534,27 @@ export function EventList({
                       ⚠ {gapLabel}
                     </span>
                   )
+                )}
+                {swap && (
+                  <button
+                    type="button"
+                    className="gap-badge actionable"
+                    title={
+                      `This is the other half of the #${swap.jersey} libero ` +
+                      `substitution ${swap.seconds.toFixed(1)}s earlier - one ` +
+                      "swap at one dead ball, logged as two moments.\n" +
+                      "Click to move it back onto that one."
+                    }
+                    disabled={aligningId !== null}
+                    onClick={(e) => {
+                      // The row seeks on click; aligning shouldn't drag
+                      // the playhead along with it.
+                      e.stopPropagation();
+                      void alignSwap(swap);
+                    }}
+                  >
+                    {aligningId === ev.id ? "…" : "⇡"} {swap.seconds.toFixed(1)}s
+                  </button>
                 )}
                 <span className="event-row-icon" aria-hidden="true">
                   {eventIcon(ev.type)}

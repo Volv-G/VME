@@ -6,12 +6,39 @@ interface Props {
   opponentName: string;
   homeColor?: string | null;
   opponentColor?: string | null;
+  /**
+   * Jump the playhead to the previous / next point.
+   *
+   * On the scoreboard because that is what they navigate: the score is
+   * the thing that changes at each one, and reviewing a match is mostly
+   * hopping point to point. Optional - without them the arrows are not
+   * rendered rather than rendered dead.
+   */
+  onStepPoint?: (dir: 1 | -1) => void;
 }
 
-export function ScoreDisplay({ state, homeName, opponentName, homeColor, opponentColor }: Props) {
+export function ScoreDisplay({
+  state,
+  homeName,
+  opponentName,
+  homeColor,
+  opponentColor,
+  onStepPoint,
+}: Props) {
   const serving = state.serving_team;
   return (
     <div className="score-display">
+      {onStepPoint && (
+        <button
+          type="button"
+          className="score-step"
+          onClick={() => onStepPoint(-1)}
+          title="Previous point (score, kill or ace)"
+          aria-label="Previous point"
+        >
+          ◀
+        </button>
+      )}
       <div className="score-side">
         <div className="score-label" style={homeColor ? { color: homeColor } : undefined}>
           {homeName}
@@ -32,6 +59,17 @@ export function ScoreDisplay({ state, homeName, opponentName, homeColor, opponen
         <div className="score-points">{state.away_score}</div>
         <div className="score-sets">sets {state.away_sets}</div>
       </div>
+      {onStepPoint && (
+        <button
+          type="button"
+          className="score-step"
+          onClick={() => onStepPoint(1)}
+          title="Next point (score, kill or ace)"
+          aria-label="Next point"
+        >
+          ▶
+        </button>
+      )}
     </div>
   );
 }

@@ -39,6 +39,9 @@ interface Props {
    * the prompt, because that is where the roster picker lives.
    */
   liberoCheckFrame?: number | null;
+  /** Jump the playhead to the previous / next point, for the arrows
+   *  on the scoreboard. */
+  onStepPoint?: (dir: 1 | -1) => void;
   /** Called once the rule has been applied or dismissed. */
   onLiberoChecked?: () => void;
   /** Persist the libero designation for this match (PATCH liberos). */
@@ -154,6 +157,7 @@ export function ControlsPanel({
   onAutoCuts,
   onTeamColorChange,
   liberoCheckFrame,
+  onStepPoint,
   onLiberoChecked,
   onLiberosChange,
   onPlaybackLock,
@@ -410,6 +414,7 @@ export function ControlsPanel({
         opponentName={opponentName}
         homeColor={data.home_roster.team_color}
         opponentColor={data.opponent_roster.team_color}
+        onStepPoint={onStepPoint}
       />
 
       {err && <div className="error" style={{ marginBottom: 8 }}>{err}</div>}

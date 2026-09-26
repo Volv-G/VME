@@ -36,6 +36,11 @@ const MIN_ZOOM = 1;
 // viewport so the canvas backing store can never exceed the browser's
 // max canvas size - see `maxZoom` below.
 const MAX_ZOOM = 200;
+// Frames to keep holding a restored scroll position. At 60Hz this is
+// about a second and a half - long enough to outlast a slow first
+// paint and the browser's own scroll restoration, short enough to be
+// over before anyone reaches for the timeline.
+const RESTORE_MAX_TRIES = 90;
 const TICK_TARGET_PX = 90;
 // Hard ceiling on canvas pixel dimensions. Browsers reject canvases
 // larger than this (Chrome/Edge ~16384 px per side, Safari sometimes
@@ -94,6 +99,10 @@ export function Timeline({
   // from the server would yank the view out from under the user.
   const restoredRef = useRef(false);
   const pendingRestoreRef = useRef<{ zoom: number; frame: number } | null>(null);
+  // Set by the first real gesture on the timeline. Until then the view
+  // on screen is the stored one, not a choice, and saving it back is
+  // at best a no-op and at worst overwrites it with a failed restore.
+  const userMovedRef = useRef(false);
 
   // After a zoom change we want to keep a specific frame stuck under the
   // cursor. The handler stashes target details here; a layout effect applies
@@ -139,11 +148,16 @@ export function Timeline({
   useEffect(() => {
     if (!containerRef.current) return;
     const el = containerRef.current;
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const w = Math.floor(entry.contentRect.width);
-        if (w > 0 && w !== viewWidth) setViewWidth(w);
-      }
+    const ro = new ResizeObserver(() => {
+      // `clientWidth`, NOT `contentRect.width`. They measure the same
+      // box here, but the browser rounds one and we would be flooring
+      // the other, so on a fractional width - which Windows display
+      // scaling and flex layout produce constantly - they disagree by a
+      // pixel forever. Everything else in this component scrolls
+      // against `clientWidth` (`scrollWidth - clientWidth` is the
+      // maximum `scrollLeft`), so that is the metric to store.
+      const w = el.clientWidth;
+      if (w > 0 && w !== viewWidth) setViewWidth(w);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -441,7 +455,13 @@ export function Timeline({
     // a guess of 800, and restoring against that lands on the wrong
     // frame - the anchor is converted to pixels with it, so a 1146px
     // container was scrolled as though it were 800.
-    if (container.clientWidth === 0 || container.clientWidth !== viewWidth) return;
+    // Within a pixel, not exactly equal: the measured width reaching
+    // state is what this waits for, and holding out for an exact match
+    // meant a single pixel of rounding disagreement stopped the restore
+    // from ever running - silently, on exactly the machines whose
+    // layout produces fractional widths.
+    if (container.clientWidth === 0) return;
+    if (Math.abs(container.clientWidth - viewWidth) > 2) return;
     restoredRef.current = true;
     const z = clamp(savedZoom ?? 1, MIN_ZOOM, maxZoom);
     pendingRestoreRef.current = { zoom: z, frame: savedAnchorFrame ?? 0 };
@@ -461,18 +481,41 @@ export function Timeline({
     const container = containerRef.current;
     if (!target || !container || totalFrames === 0) return;
     if (Math.abs(zoom - target.zoom) > 1e-6) return;
-    const apply = () => {
-      container.scrollLeft = clamp(
-        (target.frame / totalFrames) * contentWidth,
-        0,
-        Math.max(0, container.scrollWidth - container.clientWidth),
-      );
+    // Measured against the width the canvas is ABOUT to have, not the
+    // one it has: `contentWidth` is derived from zoom in this same
+    // render, while `scrollWidth` only catches up once the canvas has
+    // been resized and laid out.
+    const want = clamp(
+      (target.frame / totalFrames) * contentWidth,
+      0,
+      Math.max(0, contentWidth - viewWidth),
+    );
+    let raf = 0;
+    let tries = 0;
+    const step = () => {
+      container.scrollLeft = want;
+      // The browser clamps `scrollLeft` to what is laid out so far, so
+      // on a heavy page - a long match, hundreds of events, a video
+      // decoding beside it - a single attempt lands short, or at zero.
+      // That is what "the position is not remembered" looks like: the
+      // restore quietly fails, and 900ms later the debounced save
+      // writes the failure back over the stored anchor. Retrying until
+      // the value sticks costs a handful of frames and removes the
+      // whole class of failure.
+      tries += 1;
+      // Holds the position for the whole window rather than stopping at
+      // the first frame that sticks. Browsers restore their own
+      // remembered scroll offsets on a reload, asynchronously and after
+      // load, and whichever write lands last wins - so the restore has
+      // to still be there when that happens. A gesture ends it
+      // immediately; nothing here ever fights the user.
+      if (userMovedRef.current || tries >= RESTORE_MAX_TRIES) {
+        pendingRestoreRef.current = null;
+        return;
+      }
+      raf = requestAnimationFrame(step);
     };
-    apply();
-    const raf = requestAnimationFrame(() => {
-      apply();
-      pendingRestoreRef.current = null;
-    });
+    step();
     return () => cancelAnimationFrame(raf);
   }, [zoom, contentWidth, viewWidth, totalFrames]);
 
@@ -486,11 +529,17 @@ export function Timeline({
     const container = containerRef.current;
     if (!container) return;
     let timer: number | undefined;
+    // Only a gesture makes a view worth saving. Without this, simply
+    // opening a match writes back whatever the restore managed to
+    // reach -- so one failed restore would erase the stored position
+    // rather than being corrected on the next load.
+    const touched = () => { userMovedRef.current = true; };
     const schedule = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         const v = viewRef.current;
         if (!restoredRef.current || !v.onViewChange || v.totalFrames === 0) return;
+        if (!userMovedRef.current) return;
         // A restore still in flight means the scroll position on screen
         // is not the user's yet. Saving here would write a 0 over the
         // stored anchor - losing the very thing being restored.
@@ -502,10 +551,16 @@ export function Timeline({
       }, 900);
     };
     container.addEventListener("scroll", schedule, { passive: true });
+    for (const ev of ["wheel", "pointerdown", "touchstart", "keydown"]) {
+      container.addEventListener(ev, touched, { passive: true });
+    }
     schedule(); // also covers a zoom change, which re-runs this effect
     return () => {
       window.clearTimeout(timer);
       container.removeEventListener("scroll", schedule);
+      for (const ev of ["wheel", "pointerdown", "touchstart", "keydown"]) {
+        container.removeEventListener(ev, touched);
+      }
     };
   }, [zoom]);
 

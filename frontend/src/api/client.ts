@@ -35,12 +35,43 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   // `...init` first: spreading it after `headers` would replace the
   // merged object wholesale with the caller's own, silently dropping
   // the content type for anyone who passes a header of their own.
-  const res = await fetch(`${BASE}${path}`, { ...init, headers });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+  // Retried only where a retry cannot do damage: a request that never
+  // arrived, or a proxy saying it could not reach the app. Anything the
+  // app itself answered - including a 500 - is reported as-is, because
+  // a handler that got far enough to fail may also have got far enough
+  // to save, and repeating it would duplicate the event.
+  //
+  // A body-carrying method is never retried here for the same reason;
+  // creating an event retries at the caller, where it can first ask the
+  // server whether the last attempt landed (see `createWithRetry`).
+  const method = (init?.method ?? "GET").toUpperCase();
+  const retriable = method === "GET" || method === "HEAD";
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < (retriable ? 3 : 1); attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 200 * attempt));
+    let res: Response;
+    try {
+      res = await fetch(`${BASE}${path}`, { ...init, headers });
+    } catch (e) {
+      // `fetch` rejects only when the request did not complete - dropped
+      // wifi, a closed socket - so nothing was processed.
+      lastErr = e;
+      continue;
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      const err = new Error(`${res.status} ${res.statusText}: ${text}`);
+      // 502/503/504 come from the proxy in front of the app, so the app
+      // never saw the request; 408 is the request itself timing out.
+      if (retriable && [408, 502, 503, 504].includes(res.status)) {
+        lastErr = err;
+        continue;
+      }
+      throw err;
+    }
+    return res.json() as Promise<T>;
   }
-  return res.json() as Promise<T>;
+  throw lastErr ?? new Error(`${method} ${path} failed`);
 }
 
 const enc = encodeURIComponent;
@@ -583,6 +614,29 @@ export const api = {
       { method: "PUT", body: JSON.stringify({ clip_ids: clipIds }) }
     );
   },
+  /** Correct a clip's recording time. `startRecordingTime` is Unix
+   *  seconds, or null for "unknown"; `shiftFollowing` applies the same
+   *  correction to every later clip. */
+  async setClipTime(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    clipId: string,
+    startRecordingTime: number | null,
+    shiftFollowing: boolean
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(
+      `${matchBase(team, tournament, date, match)}/clips/${clipId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          start_recording_time: startRecordingTime,
+          shift_following: shiftFollowing,
+        }),
+      }
+    );
+  },
   async deleteClip(
     team: string,
     tournament: string,
@@ -635,6 +689,33 @@ export const api = {
     return fetchJson<MatchDto>(
       `${matchBase(team, tournament, date, match)}/events/${eventId}`,
       { method: "PATCH", body: JSON.stringify(body) }
+    );
+  },
+  /** Move every timestamped event by `seconds` (negative = earlier).
+   *  Clip transitions stay put. */
+  async shiftEvents(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    seconds: number
+  ): Promise<{ moved: number; clamped: number; match: MatchDto }> {
+    return fetchJson(
+      `${matchBase(team, tournament, date, match)}/events/shift`,
+      { method: "POST", body: JSON.stringify({ seconds }) }
+    );
+  },
+  /** Empty the event list. Clip transitions survive - they are
+   *  structure, not tagging. */
+  async clearEvents(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string
+  ): Promise<MatchDto> {
+    return fetchJson<MatchDto>(
+      `${matchBase(team, tournament, date, match)}/events`,
+      { method: "DELETE" }
     );
   },
   async deleteEvent(

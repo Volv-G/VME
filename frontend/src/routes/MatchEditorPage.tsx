@@ -100,7 +100,12 @@ export function MatchEditorPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  /** Set by any deliberate move of the playhead, so a saved position of
+   *  frame 0 can be told apart from a video that never loaded. */
+  const playheadMovedRef = useRef(false);
+
   function seek(globalFrame: number) {
+    playheadMovedRef.current = true;
     setCurrentFrame(globalFrame);
     playerRef.current?.seekToGlobalFrame(globalFrame);
   }
@@ -139,6 +144,72 @@ export function MatchEditorPage() {
   async function deleteClip(id: string) {
     setData(await api.deleteClip(team, tournament, date, match, id));
   }
+
+  async function setClipTime(
+    id: string,
+    startRecordingTime: number | null,
+    shiftFollowing: boolean
+  ) {
+    setData(
+      await api.setClipTime(
+        team, tournament, date, match, id, startRecordingTime, shiftFollowing
+      )
+    );
+  }
+
+  // Global shift: the dialog, its draft offset, and what the last one
+  // did. Kept here rather than in the list because the list is a list.
+  const [shiftOpen, setShiftOpen] = useState(false);
+  const [shiftDraft, setShiftDraft] = useState("-0.5");
+  const [shiftBusy, setShiftBusy] = useState(false);
+  const [shiftResult, setShiftResult] = useState<string | null>(null);
+
+  async function applyShift(seconds: number) {
+    if (!seconds || shiftBusy) return;
+    setShiftBusy(true);
+    try {
+      const r = await api.shiftEvents(team, tournament, date, match, seconds);
+      setData(r.match);
+      setShiftResult(
+        `Moved ${r.moved} event${r.moved === 1 ? "" : "s"} ` +
+          `${seconds > 0 ? "later" : "earlier"} by ${Math.abs(seconds)}s` +
+          (r.clamped
+            ? `. ${r.clamped} landed outside the footage and were pulled ` +
+              "back to the nearest frame."
+            : ".")
+      );
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setShiftBusy(false);
+    }
+  }
+
+  /**
+   * Delete every event on the match.
+   *
+   * Behind a confirmation that names the count, because the undo is
+   * "re-tag the match" - and the usual reason to be here is a botched
+   * phone import, where the next step is re-importing onto a clean
+   * match rather than deleting three hundred rows one at a time.
+   */
+  function clearAllEvents() {
+    const n = data?.events.length ?? 0;
+    if (n === 0) return;
+    if (
+      !window.confirm(
+        `Delete all ${n} event${n === 1 ? "" : "s"} on this match?\n\n` +
+          "Clip transitions are kept. This cannot be undone."
+      )
+    ) {
+      return;
+    }
+    void (async () => {
+      setData(await api.clearEvents(team, tournament, date, match));
+      setSelectedEventId(null);
+    })();
+  }
   /**
    * The event before / after the playhead, in timeline order.
    *
@@ -146,12 +217,24 @@ export function MatchEditorPage() {
    * one you are already on, so stepping onto it again would be a button
    * that looks broken.
    */
-  function adjacentEvent(dir: 1 | -1) {
-    const placed = (data?.events ?? []).filter((e) => e.global_frame != null);
+  function adjacentEvent(dir: 1 | -1, types?: ReadonlySet<string>) {
+    const placed = (data?.events ?? []).filter(
+      (e) => e.global_frame != null && (!types || types.has(e.type))
+    );
     return dir > 0
       ? placed.find((e) => (e.global_frame as number) > currentFrame)
       : [...placed].reverse().find((e) => (e.global_frame as number) < currentFrame);
   }
+
+  /**
+   * Every way a point is put on the board.
+   *
+   * A `score` is the plain +1, used for every point the opponent wins
+   * and for ours when nobody was credited; a kill and an ace are our
+   * points with a player attached. Stepping by "points" has to mean all
+   * three or it skips half the match.
+   */
+  const POINT_TYPES: ReadonlySet<string> = new Set(["score", "kill", "ace"]);
 
   /**
    * Open the panels on the event the video is sitting on.
@@ -214,11 +297,125 @@ export function MatchEditorPage() {
     [team, tournament, date, match],
   );
 
-  function stepToEvent(dir: 1 | -1) {
-    const target = adjacentEvent(dir);
+  /**
+   * Put the playhead back where it was left, once per match.
+   *
+   * Waits for the player: `seekToGlobalFrame` needs the clip loaded and
+   * its metadata read, and a seek issued before that is silently
+   * dropped - which is what "it does not remember where I was" looked
+   * like even with the frame stored correctly. Retried briefly, then
+   * given up on rather than fought over.
+   */
+  const restoredPlayheadRef = useRef(false);
+  const currentFrameRef = useRef(currentFrame);
+  currentFrameRef.current = currentFrame;
+  useEffect(() => {
+    if (restoredPlayheadRef.current) return;
+    const frame = data?.playhead_frame ?? 0;
+    if (!data || frame <= 0) {
+      if (data) restoredPlayheadRef.current = true;
+      return;
+    }
+    restoredPlayheadRef.current = true;
+    let tries = 0;
+    const tick = () => {
+      tries += 1;
+      const player = playerRef.current;
+      player?.seekToGlobalFrame(frame);
+      // Ask the PLAYER where it is, not this component's own state:
+      // `onFrame` only reports during playback, so `currentFrame` is
+      // whatever the page last set - checking it would be checking our
+      // own optimism. `getGlobalFrame` reads the video element.
+      const real = player?.getGlobalFrame() ?? 0;
+      if (Math.abs(real - frame) < 3) {
+        // The header, the timeline marker and the event list all read
+        // `currentFrame`; without this they sit at zero while the
+        // picture shows the restored moment.
+        setCurrentFrame(frame);
+        return;
+      }
+      if (tries < 40) window.setTimeout(tick, 150);
+    };
+    tick();
+  }, [data]);
+
+  /**
+   * Remember where the video is, debounced.
+   *
+   * The timer restarts on every frame, so playback writes nothing at
+   * all - it saves once the picture settles, which is exactly when the
+   * position becomes worth keeping.
+   */
+  useEffect(() => {
+    if (!restoredPlayheadRef.current) return;
+    // Frame 0 is only saved when the user actually went there. A player
+    // that never loaded also reports 0, and writing that back would
+    // erase the stored position on nothing more than a slow video.
+    if (currentFrame === 0 && !playheadMovedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void api
+        .patchMatch(team, tournament, date, match, {
+          playhead_frame: Math.max(0, Math.round(currentFrameRef.current)),
+        })
+        .catch(() => {
+          // Losing a playhead is not worth an error banner.
+        });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [currentFrame, team, tournament, date, match]);
+
+  function stepToEvent(dir: 1 | -1, types?: ReadonlySet<string>) {
+    const target = adjacentEvent(dir, types);
     if (!target) return;
     seek(target.global_frame as number);
     setSelectedEventId(target.id);
+  }
+
+  /**
+   * Post an event, and make sure it actually landed.
+   *
+   * A tap that does not reach the server used to vanish: `createEvent`
+   * had no catch, so the rejected promise went nowhere and the only
+   * symptom was an event missing from the list, noticed at the next
+   * tap. Courtside that is a lost kill nobody can reconstruct.
+   *
+   * Retried, but never blindly. Creating an event is not idempotent and
+   * a lost RESPONSE looks exactly like a lost request from here, so
+   * each attempt asks the server what it has before trying again -
+   * otherwise one tap becomes two events, which is worse than none.
+   *
+   * Returns the new match, or null when every attempt failed - by which
+   * point the banner is up and the event is known not to be saved.
+   */
+  async function createWithRetry(
+    body: Parameters<typeof api.createEvent>[4],
+    prevIds: Set<number>
+  ): Promise<MatchDto | null> {
+    const ATTEMPTS = 3;
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+      try {
+        return await api.createEvent(team, tournament, date, match, body);
+      } catch (e) {
+        lastErr = e;
+        // Did it land anyway?
+        const fresh = await api
+          .getMatch(team, tournament, date, match)
+          .catch(() => null);
+        const landed = fresh?.events.find(
+          (ev) => !prevIds.has(ev.id) && ev.type === body.type
+        );
+        if (fresh && landed) return fresh;
+        if (attempt < ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+        }
+      }
+    }
+    setError(
+      `Could not save "${body.type.replace(/_/g, " ")}" - ${String(lastErr)}. ` +
+        "It is NOT on the server. Tag it again."
+    );
+    return null;
   }
 
   async function createEvent(body: Parameters<typeof api.createEvent>[4]) {
@@ -228,7 +425,8 @@ export function MatchEditorPage() {
     // the simplest robust way - works even if the server inserts events
     // out of submission order (e.g. when sorting by frame).
     const prevIds = new Set(data?.events.map((e) => e.id) ?? []);
-    const updated = await api.createEvent(team, tournament, date, match, body);
+    const updated = await createWithRetry(body, prevIds);
+    if (!updated) return;
     setData(updated);
     // Only scoring events rotate, so only they can carry a libero into
     // the front row. Checked once `data` reflects the new event.
@@ -263,8 +461,24 @@ export function MatchEditorPage() {
 
   async function nudgeEvent(id: number, seconds: number) {
     try {
-      setData(await api.nudgeEvent(team, tournament, date, match, id, seconds));
+      const updated = await api.nudgeEvent(
+        team, tournament, date, match, id, seconds
+      );
+      setData(updated);
       setError(null);
+      // Follow the event you just moved. Nudging is aiming - a second
+      // either way until the tag sits on the moment it describes - and
+      // that is only judgeable by looking at the frame it landed on,
+      // which meant a nudge, then a click on the row, then the next
+      // nudge. The playhead goes where the event went instead.
+      const moved = updated.events.find((e) => e.id === id);
+      if (moved?.global_frame != null) {
+        seek(moved.global_frame);
+        // Nudging a row makes it the one being worked on, so the
+        // selection follows too rather than staying on whatever was
+        // highlighted before.
+        setSelectedEventId(id);
+      }
     } catch (e) {
       setError(String(e));
     }
@@ -375,6 +589,18 @@ export function MatchEditorPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      {/* Editor-wide failures, over the layout rather than in it: the
+          grid is sized to the viewport, so a banner in the flow would
+          push the timeline off the bottom. Every `setError` in this
+          screen used to land here and be rendered nowhere - the only
+          place `error` appeared was the "could not load" screen, which
+          is why a failed save looked like nothing happening at all. */}
+      {error && (
+        <div className="editor-error" role="alert">
+          <span>{error}</span>
+          <button onClick={() => setError(null)} title="Dismiss">✕</button>
+        </div>
+      )}
       <div className="editor-header">
         {/* Phones only (CSS hides it above the breakpoint). The editor is
             three columns of dense controls; on a phone there is room for
@@ -463,6 +689,7 @@ export function MatchEditorPage() {
             onLiberosChange={setLiberos}
             onPlaybackLock={setPlaybackLock}
             liberoCheckFrame={liberoCheckFrame}
+            onStepPoint={(dir) => stepToEvent(dir, POINT_TYPES)}
             onLiberoChecked={() => setLiberoCheckFrame(null)}
             onRosterChanged={load}
             team={team}
@@ -482,6 +709,12 @@ export function MatchEditorPage() {
             onDelete={(id) => void deleteEvent(id)}
             onNudge={nudgeEvent}
             onMove={moveEvent}
+            onClearAll={clearAllEvents}
+            onShiftAll={() => {
+              setShiftResult(null);
+              setShiftOpen(true);
+            }}
+            liberos={data.liberos}
             onSeek={seek}
             onInsertCut={insertCut}
             fps={data.fps}
@@ -523,7 +756,61 @@ export function MatchEditorPage() {
           onImportPath={importClipPath}
           onReorder={reorderClips}
           onDelete={deleteClip}
+          onSetClipTime={setClipTime}
         />
+      </Modal>
+
+      <Modal
+        open={shiftOpen}
+        onClose={() => setShiftOpen(false)}
+        title="Shift every event"
+        width="min(520px, 92vw)"
+      >
+        <p className="muted" style={{ marginTop: 0 }}>
+          Moves the whole log against the footage, for when it is late or
+          early as a whole - tagging lag that was not compensated at the
+          time, or a clip whose recording time was corrected afterwards.
+          Nothing changes order, so a shift the wrong way is undone by
+          shifting back. Clip transitions stay where the files join.
+        </p>
+        <div className="toolbar" style={{ flexWrap: "wrap", marginBottom: 10 }}>
+          {[-1, -0.5, -0.2, 0.2, 0.5, 1].map((s) => (
+            <button
+              key={s}
+              onClick={() => void applyShift(s)}
+              disabled={shiftBusy}
+              title={s < 0 ? "Move events earlier" : "Move events later"}
+            >
+              {s > 0 ? `+${s}` : s}s
+            </button>
+          ))}
+        </div>
+        <label style={{ display: "block", marginBottom: 10 }}>
+          Or an exact amount, in seconds (negative = earlier)
+          <br />
+          <input
+            type="number"
+            step="0.05"
+            min={-60}
+            max={60}
+            value={shiftDraft}
+            onChange={(e) => setShiftDraft(e.target.value)}
+            style={{ width: 120 }}
+          />{" "}
+          <button
+            className="primary"
+            disabled={shiftBusy || !Number(shiftDraft)}
+            onClick={() => void applyShift(Number(shiftDraft))}
+          >
+            {shiftBusy ? "Shifting…" : "Apply"}
+          </button>
+        </label>
+        {shiftResult && <p className="muted">{shiftResult}</p>}
+        <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+          <button onClick={() => setShiftOpen(false)} disabled={shiftBusy}>
+            Close
+          </button>
+        </div>
       </Modal>
 
       <Modal open={renderOpen} onClose={() => setRenderOpen(false)} title="Render" width="min(640px, 95vw)">
