@@ -191,8 +191,9 @@ def auth_error_path() -> Path:
 
 
 REAUTHORIZE_HINT = (
-    "Re-run `python -m scripts.yt_authorize` from backend/ "
-    "(or scripts/yt-authorize.ps1) to re-authorize."
+    "Reconnect from Settings -> Connections, which runs the whole "
+    "sign-in in the browser. (`python -m scripts.yt_authorize` from "
+    "backend/ still works, for a server with no browser on it.)"
 )
 
 
@@ -211,6 +212,21 @@ def _clear_auth_error() -> None:
         auth_error_path().unlink(missing_ok=True)
     except OSError:
         logger.debug("could not clear auth error marker", exc_info=True)
+
+
+def record_auth_error(message: str) -> None:
+    """Public wrapper: something outside the uploader found auth broken.
+
+    The OAuth callback uses it when an exchange fails, so a reconnect
+    that did not complete is visible on the settings page rather than
+    only in the log.
+    """
+    _record_auth_error(message)
+
+
+def stale_auth_error() -> Optional[str]:
+    """Public wrapper for the status endpoints. See [_stale_auth_error]."""
+    return _stale_auth_error()
 
 
 def _stale_auth_error() -> Optional[str]:

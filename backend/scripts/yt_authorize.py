@@ -49,6 +49,7 @@ Prerequisites in Google Cloud Console:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -142,6 +143,10 @@ def main() -> int:
     # `run_local_server(port=0)` picks a free port and spins a tiny HTTP
     # server to capture the redirect from Google. Works on a desktop;
     # on a headless box you'd need to SSH-tunnel that port.
+    # Same reason as the browser flow in `app/api/auth.py`: Google
+    # returns every scope this account has granted the client, and
+    # oauthlib rejects a token whose scopes differ from the request.
+    os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
     flow = InstalledAppFlow.from_client_secrets_file(str(cs), SCOPES)
     creds = flow.run_local_server(port=0, prompt="consent")
     # `prompt="consent"` forces Google to issue a refresh_token even on

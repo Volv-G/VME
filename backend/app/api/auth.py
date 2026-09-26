@@ -168,10 +168,17 @@ def _callback_uri(request: Request, name: str = "google_callback") -> str:
 def google_status(request: Request) -> AuthStatusOut:
     cfg, kind = _read_client_secret()
     scopes = youtube.granted_scopes()
-    connected = youtube.token_path().is_file()
+    # A token FILE is not a working connection. An expired or revoked
+    # grant leaves the file exactly where it was, so the page reported
+    # "connected" while every upload failed - and a reconnect that did
+    # not complete changed nothing visible.
+    auth_error = youtube.stale_auth_error()
+    connected = youtube.token_path().is_file() and not auth_error
 
     reason = ""
-    if cfg is None:
+    if auth_error:
+        reason = auth_error
+    elif cfg is None:
         reason = (
             "No OAuth client is configured. Upload the client-secret JSON "
             "downloaded from Google Cloud Console."
@@ -291,6 +298,19 @@ def google_callback(
     try:
         from google_auth_oauthlib.flow import Flow
 
+        # Google hands back every scope the ACCOUNT has granted this
+        # OAuth client, not the ones this request asked for. Sign the
+        # phone in for mail on the same client and YouTube consent comes
+        # back carrying `gmail.send` too - at which point oauthlib
+        # refuses the token because the scopes "changed", the exchange
+        # throws, and nothing is saved. The redirect still lands back in
+        # the app, so reconnecting looked like it worked while the old,
+        # dead refresh token stayed on disk.
+        #
+        # Extra scopes are not a security problem here: what this token
+        # may do is decided by what the user consented to, and the
+        # request itself asks for no more than YouTube.
+        os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
         flow = Flow.from_client_config(
             {"web": cfg}, scopes=youtube.SCOPES, state=state
         )
@@ -306,6 +326,13 @@ def google_callback(
         logger.info("saved google token to %s", youtube.token_path())
     except Exception as exc:  # noqa: BLE001 - surfaced to the user as a status
         logger.exception("google token exchange failed: %s", exc)
+        # Record it where the status endpoint looks, so the settings page
+        # says what went wrong instead of continuing to report the old
+        # token as a working connection.
+        youtube.record_auth_error(
+            f"The sign-in did not complete: {exc}. The previous "
+            "authorization is still in place and may be expired."
+        )
         return back("failed")
 
     return back("ok")
