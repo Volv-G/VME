@@ -38,6 +38,11 @@ object Settings {
     private const val KEY_BASE_URL = "vme.base_url"
     private const val KEY_USER = "vme.user"
     private const val KEY_PASS = "vme.pass"
+    // Not a team setting and not a match setting: it describes the
+    // hall's wifi, so it belongs to the device and sticks until the
+    // operator changes it.
+    private const val KEY_QUALITY = "stream.quality"
+    private const val KEY_HEVC = "stream.hevc"
 
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -62,6 +67,28 @@ object Settings {
         val p = password(ctx)
         return if (u.isEmpty() && p.isEmpty()) null
                else VmeClient.Credentials(u, p)
+    }
+
+    /** How much bandwidth the stream may use. See [StreamQuality]. */
+    fun streamQuality(ctx: Context): StreamQuality =
+        StreamQuality.fromKey(prefs(ctx).getString(KEY_QUALITY, null))
+
+    fun setStreamQuality(ctx: Context, quality: StreamQuality) {
+        prefs(ctx).edit().putString(KEY_QUALITY, quality.key).apply()
+    }
+
+    /**
+     * H.265 instead of H.264, over enhanced RTMP.
+     *
+     * Off by default and deliberately so: it is worth roughly a third
+     * of the bitrate, but it depends on the phone's encoder and the
+     * ingest agreeing, and the failure mode is a stream that never
+     * comes up. Opting in is a decision to test before a match.
+     */
+    fun useHevc(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_HEVC, false)
+
+    fun setUseHevc(ctx: Context, on: Boolean) {
+        prefs(ctx).edit().putBoolean(KEY_HEVC, on).apply()
     }
 
     /** True once there is at least a URL to talk to. */

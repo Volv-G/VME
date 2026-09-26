@@ -150,6 +150,26 @@ class CardOverlay(
     }
 
     /**
+     * Between sets: the match so far, until the next serve.
+     *
+     * The same shape as the timeout card because it answers the same
+     * question - a viewer arriving during a stoppage wants the score -
+     * but the headline is the sets, not the running points, which have
+     * just been reset to nil by the set that ended.
+     */
+    fun showSetEnd(state: GameState) {
+        draw(
+            title = "END OF SET",
+            // A dash, not "0 - 0": the point score is meaningless
+            // between sets, and printing it large would read as the
+            // match being level.
+            centre = "\u2013",
+            sets = state.setScores,
+            setScale = TIMEOUT_SET_SCALE,
+        )
+    }
+
+    /**
      * End-of-game card: every set's final score.
      *
      * No fallback to the running score any more. Game End records a

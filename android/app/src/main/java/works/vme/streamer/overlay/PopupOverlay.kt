@@ -8,6 +8,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.os.Handler
@@ -386,7 +387,20 @@ class PopupOverlay(
      * One circle on a pop-up: a player's cached photo when we have
      * one, otherwise a jersey-number disc.
      */
-    data class Avatar(val jersey: Int, val photoPath: String?)
+    /**
+     * One circle beside a pop-up's text.
+     *
+     * Usually a player: [jersey] names them and [photoPath] is their
+     * cached portrait, with the number as the fallback when there is
+     * no photo. Set [isLogo] for a team badge instead -- same circle,
+     * different fitting (see [drawAvatar]), and no number to fall back
+     * to, so [jersey] is null.
+     */
+    data class Avatar(
+        val jersey: Int?,
+        val photoPath: String?,
+        val isLogo: Boolean = false,
+    )
 
     /**
      * Draw [a] as a circle of [avatarPx] diameter at ([x], [y]).
@@ -406,7 +420,24 @@ class PopupOverlay(
         val cx = x + r
         val cy = y + r
         val photo = decodedPhoto(a.photoPath)
-        if (photo != null) {
+        if (photo != null && a.isLogo) {
+            // A crest is fitted, not cropped. Cover-cropping a badge
+            // cuts its edges off, which is exactly where a club's
+            // outline and lettering live -- the scoreboard's disc
+            // makes the same distinction.
+            fillPaint.color = scaleRgb(bg, BADGE_DARKEN)
+            c.drawCircle(cx, cy, r, fillPaint)
+            val inner = d * LOGO_FIT_FRAC
+            val scale = minOf(inner / photo.width, inner / photo.height)
+            val sw = photo.width * scale
+            val sh = photo.height * scale
+            c.drawBitmap(
+                photo,
+                null,
+                RectF(cx - sw / 2f, cy - sh / 2f, cx + sw / 2f, cy + sh / 2f),
+                avatarPaint,
+            )
+        } else if (photo != null) {
             // Cover-crop: scale so the short side fills the circle,
             // then offset to centre (biased up).
             val scale = maxOf(d / photo.width, d / photo.height)
@@ -426,12 +457,17 @@ class PopupOverlay(
         } else {
             fillPaint.color = scaleRgb(bg, BADGE_DARKEN)
             c.drawCircle(cx, cy, r, fillPaint)
-            badgePaint.textSize = d * BADGE_FONT_SCALE
-            val fm = badgePaint.fontMetrics
-            c.drawText(
-                a.jersey.toString(), cx,
-                cy - (fm.ascent + fm.descent) / 2f, badgePaint,
-            )
+            // A badge with no image has nothing to say, so it stays a
+            // plain disc; a player without a photo still has a number.
+            val jersey = a.jersey
+            if (jersey != null) {
+                badgePaint.textSize = d * BADGE_FONT_SCALE
+                val fm = badgePaint.fontMetrics
+                c.drawText(
+                    jersey.toString(), cx,
+                    cy - (fm.ascent + fm.descent) / 2f, badgePaint,
+                )
+            }
         }
         c.drawCircle(cx, cy, r - ringPaint.strokeWidth / 2f, ringPaint)
     }
@@ -507,6 +543,10 @@ class PopupOverlay(
         private const val RING_SCALE = 2f / 1080f
         private const val BADGE_FONT_SCALE = 0.44f
         private const val BADGE_DARKEN = 0.55f
+        /** How much of a badge circle the crest fills. The rest is the
+         *  disc showing round it, which is what keeps a square club
+         *  logo from touching the ring. */
+        private const val LOGO_FIT_FRAC = 0.80f
         // message.py: SLIDE_IN_FRAC / SLIDE_OUT_FRAC, fractions of
         // the pop-up's total duration.
         private const val SLIDE_IN_FRAC = 0.1f

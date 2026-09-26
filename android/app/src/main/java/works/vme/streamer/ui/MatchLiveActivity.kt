@@ -2,15 +2,25 @@ package works.vme.streamer.ui
 
 import android.Manifest
 import android.app.AlertDialog
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.hardware.usb.UsbConstants
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Bundle
+import android.text.SpannableStringBuilder
+import android.text.Spanned
 import android.text.method.ScrollingMovementMethod
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -31,7 +41,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.pedro.common.ConnectChecker
+import com.pedro.common.VideoCodec
 import com.pedro.encoder.input.sources.audio.MicrophoneSource
+import com.pedro.encoder.input.sources.video.BitmapSource
 import com.pedro.library.generic.GenericStream
 import works.vme.streamer.BuildConfig
 import works.vme.streamer.StreamService
@@ -47,13 +59,17 @@ import works.vme.streamer.data.jerseyLabel
 import works.vme.streamer.data.MatchStore
 import works.vme.streamer.data.PhotoCache
 import works.vme.streamer.data.Player
+import works.vme.streamer.data.Roster
 import works.vme.streamer.data.Settings
 import works.vme.streamer.data.Side
 import works.vme.streamer.data.StreamConfig
+import works.vme.streamer.data.StreamQuality
 import works.vme.streamer.data.TeamStore
 import works.vme.streamer.data.VmeClient
 import works.vme.streamer.logic.GameStateEngine
+import works.vme.streamer.overlay.BlackoutOverlay
 import works.vme.streamer.overlay.CardOverlay
+import works.vme.streamer.overlay.CourtOverlay
 import works.vme.streamer.overlay.PopupOverlay
 import works.vme.streamer.overlay.ScoreboardOverlay
 import works.vme.streamer.overlay.StreamThumbnail
@@ -102,10 +118,34 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     // ---- streaming plumbing --------------------------------------
 
     private val target = UvcVideoSource.Target(width = 1920, height = 1080)
-    private val uvcSource by lazy { UvcVideoSource(target, ::log) }
+    // Rebuilt when the adapter is replugged: a source whose camera
+    // helper has been released cannot be restarted, so recovery means
+    // a new one rather than a reset of this one.
+    private var uvcSource = UvcVideoSource(target, ::log)
     private val micSource by lazy { MicrophoneSource() }
     private val stream by lazy { GenericStream(this, this, uvcSource, micSource) }
     private var overlay: ScoreboardOverlay? = null
+    private var blackout: BlackoutOverlay? = null
+    private var court: CourtOverlay? = null
+
+    /**
+     * True while the capture adapter is unplugged.
+     *
+     * Kept separately from [quality] because it is not a choice: the
+     * operator's bandwidth setting is left exactly as they left it,
+     * and the court view is forced on top of it until the camera is
+     * back. Losing the adapter mid-match - a kicked cable, a phone
+     * moved on its tripod - used to end the broadcast, and a YouTube
+     * broadcast that ends does not resume: it needs a new one, with a
+     * new link, while the match carries on without it.
+     */
+    private var cameraLost = false
+
+    /**
+     * How much bandwidth the stream may use. Loaded from [Settings] in
+     * `onCreate` and changed by tapping the rate readout in the header.
+     */
+    private var quality: StreamQuality = StreamQuality.DEFAULT
 
     private var wantPreview = false
     private var surfaceReady = false
@@ -139,6 +179,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private lateinit var healthLabel: TextView
     private lateinit var liberoBtn: Button
     private lateinit var timeoutButton: Button
+    private lateinit var killButton: Button
+    private lateinit var cancelActionButton: Button
 
     /**
      * Views whose text or colour comes from a team's identity.
@@ -177,6 +219,26 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      */
     private val timeoutShown: Boolean
         get() = match.events.lastOrNull()?.type == EventType.TimeoutStart
+
+    /**
+     * Between sets: true from a Set End until the next ball is served.
+     *
+     * Derived from the log like [timeoutShown], and for the same
+     * reason. Bounded by the serve rather than by a timer because the
+     * gap between sets is however long the teams take, and the first
+     * serve of the next set is the moment the card stops being true.
+     */
+    private val setEndShown: Boolean
+        get() {
+            val marker = match.events.lastOrNull {
+                it.type == EventType.SetEnd ||
+                    it.type == EventType.BallServed ||
+                    it.type == EventType.FirstServe ||
+                    it.type == EventType.GameStart ||
+                    it.type == EventType.GameEnd
+            }
+            return marker?.type == EventType.SetEnd
+        }
     private var currentTab: Tab = Tab.Events
     /** Rolling upload rate, refreshed by [onNewBitrate]. */
     private var lastBitrateKbps: Long = 0
@@ -239,6 +301,16 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // pauses, and the stream dies with it. Scoped to this window,
         // so Home / Settings still let the phone sleep normally.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Both are protected system broadcasts, so NOT_EXPORTED is the
+        // right flag even though nothing else can send them.
+        ContextCompat.registerReceiver(
+            this, usbWatcher,
+            IntentFilter().apply {
+                addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            },
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         refreshAllViews()
         log("match: ${match.name} vs ${match.opponent} on ${match.date}")
 
@@ -254,6 +326,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // Whatever route got us here, the broadcast is over -- do not
         // leave a foreground notification behind for a stream that no
         // longer exists.
+        runCatching { unregisterReceiver(usbWatcher) }
         StreamService.stop(this)
         runCatching { if (stream.isStreaming) stream.stopStream() }
         runCatching { if (stream.isOnPreview) stream.stopPreview() }
@@ -351,15 +424,24 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // "Start" is a dead control taking prime header space, while
         // the one number that matters -- is the upload actually
         // moving -- had no home at all and was buried in the log.
+        quality = Settings.streamQuality(this)
         healthLabel = TextView(this).apply {
             setTextColor(Color.parseColor("#888888"))
             textSize = 11f
             isSingleLine = true
             gravity = Gravity.CENTER
-            setPadding(8, 0, 8, 0)
-            visibility = View.GONE
+            setPadding(14, 6, 14, 6)
+            // Visible before Start too, showing the chosen ceiling
+            // rather than a measured rate: the bitrate has to be
+            // picked BEFORE `prepareVideo`, so a control that only
+            // appeared once live would always be one match late.
+            // The chip background is the only hint that it is a
+            // button -- plain text in a header bar is not.
+            setBackgroundColor(Color.parseColor("#1C1C1C"))
+            setOnClickListener { chooseQuality() }
         }
         bar.addView(healthLabel)
+        updateHealth()
 
         startButton = Button(this).apply {
             text = "Start"
@@ -597,7 +679,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // when the operator is checking rather than reaching. Colour
         // groups them: attack, defence, everything else.
         card.addView(rowOf(
-            playerActionButton("\uD83D\uDCA5 Kill", EventType.Kill, BG_ATTACK),
+            playerActionButton(LBL_KILL, EventType.Kill, BG_ATTACK)
+                .also { killButton = it },
             playerActionButton("\uD83C\uDFAF Ace", EventType.Ace, BG_ATTACK),
         ))
         card.addView(rowOf(
@@ -608,7 +691,56 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             playerActionButton("\uD83E\uDDF1 Block", EventType.Block, BG_DEFENCE),
             playerActionButton("\u2B50 Highlight", EventType.Highlight, BG_EXTRA),
         ))
+        card.addView(buildCancelActionButton(), LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = 10 })
         return card
+    }
+
+    /**
+     * The way out of armed mode. Hidden until something is armed.
+     *
+     * Tapping the armed action again has always disarmed, but that is
+     * knowledge, not a control: courtside, with a rally starting, the
+     * operator who armed the wrong thing was looking for a way out and
+     * there was nothing on screen that said so.
+     *
+     * Deliberately NOT [gated]: armed mode disables every gated button,
+     * and the escape hatch cannot be one of the things that goes dark.
+     * It sits under the action buttons, the length of the card away
+     * from the six slots, so reaching for it cannot credit a player.
+     */
+    private fun buildCancelActionButton(): Button = Button(this).apply {
+        text = LBL_CANCEL
+        setTextColor(Color.WHITE)
+        background = buttonFill(BG_CANCEL)
+        visibility = View.GONE
+        setOnClickListener { cancelArmed() }
+        cancelActionButton = this
+    }
+
+    /**
+     * Back out of the armed action.
+     *
+     * During the assist prompt this cancels only the assist: the kill
+     * is already recorded and is not in question, so the tap means
+     * "nobody set that one up" -- the same thing tapping the killer
+     * means, for an operator whose eye is on the buttons rather than
+     * the court.
+     */
+    private fun cancelArmed() {
+        val armed = armedAction ?: return
+        // Abandoned, so its clock goes with it - otherwise the next
+        // event recorded would inherit this one's start.
+        actionStartedAt = null
+        if (armed == EventType.Assist) {
+            assistForKiller = null
+            log("assist: none")
+        } else {
+            log("cancelled: $armedLabel")
+        }
+        disarm()
     }
 
     private fun buildAwayCard(): View {
@@ -966,7 +1098,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     }
 
     private fun positionButton(pos: Int): Button = gated(Button(this).apply {
-        text = "P$pos\n?"
+        text = positionLabel(pos, null)
         textSize = 12f
         setPadding(6, 8, 6, 8)
         // Same rounded fill as every other control, or the grid
@@ -991,8 +1123,22 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             log("$armedLabel: P$pos is empty")
             return
         }
+        // The assist prompt is dismissed by tapping the killer: they
+        // cannot have assisted themselves, so the tap has no other
+        // meaning, and it needs no button of its own on a screen that
+        // has no room for one.
+        if (armed == EventType.Assist && jersey == assistForKiller) {
+            assistForKiller = null
+            disarm()
+            log("assist: none")
+            return
+        }
         disarm()
+        // The prompt is answered either way it ends, so the pending
+        // killer goes with it.
+        if (armed == EventType.Assist) assistForKiller = null
         record(armed, mapOf("team" to Side.Home.wire, "player_number" to jersey))
+        askForAssist(armed, jersey)
     }
 
     /** Long-press: credit a player who is not on the court (armed),
@@ -1001,8 +1147,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         val armed = armedAction
         if (armed == null) { subForPosition(pos); return }
         disarm()
+        if (armed == EventType.Assist) assistForKiller = null
         pickPlayer(Side.Home, excludeOnCourt = false) { jersey ->
             record(armed, mapOf("team" to Side.Home.wire, "player_number" to jersey))
+            askForAssist(armed, jersey)
         }
     }
 
@@ -1246,7 +1394,19 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         setTextColor(Color.WHITE)
         background = buttonFill(tint)
         setOnClickListener {
-            if (type == EventType.Ace) recordAce() else armAction(type, label)
+            when {
+                // The Kill button wears the Assist label during the
+                // follow-up prompt, and a tap on it there used to arm
+                // Kill again -- so the operator who pressed the lit
+                // button expecting "now pick the setter" got a second
+                // kill armed instead, and had to tap their way back out
+                // of a loop while the next rally started. Here it means
+                // what the Cancel button beside it means: no assist.
+                armedAction == EventType.Assist && type == EventType.Kill ->
+                    cancelArmed()
+                type == EventType.Ace -> recordAce()
+                else -> armAction(type, label)
+            }
         }
         actionButtons.add(this)
     })
@@ -1257,6 +1417,18 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      *  pending action belongs to. */
     private var armedAction: EventType? = null
     private var armedLabel: String = ""
+
+    /**
+     * Jersey of the player whose kill is waiting for an assist, or
+     * null when no such prompt is open.
+     *
+     * A kill is nearly always set up by someone, and the set is worth
+     * recording - but it is a second tap at the moment the next rally
+     * is starting, so it has to be dismissable without thinking. The
+     * killer's own slot does that: nobody assists their own kill, so
+     * tapping it can only mean "there was no assist".
+     */
+    private var assistForKiller: Int? = null
 
     /**
      * Arm [type] and wait for a tap on the rotation grid.
@@ -1279,7 +1451,17 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * backed out with the same button that caused it.
      */
     private fun armAction(type: EventType, label: String) {
-        if (armedAction == type) { disarm(); return }
+        // Arming anything by hand abandons a pending assist prompt:
+        // the operator has moved on to another action.
+        if (assistForKiller != null && type != EventType.Assist) {
+            assistForKiller = null
+        }
+        // Tapping the armed action again is a cancel, so its clock
+        // goes too.
+        if (armedAction == type) { actionStartedAt = null; disarm(); return }
+        // The tap that arms is the tap that counts; the one that picks
+        // the player comes seconds later.
+        beginAction()
         armedAction = type
         armedLabel = label
         refreshAllViews()
@@ -1334,6 +1516,27 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     }
 
     /**
+     * A kill was just credited - ask who set it up.
+     *
+     * Arms the grid a second time rather than opening a dialog, so the
+     * tap is in the same place and the same shape as the one that just
+     * recorded the kill. Tapping the killer means "no assist" (see
+     * [assistForKiller]); tapping nothing at all leaves the prompt
+     * armed, and the next action button disarms it.
+     */
+    private fun askForAssist(justRecorded: EventType, killer: Int) {
+        if (justRecorded != EventType.Kill) return
+        assistForKiller = killer
+        // The set happened at the kill, not when the operator got round
+        // to naming who made it.
+        beginAction()
+        armedAction = EventType.Assist
+        armedLabel = LBL_ASSIST
+        refreshAllViews()
+        log("assist: tap the setter, or #$killer for none")
+    }
+
+    /**
      * An Ace needs no player prompt: the serving player scored it.
      * Asking would be busywork, and the answer is already on screen
      * in position 1.
@@ -1342,6 +1545,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * in, which is the one case where we genuinely cannot know.
      */
     private fun recordAce() {
+        beginAction()
         val server = gameState.homePositions[1]
         if (server == null) {
             log("ace: no player in P1 - pick manually")
@@ -1358,22 +1562,49 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     }
 
     /**
-     * Two-line label for a rotation slot: `P{n}` on top, then
-     * `#{jersey} {shortName}` on the second line. Empty slot
-     * renders `P{n}` / `?`, so the grid does not grow or shrink
-     * on a substitution. Single string, no spans -- the second
-     * line uses the same font size as the first for a slightly
-     * bigger, more legible label than the previous three-line
-     * variant.
+     * Three lines for a rotation slot: the position, then the jersey
+     * number on a line of its own at double size, then the name.
+     *
+     * The number is what the operator aims at. It is how the scorer
+     * calls a player out ("twelve got that one"), how the roster is
+     * ordered, and the only label that is unambiguous at arm's length
+     * in a noisy hall -- so it gets a line to itself and twice the
+     * height, and the position and name become captions around it.
+     *
+     * Always three lines, empty slot included, so the grid does not
+     * change height on a substitution and shift a button out from
+     * under a thumb already moving towards it.
      */
     private fun positionLabel(pos: Int, jersey: Int?): CharSequence {
-        if (jersey == null) return "P$pos\n?"
-        val player = match.homeRoster.players.firstOrNull { it.number == jersey }
-        val tag = match.jerseyLabel(jersey)
+        val player = jersey?.let { j ->
+            match.homeRoster.players.firstOrNull { it.number == j }
+        }
+        val big = jersey?.toString() ?: "–"
+        // The libero marker rides on the number's line but stays at
+        // caption size: it qualifies the number, it is not part of it.
+        val suffix = if (jersey != null && jersey in match.liberos) " L" else ""
         val name = (player?.shortName ?: player?.name ?: "").trim().take(10)
-        return if (name.isBlank()) "P$pos\n$tag"
-               else "P$pos\n$tag $name"
+        val sb = SpannableStringBuilder()
+        val posStart = sb.length
+        sb.append("P$pos\n")
+        sb.setSpan(dimSpan(), posStart, sb.length, SPAN_FLAGS)
+        val numStart = sb.length
+        sb.append(big)
+        sb.setSpan(RelativeSizeSpan(2.0f), numStart, sb.length, SPAN_FLAGS)
+        sb.setSpan(StyleSpan(Typeface.BOLD), numStart, sb.length, SPAN_FLAGS)
+        sb.append(suffix)
+        val nameStart = sb.length
+        // A space, not nothing, on the third line of an empty slot:
+        // an empty trailing line is not measured, and the button would
+        // shrink.
+        sb.append("\n${name.ifBlank { " " }}")
+        sb.setSpan(dimSpan(), nameStart, sb.length, SPAN_FLAGS)
+        return sb
     }
+
+    /** Caption grey for the lines flanking a jersey number. A fresh
+     *  instance per range: one span object cannot cover two. */
+    private fun dimSpan() = ForegroundColorSpan(Color.parseColor("#BFBFBF"))
 
     private fun spacer(px: Int) = View(this).apply {
         layoutParams = LinearLayout.LayoutParams(
@@ -1392,6 +1623,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * the operator hit `+1` before the rally actually started.
      */
     private fun onPlusOne(side: Side) {
+        beginAction()
         val need = !gameState.ballServedSinceLastScore
         if (need) {
             AlertDialog.Builder(this)
@@ -1497,8 +1729,42 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * shows game state. The on-disk copy is the source of truth even
      * after a crash.
      */
+    /**
+     * When the operator started the action now being recorded, or null
+     * when the tap that started it is the tap that finished it.
+     *
+     * An event's moment is the moment of the FIRST tap. Tagging a kill
+     * is "Kill", then find the player, then tap their slot - two to
+     * four seconds during which the match has moved on, and the event
+     * used to be stamped at the end of it. Everything downstream is
+     * placed by that timestamp: the frame it lands on in VME, the reel
+     * it gets cut into, the pop-up's position in the broadcast. Half a
+     * rally late is the difference between a highlight that opens on
+     * the hit and one that opens on the celebration.
+     */
+    private var actionStartedAt: Long? = null
+
+    /** Start the clock for a multi-tap action. */
+    private fun beginAction() {
+        actionStartedAt = System.currentTimeMillis()
+    }
+
     private fun record(type: EventType, payload: Map<String, Any?> = emptyMap()) {
-        val at = System.currentTimeMillis()
+        val started = actionStartedAt
+        actionStartedAt = null
+        val now = System.currentTimeMillis()
+        // Backdated to the first tap, but only so far. A start that old
+        // is not a slow selection, it is an armed action the operator
+        // walked away from and came back to - and stamping the event
+        // minutes early would be worse than stamping it late.
+        val at = when {
+            started == null -> now
+            now - started > MAX_ACTION_BACKDATE_MS -> {
+                log("event: ignoring a stale start (${(now - started) / 1000}s)")
+                now
+            }
+            else -> started
+        }
         // Play resuming ends a timeout, however the operator left it.
         // While one is on, the only other live control is Ball Served,
         // and VME cuts from a timeout's start to its END - so the end
@@ -1632,9 +1898,53 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                 gameState.gameEnded -> c.showFinal(gameState)
                 !gameState.gameStarted -> c.showUpcoming()
                 timeoutShown -> c.showTimeout(gameState)
+                setEndShown -> c.showSetEnd(gameState)
                 else -> c.hide()
             }
         }.onFailure { log("card failed: ${it.javaClass.simpleName} ${it.message}") }
+
+        pushCourt()
+    }
+
+    /**
+     * Hand the current line-up to the court diagram.
+     *
+     * Called on every push even when the diagram is hidden: switching
+     * to court-only mode mid-match has to find it already drawn, and
+     * the overlay skips the redraw itself when nothing moved.
+     */
+    private fun pushCourt() {
+        val co = court ?: return
+        val s = gameState
+        val slots = (1..6).map { pos ->
+            val jersey = s.homePositions[pos]
+            val player = jersey?.let { j ->
+                match.homeRoster.players.firstOrNull { it.number == j }
+            }
+            CourtOverlay.Slot(
+                position = pos,
+                jersey = jersey,
+                name = (player?.shortName ?: player?.name ?: "").trim().take(14),
+                photo = courtPhoto(player?.localPhotoPath),
+                libero = jersey != null && jersey in match.liberos,
+            )
+        }
+        // The server stands in position 1, so the ring goes there --
+        // and only when it is our serve.
+        val serving = if (s.servingTeam == Side.Home) 1 else null
+        runCatching { co.update(slots, serving) }
+            .onFailure { log("court failed: ${it.javaClass.simpleName} ${it.message}") }
+    }
+
+    /** Photos for the court diagram, decoded once each. Bigger than
+     *  the pop-up avatars because the diagram draws them several times
+     *  that size. */
+    private val courtPhotos = mutableMapOf<String, android.graphics.Bitmap?>()
+
+    private fun courtPhoto(path: String?): android.graphics.Bitmap? {
+        val key = path.orEmpty()
+        if (key.isBlank()) return null
+        return courtPhotos.getOrPut(key) { PhotoCache.load(key, COURT_PHOTO_PX) }
     }
 
     /**
@@ -1659,7 +1969,12 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             log("popup: skipped for ${type.wire} (not streaming)")
             return
         }
-        val spec = popupSpec(type, payload, before)
+        // In the no-video modes the point announcement replaces the
+        // play's own pop-up, rather than queueing behind it: a second
+        // `show` cuts the first one's slide short, and one card that
+        // says who scored, what it was and where the score now stands
+        // beats half of two.
+        val spec = pointSpec(type, payload) ?: popupSpec(type, payload, before)
         if (spec == null) {
             log("popup: ${type.wire} is silent (matches VME)")
             return
@@ -1669,11 +1984,77 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                 title = spec.title,
                 subtitle = spec.subtitle,
                 teamColor = spec.color,
+                // Longer with no video: the pop-up is the only thing
+                // on screen that moves, so it is worth reading rather
+                // than glancing at, and nothing is hidden behind it.
+                holdMs = if (quality.video) 3000L else 5000L,
                 avatars = spec.avatars,
             )
         }
             .onSuccess { log("popup: ${spec.title} / ${spec.subtitle ?: ""}") }
             .onFailure { log("popup failed: ${it.javaClass.simpleName} ${it.message}") }
+    }
+
+    /**
+     * "Point Eastlake" -- the every-point announcement the no-video
+     * modes need, or null when the picture is live.
+     *
+     * With the camera blacked out or replaced by the court diagram,
+     * nothing on screen moves when a rally ends: the scoreboard ticks
+     * over, and a viewer who looked away has no idea a point happened
+     * at all, let alone who won it. On live video the play tells them
+     * and the existing pop-ups annotate it, which is why this stays
+     * out of the way there.
+     *
+     * The score goes in the subtitle and the scorer's face, when the
+     * event names one, in the avatar -- so the card carries the same
+     * three facts the missing picture would have.
+     */
+    private fun pointSpec(type: EventType, payload: Map<String, Any?>): PopupSpec? {
+        if (quality.video) return null
+        val play = when (type) {
+            EventType.Score -> null
+            EventType.Kill -> "Kill"
+            EventType.Ace -> "Ace"
+            else -> return null
+        }
+        val side = Side.fromWire(payload["team"] as? String) ?: return null
+        val s = gameState
+        val score = "${s.homeScore} - ${s.awayScore}"
+        val jersey = (payload["player_number"] as? Number)?.toInt()
+        val roster = if (side == Side.Away) match.opponentRoster else match.homeRoster
+        val photo = roster.players.firstOrNull { it.number == jersey }?.localPhotoPath
+        return PopupSpec(
+            // Capped: the pop-up's canvas is measured once, against a
+            // two-player substitution subtitle, and a club that spells
+            // its full name out would be clipped mid-word instead.
+            title = "Point ${teamName(side).take(20)}",
+            subtitle = if (play == null) score else "$play  ·  $score",
+            color = when (side) {
+                Side.Home -> parseColor(match.homeRoster.teamColor, DEFAULT_HOME_COLOR)
+                Side.Away -> parseColor(match.opponentRoster.teamColor, DEFAULT_AWAY_COLOR)
+            },
+            // Badge first, then the scorer: the crest belongs to the
+            // title above it ("Point Eastlake"), the face to the play
+            // in the subtitle, and left-to-right is the order they are
+            // read in. The opponent has no roster, so on their points
+            // the crest is all there is -- which is exactly when it
+            // matters most, because the name alone is just text.
+            avatars = listOfNotNull(
+                logoPath(roster)?.let {
+                    PopupOverlay.Avatar(jersey = null, photoPath = it, isLogo = true)
+                },
+                jersey?.let { PopupOverlay.Avatar(jersey = it, photoPath = photo) },
+            ),
+        )
+    }
+
+    /** A roster's cached badge path, or null when there is no file to
+     *  draw -- an empty disc says less than no disc at all. */
+    private fun logoPath(roster: Roster): String? {
+        val path = roster.localLogoPath
+        if (path.isNullOrBlank()) return null
+        return if (java.io.File(path).exists()) path else null
     }
 
     /** Title + subtitle + tint + avatars for one pop-up. */
@@ -1907,6 +2288,20 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             ballServedButton.isEnabled = false
             ballServedButton.alpha = 0.4f
         }
+        // Nothing can happen in a rally that has not started. A Kill,
+        // Dig or Block tagged between points is either a mis-tap or an
+        // event from the last rally arriving after the point was
+        // recorded, and both land on the wrong side of the score.
+        //
+        // Scoring is deliberately still open: +1 with no serve behind
+        // it is how the operator corrects a miscount, and the engine
+        // treats it as exactly that (see GameStateEngine.onScore).
+        if (!served) {
+            for (b in actionButtons) {
+                b.isEnabled = false
+                b.alpha = 0.4f
+            }
+        }
 
         // A timeout freezes the surface. Play has stopped, so nothing
         // is taggable, and the only taps that mean anything are the
@@ -1919,10 +2314,18 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // timeout was called after a serve, Ball Served must stay
         // reachable, because it is half of the way out of here.
         if (timeoutShown) {
+            // The rotation grid stays live: a timeout is when
+            // substitutions actually happen, and with the grid frozen
+            // the operator had to end the timeout, sub, and call it
+            // again - three taps to record one thing that happened
+            // while the card was up. Nothing is armed during a
+            // timeout, so a slot tap means "substitute here".
+            val slots = positionButtons.values
             for (b in gatedButtons) {
-                val resumes = b === ballServedButton || b === timeoutButton
-                b.isEnabled = resumes && live
-                b.alpha = if (resumes && live) 1.0f else 0.4f
+                val usable =
+                    b === ballServedButton || b === timeoutButton || b in slots
+                b.isEnabled = usable && live
+                b.alpha = if (usable && live) 1.0f else 0.4f
             }
         }
         // Liberos is a setup control, not a gated one, so the freeze
@@ -1936,6 +2339,15 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // so a double-tap on "Kill" cannot queue a second action
         // (the button itself stays enabled purely so it can disarm).
         val armed = armedAction
+        // The Kill button becomes the Assist button for the follow-up
+        // tap: the prompt is a second stage of the same action, and
+        // showing it on the button that started it is what makes the
+        // grid's highlight legible ("Assist -> tap the setter") instead
+        // of a lit Kill button that has already been recorded.
+        killButton.text = if (armed == EventType.Assist) LBL_ASSIST else LBL_KILL
+        cancelActionButton.visibility = if (armed != null) View.VISIBLE else View.GONE
+        cancelActionButton.text =
+            if (armed == EventType.Assist) LBL_NO_ASSIST else LBL_CANCEL
         if (armed != null) {
             for (b in gatedButtons) {
                 b.isEnabled = false
@@ -2147,6 +2559,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      *  grid slot). Skips the position-picker step. Players already
      *  on the court are hidden from the picker -- see [pickPlayer]. */
     private fun subForPosition(pos: Int) {
+        beginAction()
         pickPlayer(Side.Home, excludeOnCourt = true) { jersey ->
             record(EventType.Substitution, mapOf(
                 "team" to Side.Home.wire,
@@ -2171,6 +2584,41 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         if (!ensurePrepared()) return
         routeAudioToUsbIfPresent()
         stream.getStreamClient().setReTries(10)
+
+        // Blackout goes on FIRST: filters composite in the order they
+        // were added, so everything below draws over it and the
+        // scoreboard survives the camera being painted out.
+        val bo = BlackoutOverlay()
+        blackout = bo
+        stream.getGlInterface().addFilter(bo.filter)
+        bo.attach()
+        bo.setShown(!quality.video)
+
+        // The court diagram sits on the blackout and under everything
+        // else, so in court-only mode the scoreboard and pop-ups still
+        // land on top of it exactly as they do on live video.
+        val co = CourtOverlay(
+            videoWidth = target.width,
+            videoHeight = target.height,
+            teamColor = parseColor(match.homeRoster.teamColor, DEFAULT_HOME_COLOR),
+        )
+        court = co
+        stream.getGlInterface().addFilter(co.filter)
+        co.attach()
+        co.setShown(quality.court || cameraLost)
+        pushCourt()
+
+        // Going live with the adapter already unplugged: the same
+        // fallback as losing it mid-match, applied before the first
+        // frame rather than after. Without this the UVC source would
+        // sit there producing nothing and the broadcast would come up
+        // and immediately stall.
+        if (cameraLost) {
+            log("camera: unplugged at Start - streaming the court view")
+            runCatching { stream.changeVideoSource(blackVideoSource()) }
+                .onFailure { log("camera: could not swap the video source: $it") }
+            audioToPhoneMic()
+        }
 
         // Attach the overlay. The filter is added once; per-event
         // updates only push a new bitmap via setImage().
@@ -2270,29 +2718,60 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     }
 
     /**
-     * Call `prepareVideo` / `prepareAudio` at most once per activity
-     * lifetime. Both the auto-preview path (surfaceCreated) and the
-     * Start path (onStartStreaming) need the stream prepared before
-     * they can do their job; the encoder does not want a second
-     * prepare call. Returns whether the stream is now usable.
+     * Prepare the encoder, once per configuration.
+     *
+     * Both the auto-preview path (surfaceCreated) and the Start path
+     * (onStartStreaming) need the stream prepared before they can do
+     * their job, and a prepared encoder must not be prepared again -
+     * hence the `prepared` latch. Changing the bandwidth preset or the
+     * codec clears it, because those live in `prepareVideo` and cannot
+     * be changed under a running encoder; the next Start rebuilds it.
+     *
+     * The preview is torn down around the call when the frame size is
+     * changing under it: the GL surface is sized for the encoder, and
+     * reconfiguring it while it is being drawn into is how you get a
+     * stretched preview or a dead one. Returns whether the stream is
+     * now usable.
      */
     private fun ensurePrepared(): Boolean {
         if (prepared) return true
         setStatus("preparing encoder")
+        val wasPreviewing = stream.isOnPreview
+        if (wasPreviewing) runCatching { stream.stopPreview() }
         val ok = try {
-            stream.prepareVideo(target.width, target.height, VIDEO_BITRATE, fps = 30) &&
+            // Codec before prepare: it decides which encoder is built.
+            // H.265 buys roughly a third off the bitrate for the same
+            // picture, but it rides on enhanced RTMP, which not every
+            // ingest accepts - so it is opt-in and the operator can try
+            // it before a match rather than discover it during one.
+            stream.setVideoCodec(
+                if (Settings.useHevc(this)) VideoCodec.H265 else VideoCodec.H264
+            )
+            stream.prepareVideo(
+                quality.width, quality.height, quality.bitrate,
+                fps = quality.fps,
+                iFrameInterval = quality.gop,
+            ) &&
                 stream.prepareAudio(48_000, true, 128_000)
         } catch (e: Exception) {
             log("prepare threw ${e.javaClass.simpleName}: ${e.message}")
             setStatus("encoder failed"); false
         }
         if (!ok) {
-            log("prepareVideo/prepareAudio returned false - try 1280x720 or 3 Mbps")
+            log("prepareVideo/prepareAudio returned false - try a lower " +
+                "bandwidth setting, or H.264 if H.265 is on")
             setStatus("encoder failed")
+            // Put the monitor back even though the encoder refused:
+            // the operator still needs to see what the camera sees
+            // while they pick a setting that works.
+            if (wasPreviewing) attachPreview()
             return false
         }
         prepared = true
-        log("encoder ready ${target.width}x${target.height} @30fps")
+        if (wasPreviewing) attachPreview()
+        log("encoder ready ${quality.width}x${quality.height} @${quality.fps}fps, " +
+            "gop ${quality.gop}s, ${if (Settings.useHevc(this)) "H.265" else "H.264"}, " +
+            "${quality.label}")
         setStatus("ready")
         return true
     }
@@ -2550,6 +3029,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         popup?.hide()
         popup = null
         card = null
+        blackout = null
+        court = null
         // The filter references are dropped with the overlay; on
         // the next Start a fresh GenericStream + fresh filters are
         // built. `clearFilters` would be belt-and-braces here, but
@@ -2560,7 +3041,9 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         startButton.isEnabled = true
         stopButton.isEnabled = false
         lastBitrateKbps = 0
-        healthLabel.visibility = View.GONE
+        // Back to advertising the ceiling rather than hiding: the chip
+        // is how the bandwidth gets changed before the next Start.
+        updateHealth()
         statusLabel.text = "stopped"
         log("stream stopped - match still open, scoring continues")
         setStatus("stopped")
@@ -2575,6 +3058,131 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
 
 
     // ---- audio routing ---------------------------------------------
+
+    // ---- surviving a lost camera ------------------------------------
+
+    /**
+     * Watches the USB port for the capture adapter coming and going.
+     *
+     * Done here rather than through [UvcVideoSource]'s own callbacks
+     * because the moment the camera is lost we swap that source out --
+     * and a stopped source has released its helper, so it would never
+     * hear the adapter come back. The port is the one thing still
+     * watching either way.
+     */
+    private val usbWatcher = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val device: UsbDevice? =
+                @Suppress("DEPRECATION") intent?.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+            if (device == null || !isCaptureDevice(device)) return
+            when (intent?.action) {
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> onCameraLost()
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> onCameraBack()
+            }
+        }
+    }
+
+    /**
+     * Is this the capture adapter rather than some other USB device?
+     *
+     * By interface class, not by vendor id: the kit bag has been
+     * through several adapters and will go through more, and they all
+     * advertise a video interface. A charger or a hub going in or out
+     * must not take the camera down with it.
+     */
+    private fun isCaptureDevice(device: UsbDevice): Boolean =
+        (0 until device.interfaceCount).any {
+            device.getInterface(it).interfaceClass == UsbConstants.USB_CLASS_VIDEO
+        }
+
+    /**
+     * The adapter is gone: keep the broadcast alive without it.
+     *
+     * Three things have to happen, and all three are about not losing
+     * the stream. The video source becomes a still black frame -- not
+     * `NoVideoSource`, which delivers no frames at all and would stall
+     * the encoder until YouTube dropped the broadcast. The court view
+     * comes up over it, so what goes out is the line-up and the
+     * scoreboard rather than a black rectangle. And audio falls back
+     * to the phone's own microphone, because the adapter that just
+     * left was carrying the sound too.
+     */
+    private fun onCameraLost() {
+        if (cameraLost) return
+        cameraLost = true
+        log("camera: adapter unplugged")
+        if (!stream.isStreaming) {
+            setStatus("camera unplugged")
+            return
+        }
+        runCatching { stream.changeVideoSource(blackVideoSource()) }
+            .onFailure { log("camera: could not swap the video source: $it") }
+        court?.setShown(true)
+        pushCourt()
+        audioToPhoneMic()
+        setStatus("camera lost - court view")
+        toast("Camera unplugged - streaming the court view")
+    }
+
+    /**
+     * The adapter is back: return to the camera and its microphone.
+     *
+     * A fresh [UvcVideoSource] because the old one was stopped, and a
+     * delayed second attempt at the audio routing because the USB
+     * audio device is enumerated a moment after the video one -- ask
+     * too early and the first attempt finds no USB input and settles
+     * for the phone mic for the rest of the match.
+     */
+    private fun onCameraBack() {
+        if (!cameraLost) return
+        cameraLost = false
+        log("camera: adapter reconnected")
+        if (!stream.isStreaming) {
+            setStatus("camera reconnected")
+            return
+        }
+        uvcSource = UvcVideoSource(target, ::log)
+        runCatching { stream.changeVideoSource(uvcSource) }
+            .onFailure { log("camera: could not restore the video source: $it") }
+        court?.setShown(quality.court)
+        routeAudioToUsbIfPresent()
+        window.decorView.postDelayed({
+            if (!cameraLost && stream.isStreaming) routeAudioToUsbIfPresent()
+        }, USB_AUDIO_SETTLE_MS)
+        setStatus("LIVE - streaming")
+        toast("Camera back")
+    }
+
+    /** A single black frame, redrawn at the encoder's frame rate.
+     *  Two pixels: `BitmapSource` scales whatever it is given up to
+     *  the encoder size, and a flat colour has nothing to lose. */
+    private fun blackVideoSource(): BitmapSource {
+        val bmp = android.graphics.Bitmap
+            .createBitmap(2, 2, android.graphics.Bitmap.Config.ARGB_8888)
+            .also { it.eraseColor(Color.BLACK) }
+        return BitmapSource(bmp)
+    }
+
+    /**
+     * Take the sound from the phone.
+     *
+     * Explicitly the built-in microphone rather than clearing the
+     * preference: with the USB device gone, "no preference" leaves the
+     * routing to whatever the system picks next, which on a phone with
+     * a headset or a car kit in range is not necessarily the phone.
+     */
+    private fun audioToPhoneMic() {
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val mic = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+        if (mic == null) {
+            log("audio: no built-in mic listed - leaving the routing alone")
+            return
+        }
+        val ok = runCatching { micSource.setPreferredDevice(mic) }.getOrElse { false }
+        log(if (ok) "audio: switched to the phone mic"
+            else "audio: setPreferredDevice(phone mic) returned false")
+    }
 
     private fun routeAudioToUsbIfPresent() {
         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -2622,6 +3230,101 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     }
 
     /**
+     * The bandwidth menu, opened by tapping the rate readout.
+     *
+     * Deliberately reachable mid-stream and with one tap: the moment
+     * the operator wants it is the moment the picture starts breaking
+     * up, with a rally about to start, and anything buried in a
+     * settings screen would not get used.
+     */
+    private fun chooseQuality() {
+        val options = StreamQuality.values()
+        val current = options.indexOf(quality)
+        val hevc = Settings.useHevc(this)
+        AlertDialog.Builder(this)
+            .setTitle("Stream bandwidth")
+            .setSingleChoiceItems(
+                options.map { it.label }.toTypedArray(), current,
+            ) { dialog, which ->
+                dialog.dismiss()
+                applyQuality(options[which])
+            }
+            // The codec belongs in this menu because it is the same
+            // question - how much has to go down the wire - and because
+            // it is the one setting here that can stop a stream working
+            // at all, so it should be next to the thing it affects
+            // rather than buried in Settings.
+            .setNeutralButton(if (hevc) "Codec: H.265" else "Codec: H.264") { _, _ ->
+                setHevc(!hevc)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /**
+     * Switch between H.264 and H.265.
+     *
+     * H.265 sends roughly the same picture in a third less bandwidth,
+     * which is the difference between a readable scoreboard and a
+     * smear at the bottom of this menu's range. It reaches YouTube
+     * over enhanced RTMP, which YouTube accepts and RootEncoder speaks
+     * -- but the phone's encoder and the ingest have to agree, and
+     * when they do not the stream simply does not come up. Hence a
+     * toggle, and hence the warning: try it on a test broadcast first.
+     */
+    private fun setHevc(on: Boolean) {
+        Settings.setUseHevc(this, on)
+        val name = if (on) "H.265 (HEVC)" else "H.264"
+        if (stream.isStreaming) {
+            log("codec -> $name (applies at the next Start)")
+            toast("$name at the next Start")
+        } else {
+            // Force a re-prepare: the codec decides which encoder gets
+            // built, so it cannot change under a prepared one.
+            prepared = false
+            log("codec -> $name")
+            toast(name)
+        }
+        updateHealth()
+    }
+
+    /**
+     * Take a new ceiling, live if we are live.
+     *
+     * `setVideoBitrateOnFly` is the one encoder parameter that can be
+     * changed without a re-prepare, which is why the presets differ
+     * only in bitrate -- see [StreamQuality]. The blackout is a GL
+     * filter already in the pipeline, so it flips instantly too.
+     * Between them, a stream in trouble can be rescued without
+     * stopping it, which is the whole point: stopping means a new
+     * YouTube broadcast and a lost audience.
+     */
+    private fun applyQuality(next: StreamQuality) {
+        quality = next
+        Settings.setStreamQuality(this, next)
+        blackout?.setShown(!next.video)
+        // A preset change never takes the court view away while the
+        // camera is missing: there would be nothing behind it.
+        court?.setShown(next.court || cameraLost)
+        if (prepared && stream.isStreaming) {
+            // Only the bitrate can move under a running encoder. The
+            // frame size, rate and keyframe interval are baked in at
+            // prepare, so they wait for the next Start rather than
+            // risking a rebuild of a broadcast that is already up.
+            runCatching { stream.setVideoBitrateOnFly(next.bitrate) }
+                .onFailure { log("bitrate change failed: $it") }
+            log("bandwidth -> ${next.label} (bitrate live, " +
+                "${next.width}x${next.height}@${next.fps} at the next Start)")
+        } else {
+            prepared = false
+            log("bandwidth -> ${next.label} " +
+                "(${next.width}x${next.height}@${next.fps}, gop ${next.gop}s)")
+        }
+        updateHealth()
+        toast(next.label)
+    }
+
+    /**
      * Paint the upload rate into the header.
      *
      * Colour-coded against the configured video bitrate rather than
@@ -2632,15 +3335,24 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * operator cannot see the stream itself.
      */
     private fun updateHealth() {
-        if (!stream.isStreaming) {
-            healthLabel.visibility = View.GONE
+        healthLabel.visibility = View.VISIBLE
+        // `prepared` is checked first so this can run from onCreate
+        // without forcing the lazy GenericStream into existence.
+        if (!prepared || !stream.isStreaming) {
+            // Idle: the chip advertises the ceiling that Start will
+            // use, and doubles as the way to change it.
+            healthLabel.text = "⚙ ${quality.shortLabel}" +
+                if (Settings.useHevc(this)) " · H.265" else ""
+            healthLabel.setTextColor(Color.parseColor("#888888"))
             return
         }
-        val targetKbps = VIDEO_BITRATE / 1000
+        val targetKbps = quality.bitrate / 1000
         val kbps = lastBitrateKbps
-        healthLabel.visibility = View.VISIBLE
-        healthLabel.text = if (kbps >= 1000)
+        val rate = if (kbps >= 1000)
             "%.1f Mbps".format(kbps / 1000f) else "$kbps kbps"
+        // The marker says the picture is deliberately black, so a
+        // healthy-looking number on a blank stream is not a mystery.
+        healthLabel.text = if (quality.video) rate else "$rate ■"
         healthLabel.setTextColor(
             when {
                 kbps <= 0 -> Color.parseColor("#FF5252")
@@ -2687,6 +3399,24 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         private val BG_NEUTRAL: Int = Color.parseColor("#3A3F4B")
         private val BG_LIFECYCLE: Int = Color.parseColor("#4A3A6B")
         private val BG_LIBERO: Int = Color.parseColor("#1F6B6B")
+        /** Cancel: grey rather than red. It backs out of a tap, it
+         *  does not delete anything, and a red button on a scoring
+         *  surface reads as "undo the last event". */
+        private val BG_CANCEL: Int = Color.parseColor("#4A4A52")
+        /** Decode size for a court-diagram face. The diagram draws
+         *  them at roughly a fifth of the frame height, so this is
+         *  generous at 1080p and still a tenth of a raw phone photo. */
+        private const val COURT_PHOTO_PX = 256
+        /** How far back an event may be stamped from the tap that
+         *  finishes it. Long enough for finding a player on a crowded
+         *  grid, short enough that an action left armed through a
+         *  timeout does not land in the previous rally. */
+         private const val MAX_ACTION_BACKDATE_MS = 15_000L
+        /** How long the USB audio interface takes to appear after the
+         *  video one, replugged. Measured generously: being a second
+         *  late to switch back costs nothing, being early costs the
+         *  adapter's sound for the rest of the match. */
+        private const val USB_AUDIO_SETTLE_MS = 2500L
         /** Rotation slots: darker than the action buttons, because
          *  the grid is a display that happens to be tappable, not a
          *  row of commands competing for the eye. */
@@ -2700,6 +3430,15 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         /** Held as constants because `refreshAllViews` rewrites both
          *  labels every pass, and a literal in two places drifts. */
         private const val LBL_BALL_SERVED = "\uD83C\uDFD0 Ball Served"
+        /** Shown on the armed button during the assist follow-up. */
+        private const val LBL_ASSIST = "\uD83E\uDD1D Assist"
+        /** The Kill button's resting label. It becomes [LBL_ASSIST]
+         *  while the follow-up prompt is open. */
+        private const val LBL_KILL = "\uD83D\uDCA5 Kill"
+        /** Escape hatch from armed mode, and what it says during the
+         *  assist prompt, where cancelling means "unassisted". */
+        private const val LBL_CANCEL = "\u2715 Cancel"
+        private const val LBL_NO_ASSIST = "\u2715 No assist"
         private const val LBL_TIMEOUT = "\u23F1\uFE0F Timeout"
         private const val LBL_TIMEOUT_END = "\u23F1\uFE0F End Timeout"
 
@@ -2735,9 +3474,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             "#A78BFA", "#8A5CF6", "#6D28D9", "#D6409F", "#9D174D", "#4C1D95",
             "#FFFFFF", "#D6DAE0", "#9AA0A6", "#6B7280", "#374151", "#111111",
         )
-        /** Target video bitrate. Also the yardstick the header's
-         *  health readout colours itself against. */
-        private const val VIDEO_BITRATE = 6_000_000
+        /** Spans on a rotation slot's label cover fixed ranges of a
+         *  string that is rebuilt every time, so the flag only has to
+         *  say "do not extend at the edges". */
+        private const val SPAN_FLAGS = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
         /** Lit rotation slot while an action is armed. */
         private val ARMED_SLOT_BG: Int = Color.parseColor("#2E7D32")
         private val ARMED_SLOT_EMPTY_BG: Int = Color.parseColor("#1B3A1C")

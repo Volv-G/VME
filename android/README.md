@@ -265,4 +265,45 @@ refused, so the aim is to need it at most once per adapter.
 3. **1080p is uncompressed-only.** USB 2.0 cannot carry that above ~5fps.
    That is a hardware answer, not a software one.
 4. **`prepareVideo` returns false.** The phone's encoder refused 1080p30
-   at 6 Mbps. Drop to 720p or 3 Mbps and note it.
+   at 6 Mbps. Tap the rate readout in the header and pick a lower
+   bandwidth (see below), then Start again.
+
+### Bandwidth
+
+The header's rate readout is a button. It opens the bandwidth menu.
+Each entry is a whole encoder configuration -- resolution, frame rate
+and keyframe interval as well as bitrate, because at the bottom of the
+range the frame size is what decides whether the scoreboard is
+readable: 6 Mbps 1080p30, 3 Mbps 720p30, 1.5 Mbps 720p30, 0.6 Mbps
+540p20, plus two settings for a hall whose wifi cannot carry video at
+all -- **Court positions**, which replaces the picture
+with the rotation as a diagram (faces, numbers, and a yellow ring on
+the server), and **Overlays only**, which blacks it out entirely. Both
+still stream the scoreboard, pop-ups and cards, and both cost almost
+nothing on the wire because the picture only changes when somebody
+moves. The choice sticks per device. Bitrate applies live
+(`setVideoBitrateOnFly`) when a stream is already running; frame size,
+rate and keyframe interval are baked into `prepareVideo`, so they take
+effect at the next Start.
+
+### Losing the adapter mid-match
+
+Unplugging the capture adapter no longer ends the broadcast. A USB
+watcher sees the video interface go, swaps the video source for a
+still black frame (`BitmapSource` -- *not* `NoVideoSource`, which
+delivers no frames at all and would stall the encoder until YouTube
+dropped the stream), forces the court view up over it, and falls back
+to the phone's microphone. Plug it back in and it returns to the
+camera and the adapter's audio, the latter after a short delay because
+the USB audio interface enumerates a moment behind the video one.
+
+A YouTube broadcast that ends cannot be resumed -- it needs a new one,
+with a new link, while the match carries on without it -- which is why
+this is worth the machinery.
+
+The same menu's neutral button toggles **H.264 / H.265**. HEVC is worth
+roughly a third of the bitrate for the same picture and reaches YouTube
+over enhanced RTMP, which RootEncoder speaks -- but the phone's encoder
+and the ingest have to agree, and when they do not the broadcast simply
+never comes up. Off by default; test it on a throwaway broadcast before
+trusting it at a match.
