@@ -288,6 +288,7 @@ class MatchOut(BaseModel):
     # reload and travels between machines.
     timeline_zoom: float = 1.0
     timeline_anchor_frame: int = 0
+    playhead_frame: int = 0
 
 
 class CreateTournamentIn(BaseModel):
@@ -326,10 +327,28 @@ class UpdateMatchIn(BaseModel):
     # pans, so a save never carries anything else with it.
     timeline_zoom: Optional[float] = None
     timeline_anchor_frame: Optional[int] = None
+    playhead_frame: Optional[int] = None
 
 
 class ReorderClipsIn(BaseModel):
     clip_ids: list[str]
+
+
+class UpdateClipIn(BaseModel):
+    """Body for `PATCH .../clips/{clip_id}`.
+
+    `start_recording_time` is Unix seconds, or null for "unknown" -
+    which is what a clip has before ffprobe finds a `creation_time`,
+    and what it should go back to if the one on file is nonsense.
+    Omitting the field entirely leaves it alone; `model_fields_set`
+    tells the two apart, so null is a value rather than an absence.
+
+    `shift_following` moves every later clip by the same amount, for a
+    camera whose clock was wrong for the whole match.
+    """
+
+    start_recording_time: Optional[float] = None
+    shift_following: bool = False
 
 
 class UploadSessionStartIn(BaseModel):
@@ -437,6 +456,27 @@ class ImportEventsIn(BaseModel):
     # Replace the existing event log rather than adding to it. Clip
     # transitions are structural and survive either way.
     replace: bool = False
+
+
+class ShiftEventsIn(BaseModel):
+    """Body for `POST .../events/shift`.
+
+    Seconds, positive to move the log later, negative earlier.
+    Fractional on purpose - tagging lag is measured in tenths, and half
+    a second is thirty frames at 60fps. Bounded at a minute, which is
+    far more than any lag and stops a typo from flattening every event
+    onto the first frame.
+    """
+
+    seconds: float = Field(ge=-60, le=60)
+
+
+class ShiftEventsOut(BaseModel):
+    moved: int
+    # Pushed past the end of the footage and pulled back to a real
+    # frame, so their time and their position no longer agree.
+    clamped: int
+    match: MatchOut
 
 
 class ImportEventsOut(BaseModel):

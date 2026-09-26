@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..domain.events.timeline import ClipTransitionEvent
+from .locks import match_lock_dep
 from .helpers import (
     deserialize_event,
     event_field_names,
@@ -20,11 +21,16 @@ from .schemas import (
     MatchOut,
     MoveEventIn,
     NudgeEventIn,
+    ShiftEventsIn,
+    ShiftEventsOut,
 )
 
 router = APIRouter(
     prefix="/teams/{team}/tournaments/{tournament}/dates/{date}/matches/{match}/events",
     tags=["events"],
+    # Every handler here is a load / change / save of one match; the
+    # lock stops two of them interleaving and losing one's work.
+    dependencies=[Depends(match_lock_dep)],
 )
 
 
@@ -330,6 +336,90 @@ def import_events(
         skipped=skipped,
         match=serialize_match(team, tournament, date, match, m),
     )
+
+
+@router.post("/shift", response_model=ShiftEventsOut)
+def shift_events(
+    team: str, tournament: str, date: str, match: str, body: ShiftEventsIn
+) -> ShiftEventsOut:
+    """Move every timestamped event by the same offset.
+
+    For when the whole log is late or early against the footage: a
+    tagging lag that was not compensated at the time, a clip whose
+    recording time was corrected afterwards, a phone clock a second out
+    from the camera's.
+
+    Every event moves together, so nothing changes order and nothing
+    needs clamping - which is what makes a global shift safe where a
+    per-type one is not, and what makes it undoable by shifting back.
+
+    Clip transitions are left alone. They mark where one file ends and
+    the next begins; that boundary is a property of the footage and
+    moves only when the clips do.
+
+    Events pushed past either end of the footage are pulled back to the
+    first or last frame by `project_ms`, and counted in `clamped` so a
+    shift that quietly flattened the ends says so.
+    """
+    m = load_match_or_404(team, tournament, date, match)
+    delta_ms = int(round(body.seconds * 1000))
+    if delta_ms == 0:
+        return ShiftEventsOut(moved=0, clamped=0, match=serialize_match(
+            team, tournament, date, match, m))
+
+    moved = clamped = 0
+    for e in m.events:
+        if isinstance(e, ClipTransitionEvent) or e.at_ms is None:
+            continue
+        wanted = e.at_ms + delta_ms
+        placed = m.project_ms(wanted)
+        if placed is None:
+            continue
+        e.clip_id, e.local_frame = placed
+        e.at_ms = wanted
+        moved += 1
+        # `project_ms` pulls anything outside the footage to the nearest
+        # frame there is, so the event's own time and its frame stop
+        # agreeing. That is worth reporting, not hiding.
+        #
+        # Compared with a frame of slack, not exactly: a frame is a
+        # discrete step, so the time that comes back from a position is
+        # never quite the time that went in. At 59.94fps that is 17ms of
+        # unavoidable difference, and an exact test called every single
+        # event clamped.
+        landed = m.event_time_ms(e)
+        clip = m.get_clip(e.clip_id)
+        fps = (clip.fps if clip and clip.fps else m.fps) or 30.0
+        if landed is None or abs(landed - wanted) > (1000.0 / fps) + 2:
+            clamped += 1
+
+    m._sort_events()
+    m._recompute_states()
+    save_match(team, tournament, date, match, m)
+    return ShiftEventsOut(
+        moved=moved,
+        clamped=clamped,
+        match=serialize_match(team, tournament, date, match, m),
+    )
+
+
+@router.delete("", response_model=MatchOut)
+def clear_events(team: str, tournament: str, date: str, match: str) -> MatchOut:
+    """Empty the event list, keeping the clip structure.
+
+    Clip transitions survive, exactly as they do on a re-import with
+    `replace`: they describe where one file ends and the next begins,
+    which is a property of the footage rather than something anybody
+    tagged. Everything else goes.
+
+    The route exists because the fix for a botched import was otherwise
+    deleting a few hundred events one at a time - and the usual next
+    step, re-importing from the phone, needs a clean match to land on.
+    """
+    m = load_match_or_404(team, tournament, date, match)
+    m.events = [e for e in m.events if isinstance(e, ClipTransitionEvent)]
+    save_match(team, tournament, date, match, m)
+    return serialize_match(team, tournament, date, match, m)
 
 
 @router.delete("/{event_id}", response_model=MatchOut)

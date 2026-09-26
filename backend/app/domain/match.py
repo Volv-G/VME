@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -111,15 +114,65 @@ class Match:
     # pixels mean different things on different screens.
     timeline_zoom: float = 1.0
     timeline_anchor_frame: int = 0
+    # Where the playhead was left, as a global frame.
+    #
+    # Stored with the zoom and the scroll position and for the same
+    # reason: editing a match is picking it up where you put it down.
+    # Reopening at frame 0 means re-finding the rally you were working
+    # on, and in a two-hour match that is a real search - the scroll
+    # position alone only restores the view, not the video.
+    playhead_frame: int = 0
     schema_version: int = SCHEMA_VERSION
 
     # ---- Clip operations -------------------------------------------------
 
     def add_clip(self, clip: Clip, index: Optional[int] = None) -> None:
+        """Add a clip, in recording order when that is knowable.
+
+        Without this, order came from filenames - `sorted(folder)` on a
+        scan, the file picker's order on an upload - and a camera whose
+        names do not sort the way it recorded (``GX010012`` wrapping to
+        ``GX020012``, mixed case, differing digit widths) produced a
+        match assembled in the wrong order, with nothing to correct it
+        but the reorder arrows.
+
+        The camera already tells us: ffprobe's ``creation_time``, kept
+        on every clip as ``start_recording_time``. So a new clip is
+        placed where it was filmed rather than appended.
+
+        Only the clip being added moves. Clips already in the match keep
+        their positions, including ones a user placed by hand, and a
+        clip with no recorded time still goes on the end - the fallback
+        is the old behaviour, not a guess.
+
+        Existing events are unaffected: an event is anchored to its
+        clip's id and a frame within that clip, so it travels with its
+        own footage when the list changes. Global frame numbers are
+        derived from clip order, so they shift - which is correct, since
+        the footage before them has changed.
+        """
+        if index is None:
+            index = self._recording_order_index(clip)
         if index is None or index >= len(self.clips):
             self.clips.append(clip)
         else:
             self.clips.insert(index, clip)
+
+    def _recording_order_index(self, clip: Clip) -> Optional[int]:
+        """Where [clip] belongs by recording time, or None to append.
+
+        The first position whose clip was filmed later. Clips with no
+        recorded time are skipped rather than compared, so a match that
+        mixes probed and unprobed files still places what it can.
+        """
+        start = clip.start_recording_time
+        if start is None:
+            return None
+        for i, existing in enumerate(self.clips):
+            other = existing.start_recording_time
+            if other is not None and other > start:
+                return i
+        return None
 
     def remove_clip(self, clip_id: str) -> None:
         self.clips = [c for c in self.clips if c.id != clip_id]
@@ -469,6 +522,7 @@ class Match:
             "reel_tail_seconds": self.reel_tail_seconds,
             "timeline_zoom": self.timeline_zoom,
             "timeline_anchor_frame": self.timeline_anchor_frame,
+            "playhead_frame": self.playhead_frame,
         }
 
     @classmethod
@@ -485,6 +539,7 @@ class Match:
             reel_tail_seconds=_opt_float(data.get("reel_tail_seconds")),
             timeline_zoom=float(data.get("timeline_zoom") or 1.0),
             timeline_anchor_frame=int(data.get("timeline_anchor_frame") or 0),
+            playhead_frame=int(data.get("playhead_frame") or 0),
             schema_version=int(data.get("schema_version", SCHEMA_VERSION)),
         )
         m._sort_events()
@@ -497,13 +552,98 @@ class Match:
 
     @classmethod
     def load(cls, path: str | Path) -> "Match":
-        with open(path, "r", encoding="utf-8") as f:
-            return cls.from_dict(json.load(f))
+        """Read a match, without racing a save of the same one.
+
+        Takes the same per-file lock the save takes. On Windows the
+        atomic replace in `save` cannot swap a file that is open, and a
+        reader that opens during the swap gets a PermissionError - so
+        without this, fixing the corruption would only have traded it
+        for an occasional 500 on a match that was being written.
+
+        The retry is for writers this process does not know about: a
+        maintenance script, or a second worker. Three attempts a few
+        milliseconds apart covers a replace; anything longer is a real
+        problem and should surface as itself.
+        """
+        p = Path(path)
+        with _save_lock(p):
+            last: OSError | None = None
+            for attempt in range(3):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        return cls.from_dict(json.load(f))
+                except PermissionError as exc:
+                    last = exc
+                    time.sleep(0.02 * (attempt + 1))
+            raise last if last else OSError(f"could not read {p}")
 
     def save(self, path: str | Path) -> None:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2)
+        """Write the match, atomically and one writer at a time.
+
+        Two things save a match at once more often than it looks.
+        Reading one writes it - `GET` persists clips the scan just
+        discovered - and the editor writes its own view and playhead as
+        they change. Uvicorn runs these handlers in a thread pool, so
+        two of them land on the same file concurrently.
+
+        Written in place with `open(..., "w")` that is a corrupt match:
+        both writers truncate, both write from their own offset, and the
+        shorter one leaves the tail of the longer one behind it. The
+        result parses as "Extra data" and the match will not open at
+        all - which is exactly what happened to a match mid-edit.
+
+        So: serialize first, take the lock for this path, write a
+        neighbouring temp file, and `os.replace` it over the target.
+        The replace is atomic, so a reader sees the old file or the new
+        one and never a half-written one. Last writer wins, which is
+        the same outcome as before minus the corruption.
+        """
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(self.to_dict(), indent=2)
+        # Named per thread: two writers must not share a temp file
+        # either, or they are back to interleaving in a different file.
+        tmp = p.with_name(f"{p.name}.tmp-{os.getpid()}-{threading.get_ident()}")
+        with _save_lock(p):
+            try:
+                tmp.write_text(payload, encoding="utf-8")
+                # Windows refuses to replace a file anything has open,
+                # and something transiently does: a virus scanner or the
+                # search indexer opening the file that was just written.
+                # It clears in milliseconds, so retry rather than fail a
+                # save the user will not know to repeat.
+                last: OSError | None = None
+                for attempt in range(4):
+                    try:
+                        os.replace(tmp, p)
+                        last = None
+                        break
+                    except PermissionError as exc:
+                        last = exc
+                        time.sleep(0.02 * (attempt + 1))
+                if last is not None:
+                    raise last
+            finally:
+                if tmp.exists():
+                    tmp.unlink(missing_ok=True)
+
+
+# One lock per match file, so concurrent saves of the SAME match queue
+# up while saves of different matches stay parallel. Keyed by resolved
+# path; a handful of matches are open in a session, so the map never
+# grows to anything worth pruning.
+_SAVE_LOCKS: dict[str, threading.Lock] = {}
+_SAVE_LOCKS_GUARD = threading.Lock()
+
+
+def _save_lock(path: Path) -> threading.Lock:
+    key = str(path.resolve()).lower() if os.name == "nt" else str(path.resolve())
+    with _SAVE_LOCKS_GUARD:
+        lock = _SAVE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _SAVE_LOCKS[key] = lock
+        return lock
 
 
 def _opt_float(value: Any) -> Optional[float]:

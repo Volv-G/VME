@@ -13,11 +13,12 @@ load. The frontend gets the same effect just by refetching the match.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..domain.player import Player
 from ..domain.roster import Roster
 from ..library import paths, scanner
+from .locks import match_lock_dep
 from .helpers import load_match_or_404, save_match, serialize_match
 from .schemas import (
     CreateMatchIn,
@@ -36,6 +37,9 @@ list_router = APIRouter(
 router = APIRouter(
     prefix="/teams/{team}/tournaments/{tournament}/dates/{date}/matches",
     tags=["matches"],
+    # Includes GET: reading a match saves it when the scan finds new
+    # clips, so it races the writers exactly like a write would.
+    dependencies=[Depends(match_lock_dep)],
 )
 
 
@@ -114,6 +118,8 @@ def patch_match(
         m.timeline_zoom = max(1.0, min(float(body.timeline_zoom), 200.0))
     if body.timeline_anchor_frame is not None:
         m.timeline_anchor_frame = max(0, int(body.timeline_anchor_frame))
+    if body.playhead_frame is not None:
+        m.playhead_frame = max(0, int(body.playhead_frame))
     if body.liberos is not None:
         # Order-preserving dedupe; a jersey need not be on the roster
         # (the phone adds ad-hoc jerseys), it just has to be a number.

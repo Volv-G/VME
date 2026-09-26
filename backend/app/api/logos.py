@@ -23,12 +23,13 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from dataclasses import replace
 
 from ..library import paths, scanner
+from .locks import match_lock_dep
 from .helpers import load_match_or_404, save_match
 
 logger = logging.getLogger(__name__)
@@ -235,7 +236,10 @@ def get_opponent_logo(
 
 @router.put(
     "/teams/{team}/tournaments/{tournament}/dates/{date}/matches/{match}"
-    "/opponent-logo"
+    "/opponent-logo",
+    # Writes the match record (the logo path), so it takes the match's
+    # lock like every other writer - see `locks.py`.
+    dependencies=[Depends(match_lock_dep)],
 )
 def put_opponent_logo(
     team: str,
@@ -257,7 +261,8 @@ def put_opponent_logo(
 
 @router.delete(
     "/teams/{team}/tournaments/{tournament}/dates/{date}/matches/{match}"
-    "/opponent-logo"
+    "/opponent-logo",
+    dependencies=[Depends(match_lock_dep)],
 )
 def delete_opponent_logo(
     team: str, tournament: str, date: str, match: str

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import fields, is_dataclass
 from typing import Any
 
+from fastapi import HTTPException
+
 from ..domain.events import event_from_dict, event_to_dict
 from ..domain.events.base import MatchEvent
 from ..domain.events.timeline import ClipTransitionEvent
@@ -103,6 +105,7 @@ def serialize_match(
         reel_tail_default=reels.REEL_MAX_TAIL_SECONDS,
         timeline_zoom=m.timeline_zoom,
         timeline_anchor_frame=m.timeline_anchor_frame,
+        playhead_frame=m.playhead_frame,
     )
 
 
@@ -132,7 +135,15 @@ def load_match_or_404(
 ) -> Match:
     folder = paths.match_dir(team, tournament, date, match_name)
     if not folder.exists():
-        raise FileNotFoundError(
-            f"Match not found: {team}/{tournament}/{date}/{match_name}"
+        # A 404, as the name promises. This used to raise
+        # FileNotFoundError, which routes that happened to wrap it
+        # turned into a 404 and every other route turned into a 500 -
+        # so the phone, posting a match the server does not have, got
+        # "error 500" instead of being told what was wrong.
+        #
+        # Callers that still catch FileNotFoundError around this are
+        # harmless: HTTPException passes straight through them.
+        raise HTTPException(
+            404, f"Match not found: {team}/{tournament}/{date}/{match_name}"
         )
     return scanner.load_or_create_match(team, tournament, date, match_name)

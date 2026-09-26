@@ -29,7 +29,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..library import paths, scanner
 from ..library.probe import probe
@@ -41,6 +41,7 @@ from ..domain.events.lifecycle import (
 )
 from ..domain.events.timeline import CutEndEvent, CutStartEvent
 from ..domain.match import Clip, Match, new_clip_id
+from .locks import match_lock_dep
 from .helpers import load_match_or_404, save_match, serialize_match
 from .schemas import (
     AutoCutsIn,
@@ -49,6 +50,7 @@ from .schemas import (
     ImportPathOut,
     MatchOut,
     ReorderClipsIn,
+    UpdateClipIn,
     UploadSessionStartIn,
     UploadSessionOut,
 )
@@ -58,6 +60,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/teams/{team}/tournaments/{tournament}/dates/{date}/matches/{match}/clips",
     tags=["clips"],
+    dependencies=[Depends(match_lock_dep)],
 )
 
 # Cut window around each qualifying clip boundary, in seconds. We hide the
@@ -746,6 +749,58 @@ def auto_cuts(
         skipped_too_short=skipped_too_short,
         skipped_too_close=skipped_too_close,
     )
+
+
+@router.patch("/{clip_id}", response_model=MatchOut)
+def patch_clip(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    clip_id: str,
+    body: UpdateClipIn,
+) -> MatchOut:
+    """Correct a clip's recording time.
+
+    ffprobe's `creation_time` is right until it is not, and when it is
+    wrong it is wrong in ways that quietly ruin a match: an export from
+    an editor carries the time it was *exported*, and plenty of cameras
+    write local time into a field the format says is UTC - so an
+    evening match reads as a morning one. Either way, events imported
+    by wall clock land on the wrong frames, or on frame zero.
+
+    `shift_following` applies the same correction to every clip after
+    this one, which is what a camera with a misconfigured clock needs:
+    the offset is identical for every file it wrote, and fixing seven
+    of them one at a time invites a typo in the middle.
+
+    Clips are re-sorted by recording time afterwards, since that is the
+    order they are assembled in ([Match.add_clip]).
+    """
+    m = load_match_or_404(team, tournament, date, match)
+    clip = m.get_clip(clip_id)
+    if clip is None:
+        raise HTTPException(404, "Clip not found")
+
+    if "start_recording_time" in body.model_fields_set:
+        new = body.start_recording_time
+        old = clip.start_recording_time
+        clip.start_recording_time = new
+        if body.shift_following and new is not None and old is not None:
+            delta = new - old
+            idx = m.clips.index(clip)
+            for other in m.clips[idx + 1:]:
+                if other.start_recording_time is not None:
+                    other.start_recording_time += delta
+        # Order follows recording time, and only clips that have one
+        # can be placed: the rest keep their positions at the end.
+        dated = [c for c in m.clips if c.start_recording_time is not None]
+        undated = [c for c in m.clips if c.start_recording_time is None]
+        dated.sort(key=lambda c: c.start_recording_time or 0.0)
+        m.clips = dated + undated
+
+    save_match(team, tournament, date, match, m)
+    return serialize_match(team, tournament, date, match, m)
 
 
 @router.delete("/{clip_id}", response_model=MatchOut)
