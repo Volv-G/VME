@@ -45,11 +45,18 @@ SKEW_SCALE = 0.34
 # exactly where that shows. Text and logos are drawn afterwards at
 # native resolution so they stay crisp.
 SHAPE_SUPERSAMPLE = 4
-# Gap between two set scores on the full-time row, as a multiple of
-# that row's type size. Matched to the phone app's card
-# (CardOverlay.SET_GAP_EMS): the gap has to scale with the type or five
-# sets run together into one long number.
-FULLTIME_GAP_EMS = 0.8
+# Full-time table: the height of a team's row and of the header strip
+# above it, as fractions of the bar height the live scoreboard uses.
+FULLTIME_ROW_SCALE = 0.88
+FULLTIME_HEADER_SCALE = 0.62
+# Cell colors: the header strip, and the two shades the score columns
+# alternate between so a column reads as a column without drawn rules.
+FULLTIME_HEADER_COLOR = (35, 27, 60, 255)
+FULLTIME_CELL_COLORS = ((45, 35, 75, 255), (54, 43, 88, 255))
+# The points of the team that lost a set, dimmed, and the header's
+# labels. Both scores stay legible; the brighter one took the set.
+FULLTIME_LOSER_COLOR = (168, 165, 185, 255)
+FULLTIME_LABEL_COLOR = (205, 202, 220, 255)
 # Serve indicator: diameter and the gap to the team name, both as a
 # fraction of the main bar height.
 SERVE_DOT_SCALE = 0.22
@@ -121,42 +128,24 @@ class ScoreboardOverlay:
         if self._cache is not None and self._cache_key == cache_key:
             return self._cache
 
+        if state.game_ended and state.set_scores:
+            overlay = self._render_fulltime(video_height, state)
+            self._cache = overlay
+            self._cache_key = cache_key
+            return overlay
+
         score_font_size = int(video_height * SCORE_FONT_SCALE)
         main_h = max(1, int(score_font_size / FONT_SCALE_SCORE))
 
-        team_font, sets_font, score_font, fulltime_font = _load_fonts(main_h)
+        team_font, sets_font, score_font = _load_fonts(main_h)
 
         tmp = Image.new("RGBA", (1, 1))
         td = ImageDraw.Draw(tmp)
 
         home_w = _text_w(td, self.home.name, team_font)
         away_w = _text_w(td, self.away.name, team_font)
-        # After the final whistle the live score has been reset to nil by
-        # the set that ended the match, so the bar would sit over the
-        # celebrations reading "0 - 0". What belongs there once it is over
-        # is the whole result - every set, in the order they were played -
-        # which is what the set counters either side are a summary of.
-        #
-        # Set at the counters' size rather than the live score's: the
-        # centre block now holds a row instead of one number, and a row
-        # of scores at headline size is most of the bar. Items are
-        # measured and placed one by one (see the drawing below), not
-        # joined into a string, so the spacing between scores stays
-        # deliberate however many sets there were.
         score_text = f"{state.home_score}  -  {state.away_score}"
-        set_items: list[str] = []
-        set_gap = 0
-        if state.game_ended and state.set_scores:
-            # Spaces around the dash for the same reason as on the phone:
-            # "25-21" in a row of scores reads as one number.
-            set_items = [f"{h} - {a}" for h, a in state.set_scores]
-            set_gap = max(4, int(main_h * FONT_SCALE_SETS * FULLTIME_GAP_EMS))
-        if set_items:
-            score_w = sum(_text_w(td, t, fulltime_font) for t in set_items) + set_gap * (
-                len(set_items) - 1
-            )
-        else:
-            score_w = _text_w(td, score_text, score_font)
+        score_w = _text_w(td, score_text, score_font)
         single_set_w = _text_w(td, "0", sets_font)
 
         pad = 16
@@ -252,25 +241,13 @@ class ScoreboardOverlay:
         )
         x += sets_section
 
-        if set_items:
-            tx = x + center_section / 2 - score_w / 2
-            for t in set_items:
-                draw.text(
-                    (tx, text_y),
-                    t,
-                    font=fulltime_font,
-                    fill=(255, 255, 255, 255),
-                    anchor="lm",
-                )
-                tx += _text_w(td, t, fulltime_font) + set_gap
-        else:
-            draw.text(
-                (x + center_section // 2, text_y),
-                score_text,
-                font=score_font,
-                fill=(255, 255, 255, 255),
-                anchor="mm",
-            )
+        draw.text(
+            (x + center_section // 2, text_y),
+            score_text,
+            font=score_font,
+            fill=(255, 255, 255, 255),
+            anchor="mm",
+        )
         x += center_section
 
         draw.text(
@@ -310,6 +287,110 @@ class ScoreboardOverlay:
 
         self._cache = overlay
         self._cache_key = cache_key
+        return overlay
+
+    def _render_fulltime(self, video_height: int, state: GameState) -> Image.Image:
+        """The result table, held from the final whistle to the end.
+
+        Set 1 | Set 2 | Set 3 across the top, a team per row, their
+        points underneath. The in-match bar cannot say this - it carries
+        one score, and what matters once it is over is all of them - and
+        the point history goes with it: that strip answers "how has this
+        run of rallies gone", which is not a question the match is still
+        asking.
+
+        Same corner of the frame, same colors, so it reads as the
+        scoreboard settling rather than as something new arriving.
+        """
+        score_font_size = int(video_height * SCORE_FONT_SCALE)
+        main_h = max(1, int(score_font_size / FONT_SCALE_SCORE))
+        row_h = max(1, int(main_h * FULLTIME_ROW_SCALE))
+        head_h = max(1, int(main_h * FULLTIME_HEADER_SCALE))
+        team_font, label_font, num_font = _load_fonts(main_h)
+
+        sets = [(int(h), int(a)) for h, a in state.set_scores]
+
+        tmp = Image.new("RGBA", (1, 1))
+        td = ImageDraw.Draw(tmp)
+
+        pad = max(6, int(row_h * 0.34))
+        logo_d = max(8, int(row_h * 0.72))
+        logo_gap = max(4, int(logo_d * LOGO_GAP_SCALE))
+        home_logo = self._logo_disc(self.home.logo_path, logo_d)
+        away_logo = self._logo_disc(self.away.logo_path, logo_d)
+        # One name column wide enough for both names, and one column
+        # width for every set: a table whose columns do not line up is
+        # two rows of numbers.
+        logo_extra = (
+            logo_d + logo_gap if (home_logo is not None or away_logo is not None) else 0
+        )
+        name_col = (
+            max(
+                _text_w(td, self.home.name, team_font),
+                _text_w(td, self.away.name, team_font),
+            )
+            + logo_extra
+            + pad * 2
+        )
+        labels = [f"Set {i + 1}" for i in range(len(sets))]
+        widest = max(
+            [_text_w(td, t, label_font) for t in labels]
+            + [_text_w(td, str(v), num_font) for pair in sets for v in pair]
+        )
+        set_col = widest + pad * 2
+
+        total_w = name_col + set_col * len(sets)
+        total_h = head_h + row_h * 2
+        overlay = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+
+        # Header strip. Nothing above the names: the rows label
+        # themselves, and "Team" over a column of two would be filler.
+        draw.rectangle([(0, 0), (total_w, head_h)], fill=FULLTIME_HEADER_COLOR)
+        for i, label in enumerate(labels):
+            draw.text(
+                (name_col + set_col * i + set_col // 2, head_h // 2),
+                label,
+                font=label_font,
+                fill=FULLTIME_LABEL_COLOR,
+                anchor="mm",
+            )
+
+        rows = (
+            (self.home, home_logo, [p[0] for p in sets], [p[0] > p[1] for p in sets]),
+            (self.away, away_logo, [p[1] for p in sets], [p[1] > p[0] for p in sets]),
+        )
+        for r, (brand, logo, points, won) in enumerate(rows):
+            y0 = head_h + row_h * r
+            y1 = y0 + row_h
+            mid = (y0 + y1) // 2
+            draw.rectangle([(0, y0), (name_col, y1)], fill=_hex_to_rgba(brand.color))
+            if logo is not None:
+                overlay.alpha_composite(logo, (pad, y0 + (row_h - logo_d) // 2))
+            draw.text(
+                (pad + logo_extra, mid),
+                brand.name,
+                font=team_font,
+                fill=(255, 255, 255, 255),
+                anchor="lm",
+            )
+            for i, pts in enumerate(points):
+                x0 = name_col + set_col * i
+                draw.rectangle(
+                    [(x0, y0), (x0 + set_col, y1)], fill=FULLTIME_CELL_COLORS[i % 2]
+                )
+                draw.text(
+                    (x0 + set_col // 2, mid),
+                    str(pts),
+                    font=num_font,
+                    fill=(255, 255, 255, 255) if won[i] else FULLTIME_LOSER_COLOR,
+                    anchor="mm",
+                )
+
+        # A rule between the teams, in the header's color, so two rows
+        # of numbers do not merge into one block.
+        y = head_h + row_h
+        draw.line([(0, y), (total_w, y)], fill=FULLTIME_HEADER_COLOR, width=2)
         return overlay
 
     @staticmethod
@@ -558,13 +639,6 @@ def _hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple[int, int, int, int]:
 
 
 def _load_fonts(main_h: int):
-    """Team name, set counters, live score, full-time row.
-
-    The last is the set counters' size in the score's weight. It is the
-    centre block's headline once the match is over, and it sits over
-    whatever the camera caught of the celebration - light type at that
-    size disappears into it.
-    """
     team_size = max(8, int(main_h * FONT_SCALE_TEAM))
     sets_size = max(8, int(main_h * FONT_SCALE_SETS))
     score_size = max(8, int(main_h * FONT_SCALE_SCORE))
@@ -581,8 +655,7 @@ def _load_fonts(main_h: int):
             ImageFont.truetype(bold, team_size),
             ImageFont.truetype(regular, sets_size),
             ImageFont.truetype(bold, score_size),
-            ImageFont.truetype(bold, sets_size),
         )
     except Exception:
         d = ImageFont.load_default()
-        return d, d, d, d
+        return d, d, d

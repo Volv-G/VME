@@ -79,13 +79,21 @@ class GameEndEvent(LifecycleEvent):
     and the match used to fade to black across it and take the score
     with it.
 
-    So the bar stays, showing the result, over footage that carries on
-    to the end of the render. It sits where it always sits, which is
-    the one place on the frame already agreed to be out of the way.
+    So the result table stays, over footage that carries on to the end
+    of the render. It sits where the bar sits, which is the one place
+    on the frame already agreed to be out of the way.
 
     The render still opens and closes with a fade: those are bookends
     applied to the whole output (`apply_bookend_fades`), not this
     event's doing. This one fired in the middle of the celebration.
+
+    Ending the game ends the set: the match-winning point is followed by
+    Game End, not by a Set End nobody has any reason to tap once it is
+    over. Without this, the set that decided the match counted for
+    nothing - it was missing from the set tally and from the result
+    table, which is how a 2-1 win came to be shown as 1-1 with two sets
+    listed. Tapping Set End first still works and changes nothing:
+    there is no score left to close by then.
     """
 
     type_name: ClassVar[str] = "game_end"
@@ -93,6 +101,10 @@ class GameEndEvent(LifecycleEvent):
     @property
     def overlay_effect(self) -> Optional[OverlayEffect]:
         return ScoreboardVisibilityEffect(visible=True)
+
+    @property
+    def score_effect(self) -> Optional[ScoreEffect]:
+        return ScoreResetEffect()
 
     @property
     def timeline_effect(self) -> Optional[TimelineEffect]:
