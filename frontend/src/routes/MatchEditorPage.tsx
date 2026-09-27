@@ -646,7 +646,14 @@ export function MatchEditorPage() {
       <div
         className={`editor-grid pane-${mobilePane}`}
         ref={gridRef}
-        style={topH !== null ? { gridTemplateRows: `${topH}px 6px auto` } : undefined}
+        // `1fr`, not `auto`: the row takes everything the top row was
+        // dragged off, so the timeline grows into it instead of sitting
+        // at the top of a panel with dead space under it.
+        style={
+          topH !== null
+            ? { gridTemplateRows: `${topH}px 6px minmax(0, 1fr)` }
+            : undefined
+        }
       >
         <div className="editor-video">
           {/* Over the picture: the point is to read it without looking

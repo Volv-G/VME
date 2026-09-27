@@ -25,8 +25,14 @@ interface Props {
 // band instead - events are painted after the clips, so they read as
 // marks on the footage rather than a separate chart.
 const RULER_HEIGHT = 18;
-const CLIP_HEIGHT = 30;
-const TIMELINE_HEIGHT = RULER_HEIGHT + CLIP_HEIGHT + 6;
+// The clip band at its smallest, and the gap under it that the
+// horizontal scrollbar sits in. Everything the panel is given beyond
+// that goes to the band: the timeline fills the space it is dragged
+// out to rather than sitting at the top of it with dead space
+// underneath.
+const CLIP_BAND_MIN = 30;
+const BAND_BOTTOM_GAP = 6;
+const TIMELINE_MIN_HEIGHT = RULER_HEIGHT + CLIP_BAND_MIN + BAND_BOTTOM_GAP;
 // Ticks start just inside the clip band so the dots are not clipped by
 // the ruler above them.
 const EVENT_BAND_TOP = RULER_HEIGHT + 4;
@@ -101,9 +107,11 @@ export function Timeline({
   savedAnchorFrame,
   onViewChange,
 }: Props) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [viewWidth, setViewWidth] = useState(800);
+  const [viewHeight, setViewHeight] = useState(TIMELINE_MIN_HEIGHT);
   const [zoom, setZoom] = useState(1);
   // The saved view is applied once, when the canvas first has a width to
   // measure against - not on every prop change, or a save coming back
@@ -158,6 +166,35 @@ export function Timeline({
 
   const contentWidth = Math.max(viewWidth * zoom, viewWidth);
 
+  // Measure the panel after every render. Dragging the splitter is a
+  // state change one level up, so this component re-renders with the
+  // new panel height already in the DOM - a layout effect reads it in
+  // the same frame, before anything is painted, and the timeline
+  // follows the drag rather than trailing it.
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const h = Math.max(TIMELINE_MIN_HEIGHT, Math.round(el.clientHeight));
+    if (h !== viewHeight) setViewHeight(h);
+  });
+
+  // ...and on resizes that no render accompanies: the window itself,
+  // or a pane elsewhere in the page. Measured on the outer element,
+  // not on the scroll container whose height this sets - observing
+  // that would be a loop. When the panel has no height of its own
+  // (the phone layout stacks it under the video) the outer element is
+  // as tall as its content, so this settles at the minimum and stays.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const h = Math.max(TIMELINE_MIN_HEIGHT, Math.round(el.clientHeight));
+      if (h !== viewHeight) setViewHeight(h);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [viewHeight]);
+
   // Watch the container's width.
   useEffect(() => {
     if (!containerRef.current) return;
@@ -188,14 +225,15 @@ export function Timeline({
     if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = contentWidth * dpr;
-    canvas.height = TIMELINE_HEIGHT * dpr;
+    canvas.height = viewHeight * dpr;
     canvas.style.width = `${contentWidth}px`;
-    canvas.style.height = `${TIMELINE_HEIGHT}px`;
+    canvas.style.height = `${viewHeight}px`;
     const ctx = canvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const clipHeight = viewHeight - RULER_HEIGHT - BAND_BOTTOM_GAP;
 
     ctx.fillStyle = "#0e1116";
-    ctx.fillRect(0, 0, contentWidth, TIMELINE_HEIGHT);
+    ctx.fillRect(0, 0, contentWidth, viewHeight);
 
     if (totalFrames === 0) {
       ctx.fillStyle = "#8b949e";
@@ -256,9 +294,9 @@ export function Timeline({
       const x0 = px(acc);
       const x1 = px(acc + clip.frame_count);
       ctx.fillStyle = i % 2 === 0 ? "#1c232c" : "#161b22";
-      ctx.fillRect(x0, RULER_HEIGHT, x1 - x0, CLIP_HEIGHT);
+      ctx.fillRect(x0, RULER_HEIGHT, x1 - x0, clipHeight);
       ctx.strokeStyle = "#2a313c";
-      ctx.strokeRect(x0 + 0.5, RULER_HEIGHT + 0.5, x1 - x0 - 1, CLIP_HEIGHT - 1);
+      ctx.strokeRect(x0 + 0.5, RULER_HEIGHT + 0.5, x1 - x0 - 1, clipHeight - 1);
 
       // Filename, clipped to the clip's bounds so it never bleeds into neighbours.
       const labelMargin = 6;
@@ -266,11 +304,11 @@ export function Timeline({
       if (innerWidth >= 24) {
         ctx.save();
         ctx.beginPath();
-        ctx.rect(x0 + labelMargin, RULER_HEIGHT, innerWidth, CLIP_HEIGHT);
+        ctx.rect(x0 + labelMargin, RULER_HEIGHT, innerWidth, clipHeight);
         ctx.clip();
         ctx.fillStyle = "#e6edf3";
         ctx.font = "11px sans-serif";
-        ctx.fillText(clip.filename, x0 + labelMargin, RULER_HEIGHT + CLIP_HEIGHT - 10);
+        ctx.fillText(clip.filename, x0 + labelMargin, RULER_HEIGHT + clipHeight - 10);
         ctx.restore();
       }
       acc += clip.frame_count;
@@ -289,7 +327,7 @@ export function Timeline({
       ctx.fillStyle = r.resolved
         ? "rgba(63, 185, 80, 0.20)"
         : "rgba(210, 153, 34, 0.22)";
-      ctx.fillRect(x0, RULER_HEIGHT, w, CLIP_HEIGHT);
+      ctx.fillRect(x0, RULER_HEIGHT, w, clipHeight);
       ctx.strokeStyle = r.resolved
         ? "rgba(63, 185, 80, 0.6)"
         : "rgba(210, 153, 34, 0.7)";
@@ -298,7 +336,7 @@ export function Timeline({
         x0 + 0.5,
         RULER_HEIGHT + 0.5,
         Math.max(0, w - 1),
-        CLIP_HEIGHT - 1
+        clipHeight - 1
       );
     }
 
@@ -314,11 +352,11 @@ export function Timeline({
       const x0 = px(r.start);
       const x1 = px(r.end);
       ctx.fillStyle = "rgba(248, 81, 73, 0.18)";
-      ctx.fillRect(x0, RULER_HEIGHT, x1 - x0, CLIP_HEIGHT);
+      ctx.fillRect(x0, RULER_HEIGHT, x1 - x0, clipHeight);
       // A subtle outline so the region reads even on a short cut.
       ctx.strokeStyle = "rgba(248, 81, 73, 0.55)";
       ctx.lineWidth = 1;
-      ctx.strokeRect(x0 + 0.5, RULER_HEIGHT + 0.5, Math.max(0, x1 - x0 - 1), CLIP_HEIGHT - 1);
+      ctx.strokeRect(x0 + 0.5, RULER_HEIGHT + 0.5, Math.max(0, x1 - x0 - 1), clipHeight - 1);
     }
 
     // Events.
@@ -332,7 +370,7 @@ export function Timeline({
       ctx.lineWidth = ev.id === selectedEventId ? 3 : 1.5;
       ctx.beginPath();
       ctx.moveTo(x, EVENT_BAND_TOP);
-      ctx.lineTo(x, TIMELINE_HEIGHT - 4);
+      ctx.lineTo(x, viewHeight - 4);
       ctx.stroke();
       // Orphan cuts get a hollow ring so they stand out from valid markers.
       if (isOrphan) {
@@ -357,7 +395,7 @@ export function Timeline({
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(playX, 0);
-    ctx.lineTo(playX, TIMELINE_HEIGHT);
+    ctx.lineTo(playX, viewHeight);
     ctx.stroke();
   }, [
     viewWidth,
@@ -370,6 +408,7 @@ export function Timeline({
     selectedEventId,
     clipOffsets,
     zoom,
+    viewHeight,
   ]);
 
   // After a zoom change, place the cursor-anchored frame back under the cursor.
@@ -722,14 +761,25 @@ export function Timeline({
   const zoomPct = Math.round(zoom * 100);
 
   return (
-    <div style={{ position: "relative" }}>
+    <div
+      ref={rootRef}
+      style={{
+        position: "relative",
+        // Fills the panel, which is what makes the drawing below grow
+        // when the splitter is dragged. Where the panel has no height
+        // of its own this collapses to the content, which is the
+        // minimum.
+        height: "100%",
+        minHeight: TIMELINE_MIN_HEIGHT,
+      }}
+    >
       <div
         ref={containerRef}
         className="timeline-scroll"
         style={{
           overflowX: "auto",
           overflowY: "hidden",
-          height: TIMELINE_HEIGHT,
+          height: viewHeight,
           background: "#0e1116",
         }}
       >
@@ -737,7 +787,7 @@ export function Timeline({
           ref={canvasRef}
           className="timeline-canvas"
           onClick={handleClick}
-          style={{ display: "block", height: TIMELINE_HEIGHT, cursor: "pointer" }}
+          style={{ display: "block", height: viewHeight, cursor: "pointer" }}
         />
       </div>
       <div
