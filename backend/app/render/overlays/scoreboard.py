@@ -57,6 +57,8 @@ FULLTIME_CELL_COLORS = ((45, 35, 75, 255), (54, 43, 88, 255))
 # labels. Both scores stay legible; the brighter one took the set.
 FULLTIME_LOSER_COLOR = (168, 165, 185, 255)
 FULLTIME_LABEL_COLOR = (205, 202, 220, 255)
+# What the table says it is, in its top-left cell.
+FULLTIME_TITLE = "Final score"
 # Serve indicator: diameter and the gap to the team name, both as a
 # fraction of the main bar height.
 SERVE_DOT_SCALE = 0.22
@@ -324,10 +326,13 @@ class ScoreboardOverlay:
         logo_extra = (
             logo_d + logo_gap if (home_logo is not None or away_logo is not None) else 0
         )
+        # The header's own label sizes the name column too, so "Final
+        # score" cannot run into Set 1 behind a short team name.
         name_col = (
             max(
                 _text_w(td, self.home.name, team_font),
                 _text_w(td, self.away.name, team_font),
+                _text_w(td, FULLTIME_TITLE, label_font),
             )
             + logo_extra
             + pad * 2
@@ -344,9 +349,18 @@ class ScoreboardOverlay:
         overlay = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        # Header strip. Nothing above the names: the rows label
-        # themselves, and "Team" over a column of two would be filler.
+        # Header strip: what this table is, then which set each column
+        # is. Aligned with the names below it, not with the cell edge -
+        # a heading half a logo's width off from its column reads as a
+        # mistake.
         draw.rectangle([(0, 0), (total_w, head_h)], fill=FULLTIME_HEADER_COLOR)
+        draw.text(
+            (pad + logo_extra, head_h // 2),
+            FULLTIME_TITLE,
+            font=label_font,
+            fill=FULLTIME_LABEL_COLOR,
+            anchor="lm",
+        )
         for i, label in enumerate(labels):
             draw.text(
                 (name_col + set_col * i + set_col // 2, head_h // 2),
