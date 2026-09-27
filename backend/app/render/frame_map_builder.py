@@ -597,8 +597,14 @@ def apply_bookend_fades(fmap: FrameMap, fade_frames: int) -> None:
             fmap[i].color_weight = progress
             if fmap[i].blend_color == (0, 0, 0):
                 fmap[i].blend_color = (0, 0, 0)
+    # The mirror of the fade-in above, counting back from the last frame.
+    #
+    # This used to assign `1.0 - progress`, which is the fade the wrong
+    # way round: the render went fully black a second BEFORE the end and
+    # then faded up into its final frame. Every full-match render has
+    # ended that way.
     for k in range(min(fade_frames, n)):
         i = n - 1 - k
         progress = 1.0 - (k + 1) / fade_frames
-        if (1.0 - progress) > fmap[i].color_weight:
-            fmap[i].color_weight = 1.0 - progress
+        if progress > fmap[i].color_weight:
+            fmap[i].color_weight = progress
