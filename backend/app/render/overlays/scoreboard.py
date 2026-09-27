@@ -45,6 +45,11 @@ SKEW_SCALE = 0.34
 # exactly where that shows. Text and logos are drawn afterwards at
 # native resolution so they stay crisp.
 SHAPE_SUPERSAMPLE = 4
+# Gap between two set scores on the full-time row, as a multiple of
+# that row's type size. Matched to the phone app's card
+# (CardOverlay.SET_GAP_EMS): the gap has to scale with the type or five
+# sets run together into one long number.
+FULLTIME_GAP_EMS = 0.8
 # Serve indicator: diameter and the gap to the team name, both as a
 # fraction of the main bar height.
 SERVE_DOT_SCALE = 0.22
@@ -108,6 +113,10 @@ class ScoreboardOverlay:
             # Part of the key, or the bar would keep the serve dot on
             # the side that had it when the frame was first cached.
             state.serving_team,
+            # Likewise the full-time row: it appears only once the game
+            # has ended, and a cached bar would not know.
+            state.game_ended,
+            tuple(tuple(x) for x in state.set_scores),
         )
         if self._cache is not None and self._cache_key == cache_key:
             return self._cache
@@ -115,15 +124,39 @@ class ScoreboardOverlay:
         score_font_size = int(video_height * SCORE_FONT_SCALE)
         main_h = max(1, int(score_font_size / FONT_SCALE_SCORE))
 
-        team_font, sets_font, score_font = _load_fonts(main_h)
+        team_font, sets_font, score_font, fulltime_font = _load_fonts(main_h)
 
         tmp = Image.new("RGBA", (1, 1))
         td = ImageDraw.Draw(tmp)
 
         home_w = _text_w(td, self.home.name, team_font)
         away_w = _text_w(td, self.away.name, team_font)
+        # After the final whistle the live score has been reset to nil by
+        # the set that ended the match, so the bar would sit over the
+        # celebrations reading "0 - 0". What belongs there once it is over
+        # is the whole result - every set, in the order they were played -
+        # which is what the set counters either side are a summary of.
+        #
+        # Set at the counters' size rather than the live score's: the
+        # centre block now holds a row instead of one number, and a row
+        # of scores at headline size is most of the bar. Items are
+        # measured and placed one by one (see the drawing below), not
+        # joined into a string, so the spacing between scores stays
+        # deliberate however many sets there were.
         score_text = f"{state.home_score}  -  {state.away_score}"
-        score_w = _text_w(td, score_text, score_font)
+        set_items: list[str] = []
+        set_gap = 0
+        if state.game_ended and state.set_scores:
+            # Spaces around the dash for the same reason as on the phone:
+            # "25-21" in a row of scores reads as one number.
+            set_items = [f"{h} - {a}" for h, a in state.set_scores]
+            set_gap = max(4, int(main_h * FONT_SCALE_SETS * FULLTIME_GAP_EMS))
+        if set_items:
+            score_w = sum(_text_w(td, t, fulltime_font) for t in set_items) + set_gap * (
+                len(set_items) - 1
+            )
+        else:
+            score_w = _text_w(td, score_text, score_font)
         single_set_w = _text_w(td, "0", sets_font)
 
         pad = 16
@@ -219,13 +252,25 @@ class ScoreboardOverlay:
         )
         x += sets_section
 
-        draw.text(
-            (x + center_section // 2, text_y),
-            score_text,
-            font=score_font,
-            fill=(255, 255, 255, 255),
-            anchor="mm",
-        )
+        if set_items:
+            tx = x + center_section / 2 - score_w / 2
+            for t in set_items:
+                draw.text(
+                    (tx, text_y),
+                    t,
+                    font=fulltime_font,
+                    fill=(255, 255, 255, 255),
+                    anchor="lm",
+                )
+                tx += _text_w(td, t, fulltime_font) + set_gap
+        else:
+            draw.text(
+                (x + center_section // 2, text_y),
+                score_text,
+                font=score_font,
+                fill=(255, 255, 255, 255),
+                anchor="mm",
+            )
         x += center_section
 
         draw.text(
@@ -513,6 +558,13 @@ def _hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple[int, int, int, int]:
 
 
 def _load_fonts(main_h: int):
+    """Team name, set counters, live score, full-time row.
+
+    The last is the set counters' size in the score's weight. It is the
+    centre block's headline once the match is over, and it sits over
+    whatever the camera caught of the celebration - light type at that
+    size disappears into it.
+    """
     team_size = max(8, int(main_h * FONT_SCALE_TEAM))
     sets_size = max(8, int(main_h * FONT_SCALE_SETS))
     score_size = max(8, int(main_h * FONT_SCALE_SCORE))
@@ -529,7 +581,8 @@ def _load_fonts(main_h: int):
             ImageFont.truetype(bold, team_size),
             ImageFont.truetype(regular, sets_size),
             ImageFont.truetype(bold, score_size),
+            ImageFont.truetype(bold, sets_size),
         )
     except Exception:
         d = ImageFont.load_default()
-        return d, d, d
+        return d, d, d, d

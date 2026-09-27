@@ -151,6 +151,13 @@ class MatchEvent:
                 new_state.home_sets += 1
             elif new_state.away_score > new_state.home_score:
                 new_state.away_sets += 1
+            # Recorded before the reset: the scoreboard held over the end
+            # of the match shows how each set went, not the nil-all the
+            # next one would have started from.
+            if new_state.home_score or new_state.away_score:
+                new_state.set_scores = new_state.set_scores + [
+                    (new_state.home_score, new_state.away_score)
+                ]
             new_state.reset_scores()
 
         roster = self.roster_effect

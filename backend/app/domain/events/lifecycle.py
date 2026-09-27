@@ -72,13 +72,35 @@ class GameStartEvent(LifecycleEvent):
 @register_event
 @dataclass
 class GameEndEvent(LifecycleEvent):
-    """Game ends: scoreboard hides; fade-out to `blend_color`."""
+    """Game ends: the scoreboard stays up, and nothing fades here.
+
+    What follows the last point is the part people watch it back for -
+    the huddle, the handshake line, somebody's parents on their feet -
+    and the match used to fade to black across it and take the score
+    with it.
+
+    So the bar stays, showing the result, over footage that carries on
+    to the end of the render. It sits where it always sits, which is
+    the one place on the frame already agreed to be out of the way.
+
+    The render still opens and closes with a fade: those are bookends
+    applied to the whole output (`apply_bookend_fades`), not this
+    event's doing. This one fired in the middle of the celebration.
+    """
 
     type_name: ClassVar[str] = "game_end"
 
     @property
     def overlay_effect(self) -> Optional[OverlayEffect]:
-        return ScoreboardVisibilityEffect(visible=False)
+        return ScoreboardVisibilityEffect(visible=True)
+
+    @property
+    def timeline_effect(self) -> Optional[TimelineEffect]:
+        # Deliberately no fade, whatever `fade_frames` the event was
+        # saved with - every match already on disk carries 60 from when
+        # this event faded out, and re-tagging them is not a thing
+        # anyone should have to do.
+        return None
 
     def apply(self, state: GameState, all_events):
         new_state = super().apply(state, all_events)

@@ -26,6 +26,14 @@ class GameState:
     away_score: int = 0
     home_sets: int = 0
     away_sets: int = 0
+    # Final score of every set that has finished, in order, as
+    # (home, away).
+    #
+    # A set end resets the live score to nil, so without this the match
+    # keeps only a tally of sets won - and the scoreboard held over the
+    # celebrations after the final whistle would read "0 - 0". This is
+    # what a full-time graphic is made of: 25-19, 22-25, 15-12.
+    set_scores: list[tuple[int, int]] = field(default_factory=list)
 
     serving_team: Optional[Team] = None
 
@@ -56,6 +64,7 @@ class GameState:
             away_score=self.away_score,
             home_sets=self.home_sets,
             away_sets=self.away_sets,
+            set_scores=list(self.set_scores),
             serving_team=self.serving_team,
             home_positions=self.home_positions.copy(),
             away_positions=self.away_positions.copy(),
