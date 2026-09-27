@@ -26,7 +26,9 @@ import works.vme.streamer.data.Side
  *   below zero). Does not touch serve or positions.
  * - **SetEnd** — whichever side leads takes the set; scores reset;
  *   positions cleared; serve cleared.
- * - **GameStart / GameEnd** — flip the flags.
+ * - **GameStart / GameEnd** — flip the flags. GameEnd also ends the
+ *   set, on the same terms as SetEnd: a match ends on the last point
+ *   of the last set, and nobody taps End Set once it is over.
  * - **FirstServe** — sets `serving_team`.
  * - **BallServed** — sets `ball_served_since_last_score = true`.
  * - **Replay** — resets the same flag (so a following Score is legal).
@@ -80,7 +82,7 @@ object GameStateEngine {
         EventType.GameStart -> state.copy(
             gameStarted = true, gameEnded = false, setScores = emptyList(),
         )
-        EventType.GameEnd -> state.copy(gameEnded = true)
+        EventType.GameEnd -> onSetEnd(state).copy(gameEnded = true)
         EventType.SetEnd -> onSetEnd(state)
         EventType.FirstServe -> state.copy(servingTeam = teamOf(e))
         EventType.BallServed -> state.copy(ballServedSinceLastScore = true)
@@ -184,7 +186,17 @@ object GameStateEngine {
             pointHistory = emptyList(),
             // Keep the set's final score before wiping the running
             // one, so the end-of-game card can list every set.
-            setScores = state.setScores + (state.homeScore to state.awayScore),
+            //
+            // Nil-all is not a set. It is what the state looks like
+            // between sets, which is exactly where a Game End tapped
+            // after an End Set arrives -- and listing 0-0 alongside
+            // the real scores would read as a set nobody scored in.
+            setScores =
+                if (state.homeScore != 0 || state.awayScore != 0) {
+                    state.setScores + (state.homeScore to state.awayScore)
+                } else {
+                    state.setScores
+                },
         )
     }
 

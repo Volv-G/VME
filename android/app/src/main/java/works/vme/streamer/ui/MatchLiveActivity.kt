@@ -1692,12 +1692,16 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * about. It also kept the deciding set off the FINAL card, which
      * is what made that card unreadable.
      *
-     * Recorded as a real `set_end` event ahead of the `game_end`,
-     * not folded into the engine's handling of `game_end`. VME
-     * replays this log, and a phone that quietly meant "and also end
-     * the set" would render a different match on import. The cost is
-     * that Undo takes two taps here, which is the honest price of
-     * two things having happened.
+     * One event, not a `set_end` followed by a `game_end`. The set
+     * used to be closed by a separate event so that VME, replaying
+     * this log, would see the same match a phone did -- but VME's
+     * `GameEndEvent` now closes the set itself, and the extra event
+     * had a cost there: a Set End is a lifecycle event, and a
+     * lifecycle event fades the render. The last rally of the match
+     * went to black on the way to the final card.
+     *
+     * Undo is back to one tap, which is what the operator meant by
+     * it anyway.
      */
     private fun confirmGameEnd() {
         val s = gameState
@@ -1711,7 +1715,6 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             "This raises the FINAL card and stops scoring.",
             "End match",
         ) {
-            if (ending) record(EventType.SetEnd)
             record(EventType.GameEnd)
         }
     }

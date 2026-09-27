@@ -172,13 +172,12 @@ class CardOverlay(
     /**
      * End-of-game card: every set's final score.
      *
-     * No fallback to the running score any more. Game End records a
-     * `set_end` first (see `MatchLiveActivity.confirmGameEnd`), so
-     * the set being played when the match ended is in this list like
-     * every other -- same size, same spacing, one row that can be
-     * read straight across to see who won. The only way to reach
-     * this card with nothing to show is a game that ended before a
-     * point was scored.
+     * No fallback to the running score any more. Game End closes the
+     * set (see `GameStateEngine.apply`), so the set being played when
+     * the match ended is in this list like every other -- same size,
+     * same spacing, one row that can be read straight across to see
+     * who won. The only way to reach this card with nothing to show
+     * is a game that ended before a point was scored.
      */
     fun showFinal(state: GameState) {
         draw(
