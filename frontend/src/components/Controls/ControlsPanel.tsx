@@ -82,16 +82,24 @@ interface ActionDef {
 }
 
 // Per-player home-team action buttons rendered under the lineup grid. Order
-// matters: the 2-column layout pairs adjacent items, so keep related verbs
-// next to each other. Focus In/Out live here (rather than in the Match
-// section) because Focus In attributes to a specific player; Focus Out is
-// global but stays alongside its pair for discoverability.
+// matters: the first three share the top row and the rest are laid out in
+// pairs, so keep related verbs next to each other. Focus In/Out live here
+// (rather than in the Match section) because Focus In attributes to a
+// specific player; Focus Out is global but stays alongside its pair for
+// discoverability.
+// Kill, Assist and Ace lead: they are the three that end or set up a
+// rally, and they are what the operator reaches for most.
 // Ace is `needsPlayer: false` because the server is always at home P1 -
 // no point making the user click the lineup. The button handler below
 // resolves the jersey from `live.home_positions[1]` and commits
 // directly. Errors surface as a banner if P1 is empty (lineup not set).
 const PLAYER_ACTIONS: ActionDef[] = [
   { type: "kill", label: "Kill", needsPlayer: true },
+  // Also offered automatically after a Kill, as "who set that up" -
+  // this is the same event on its own, for the assist that went
+  // untagged at the time, or for footage being worked through after
+  // the fact where the kill is already in the log.
+  { type: "assist", label: "Assist", needsPlayer: true },
   { type: "ace", label: "Ace", needsPlayer: false },
   { type: "dig", label: "Dig", needsPlayer: true },
   { type: "dive", label: "Dive", needsPlayer: true },
@@ -547,7 +555,7 @@ export function ControlsPanel({
           </div>
         )}
 
-        <div className="action-grid">
+        <div className="action-grid action-grid--lead-three">
           {PLAYER_ACTIONS.map((a) => (
             <ActionButton
               key={a.type}

@@ -1051,6 +1051,19 @@ label {
   grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
+/* Home actions: three across the top row, pairs under it. Six columns
+   is the smallest grid that divides evenly into both, so the two
+   shapes share one set of gutters and the buttons below still line up
+   with the ones above. */
+.action-grid--lead-three {
+  grid-template-columns: repeat(6, 1fr);
+}
+.action-grid--lead-three > * {
+  grid-column: span 3;
+}
+.action-grid--lead-three > :nth-child(-n + 3) {
+  grid-column: span 2;
+}
 .action-btn {
   /* Buttons render <icon> <label> in a tight flex row so the emoji
      reads as a leading glyph rather than floating away from the
