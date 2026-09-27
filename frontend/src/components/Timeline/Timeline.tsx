@@ -41,6 +41,17 @@ const MAX_ZOOM = 200;
 // paint and the browser's own scroll restoration, short enough to be
 // over before anyone reaches for the timeline.
 const RESTORE_MAX_TRIES = 90;
+// ...and the same window in wall time, for when frames do not arrive.
+const RESTORE_MAX_MS = 1500;
+// Playback follow. The lead is how far in from the left the playhead
+// lands after a jump - enough to still see what just happened, small
+// enough that most of the width is footage to come. The edge margin
+// starts the jump just before the line would leave the view, and the
+// suspend window keeps playback from dragging the view back while
+// someone is looking somewhere else on purpose.
+const FOLLOW_LEAD_FRACTION = 0.12;
+const FOLLOW_EDGE_PX = 24;
+const FOLLOW_SUSPEND_MS = 4000;
 const TICK_TARGET_PX = 90;
 // Hard ceiling on canvas pixel dimensions. Browsers reject canvases
 // larger than this (Chrome/Edge ~16384 px per side, Safari sometimes
@@ -103,6 +114,9 @@ export function Timeline({
   // on screen is the stored one, not a choice, and saving it back is
   // at best a no-op and at worst overwrites it with a failed restore.
   const userMovedRef = useRef(false);
+  // When the timeline was last touched by hand, so playback does not
+  // fight someone reading another part of the match.
+  const lastTouchRef = useRef(0);
 
   // After a zoom change we want to keep a specific frame stuck under the
   // cursor. The handler stashes target details here; a layout effect applies
@@ -492,6 +506,14 @@ export function Timeline({
     );
     let raf = 0;
     let tries = 0;
+    // Frames are not guaranteed to arrive: a background tab, or a
+    // headless browser, throttles `requestAnimationFrame` to nothing.
+    // Without a clock-based bail-out the pending flag could stay set
+    // forever, and everything that waits for the restore to finish -
+    // the playback follow, the view save - would wait with it.
+    const bail = window.setTimeout(() => {
+      pendingRestoreRef.current = null;
+    }, RESTORE_MAX_MS);
     const step = () => {
       container.scrollLeft = want;
       // The browser clamps `scrollLeft` to what is laid out so far, so
@@ -511,13 +533,56 @@ export function Timeline({
       // immediately; nothing here ever fights the user.
       if (userMovedRef.current || tries >= RESTORE_MAX_TRIES) {
         pendingRestoreRef.current = null;
+        window.clearTimeout(bail);
         return;
       }
       raf = requestAnimationFrame(step);
     };
     step();
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(bail);
+    };
   }, [zoom, contentWidth, viewWidth, totalFrames]);
+
+  /**
+   * Keep the playhead on screen while the video runs.
+   *
+   * Playback walks off the right-hand edge in a few seconds at any
+   * useful zoom, and until now the timeline just sat where it was -
+   * so the one thing that moves was the one thing you could not see.
+   *
+   * It pages rather than centring: the view jumps so the playhead
+   * lands a short way in from the LEFT, leaving most of the width as
+   * the part not yet played. Centring would halve the useful lookahead
+   * and move the picture twice as often; keeping a margin behind the
+   * playhead means the moment just gone is still readable.
+   *
+   * The same jump catches a seek backwards out of view, which lands in
+   * the same place rather than at the far right.
+   */
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || totalFrames === 0) return;
+    // A restore is still settling, or the user is reading elsewhere.
+    if (pendingRestoreRef.current) return;
+    if (Date.now() - lastTouchRef.current < FOLLOW_SUSPEND_MS) return;
+
+    const view = container.clientWidth;
+    if (view === 0) return;
+    const x = (currentFrame / totalFrames) * contentWidth;
+    const left = container.scrollLeft;
+    // Trigger slightly before the edge: at the edge itself the line is
+    // half drawn and already gone by the next frame.
+    const rightEdge = left + view - FOLLOW_EDGE_PX;
+    if (x >= left && x <= rightEdge) return;
+
+    container.scrollLeft = clamp(
+      x - view * FOLLOW_LEAD_FRACTION,
+      0,
+      Math.max(0, contentWidth - view),
+    );
+  }, [currentFrame, contentWidth, totalFrames]);
 
   // Report the view after it settles. Debounced because both gestures
   // are continuous - a pinch or a scroll would otherwise be a hundred
@@ -533,7 +598,12 @@ export function Timeline({
     // opening a match writes back whatever the restore managed to
     // reach -- so one failed restore would erase the stored position
     // rather than being corrected on the next load.
-    const touched = () => { userMovedRef.current = true; };
+    const touched = () => {
+      userMovedRef.current = true;
+      // Also suspends the playback follow below, so a deliberate look
+      // somewhere else is not yanked back a frame later.
+      lastTouchRef.current = Date.now();
+    };
     const schedule = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
