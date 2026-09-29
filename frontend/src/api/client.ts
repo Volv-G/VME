@@ -705,6 +705,25 @@ export const api = {
       { method: "POST", body: JSON.stringify({ seconds }) }
     );
   },
+  /** Insert a cut pair over each span (global frames), in one save.
+   *  Spans that would re-pair with a cut already there are skipped. */
+  async insertCuts(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    spans: { start: number; end: number }[]
+  ): Promise<{ inserted: number; skipped: number; match: MatchDto }> {
+    return fetchJson(
+      `${matchBase(team, tournament, date, match)}/events/cuts`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          spans: spans.map((s) => ({ start_frame: s.start, end_frame: s.end })),
+        }),
+      }
+    );
+  },
   /** Empty the event list. Clip transitions survive - they are
    *  structure, not tagging. */
   async clearEvents(

@@ -27,7 +27,9 @@ import { analyzeCuts } from "./cutAnalysis";
 // (Those counts predate cut_end resetting the clock; see MARKER_TYPES.)
 //
 // 12s by request: it catches gaps 15s misses, at the cost of more
-// noise. Note the spread between matches - 12s flags 39% of Liberty
+// noise. Now the DEFAULT: each team sets its own (Team settings ->
+// Editing), which is what the next paragraph argues for.
+// Note the spread between matches - 12s flags 39% of Liberty
 // but 14% of Mercer Island, because Liberty's scores were logged
 // several seconds later in the rally. The threshold is really
 // measuring tagging latency, so expect it to feel different per match.
@@ -74,6 +76,12 @@ const MARKER_TYPES = new Set(["cut_start", "timeout_start", "clip_transition"]);
  */
 export const GAP_CUT_PAD_SECONDS = 3;
 
+/** A team's own values for the two constants above. */
+export interface DeadSpaceOptions {
+  thresholdSeconds?: number;
+  padSeconds?: number;
+}
+
 export interface ServeGap {
   /** Cut-adjusted distance from the previous event, in seconds. */
   seconds: number;
@@ -114,10 +122,13 @@ export interface ServeGap {
  */
 export function analyzeServeGaps(
   events: EventDto[],
-  fps: number
+  fps: number,
+  opts: DeadSpaceOptions = {}
 ): Map<number, ServeGap> {
   const out = new Map<number, ServeGap>();
   if (!Number.isFinite(fps) || fps <= 0) return out;
+  const threshold = opts.thresholdSeconds ?? SERVE_GAP_WARN_SECONDS;
+  const padSeconds = opts.padSeconds ?? GAP_CUT_PAD_SECONDS;
   const { regions } = analyzeCuts(events);
   // Every cut marker's frame, paired or not. `regions` only covers matched
   // pairs, and an unpaired cut_start inside a proposed span would still
@@ -135,12 +146,12 @@ export function analyzeServeGaps(
     if (ev.type === "ball_served" && prevFrame !== null) {
       const cut = cutFramesBetween(regions, prevFrame, frame);
       const seconds = (frame - prevFrame - cut) / fps;
-      if (seconds > SERVE_GAP_WARN_SECONDS) {
+      if (seconds > threshold) {
         out.set(ev.id, {
           seconds,
           prevFrame,
           frame,
-          cut: proposeCut(prevFrame, frame, fps, regions, markerFrames),
+          cut: proposeCut(prevFrame, frame, fps, padSeconds, regions, markerFrames),
         });
       }
     }
@@ -169,10 +180,11 @@ function proposeCut(
   prevFrame: number,
   frame: number,
   fps: number,
+  padSeconds: number,
   regions: { start: number; end: number }[],
   markerFrames: number[]
 ): { start: number; end: number } | null {
-  const pad = Math.round(GAP_CUT_PAD_SECONDS * fps);
+  const pad = Math.round(padSeconds * fps);
   const start = prevFrame + pad;
   const end = frame - pad;
   if (end <= start) return null;

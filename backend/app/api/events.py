@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..domain.events.timeline import ClipTransitionEvent
+from ..domain.events.timeline import ClipTransitionEvent, CutEndEvent, CutStartEvent
 from .locks import match_lock_dep
 from .helpers import (
     deserialize_event,
@@ -18,6 +18,8 @@ from .schemas import (
     EventUpdateIn,
     ImportEventsIn,
     ImportEventsOut,
+    InsertCutsIn,
+    InsertCutsOut,
     MatchOut,
     MoveEventIn,
     NudgeEventIn,
@@ -399,6 +401,70 @@ def shift_events(
     return ShiftEventsOut(
         moved=moved,
         clamped=clamped,
+        match=serialize_match(team, tournament, date, match, m),
+    )
+
+
+@router.post("/cuts", response_model=InsertCutsOut)
+def insert_cuts(
+    team: str, tournament: str, date: str, match: str, body: InsertCutsIn
+) -> InsertCutsOut:
+    """Insert a cut_start / cut_end pair over each span, in one save.
+
+    The bulk form of the one-click gap cut: "remove all dead space" is
+    dozens of pairs, and as separate requests that was dozens of load /
+    save round trips, any one of which could fail and leave a lone
+    cut_start behind. Here it is all or nothing.
+
+    The editor only proposes spans that are safe (`serveGaps.ts`), but
+    the check is repeated against what is actually on disk, because
+    cuts pair by frame order: a new pair that encloses a marker, or
+    opens inside a cut that is already open, re-pairs with it and
+    leaves footage in that was meant to go. Such spans are skipped and
+    counted rather than inserted.
+    """
+    m = load_match_or_404(team, tournament, date, match)
+
+    markers: list[tuple[int, bool]] = []  # (global frame, is_start)
+    for e in m.events:
+        if isinstance(e, (CutStartEvent, CutEndEvent)):
+            g = m.to_global_frame(e.clip_id, e.local_frame)
+            if g is not None:
+                markers.append((g, isinstance(e, CutStartEvent)))
+    markers.sort()
+
+    def safe(start: int, end: int) -> bool:
+        if any(start <= g <= end for g, _ in markers):
+            return False
+        before = [is_start for g, is_start in markers if g < start]
+        return not (before and before[-1])  # inside a cut that is open
+
+    inserted = skipped = 0
+    for span in sorted(body.spans, key=lambda s: s.start_frame):
+        a = m.from_global_frame(span.start_frame)
+        b = m.from_global_frame(span.end_frame)
+        if a is None or b is None or span.end_frame <= span.start_frame:
+            skipped += 1
+            continue
+        if not safe(span.start_frame, span.end_frame):
+            skipped += 1
+            continue
+        for cls, (clip_id, local) in ((CutStartEvent, a), (CutEndEvent, b)):
+            ev = deserialize_event({
+                "type": cls.type_name,
+                "payload": {"type": cls.type_name, "clip_id": clip_id, "local_frame": local},
+            })
+            ev.at_ms = m.event_time_ms(ev)
+            m.add_event(ev)
+        markers.extend([(span.start_frame, True), (span.end_frame, False)])
+        markers.sort()
+        inserted += 1
+
+    if inserted:
+        save_match(team, tournament, date, match, m)
+    return InsertCutsOut(
+        inserted=inserted,
+        skipped=skipped,
         match=serialize_match(team, tournament, date, match, m),
     )
 

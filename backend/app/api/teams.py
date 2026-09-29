@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 
 from ..domain.player import Player
 from ..domain.roster import (
+    EditingConfig,
     MediaServerConfig,
     NamingConfig,
     Roster,
@@ -20,6 +21,7 @@ from ..jobs.manager import JOBS, JobStatus
 from ..library import paths, scanner
 from ..upload import thumbnail_sync
 from .schemas import (
+    EditingConfigOut,
     FullRenderOut,
     MediaServerConfigOut,
     UploadConfigOut,
@@ -72,6 +74,7 @@ def _serialize_roster(r: Roster) -> RosterOut:
         naming=NamingConfigOut(**r.naming.to_dict()),
         media_server=MediaServerConfigOut(**r.media_server.to_dict()),
         upload=UploadConfigOut(**r.upload.to_dict()),
+        editing=EditingConfigOut(**r.editing.to_dict()),
         players=[PlayerOut(**p.to_dict()) for p in r.players],
     )
 
@@ -94,6 +97,7 @@ def put_roster(team: str, roster: RosterOut) -> RosterOut:
         or roster.naming is None
         or roster.media_server is None
         or roster.upload is None
+        or roster.editing is None
     ):
         existing = scanner.load_team_roster(team)
 
@@ -121,6 +125,12 @@ def put_roster(team: str, roster: RosterOut) -> RosterOut:
     else:
         upload = UploadConfig.from_dict(roster.upload.model_dump())
 
+    editing: EditingConfig
+    if roster.editing is None:
+        editing = existing.editing  # type: ignore[union-attr]
+    else:
+        editing = EditingConfig.from_dict(roster.editing.model_dump())
+
     # Player photos are managed by their own upload endpoints too, so
     # keep the saved path for any player the request didn't echo it for.
     if existing is None:
@@ -142,6 +152,7 @@ def put_roster(team: str, roster: RosterOut) -> RosterOut:
         naming=naming,
         media_server=media_server,
         upload=upload,
+        editing=editing,
         players=[
             Player.from_dict(_keep_photo(p.model_dump(), existing_players))
             for p in roster.players

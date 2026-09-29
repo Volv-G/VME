@@ -17,6 +17,8 @@ interface Props {
   savedAnchorFrame?: number;
   /** Zoom or pan settled. Debounced by the caller's own save. */
   onViewChange?: (zoom: number, anchorFrame: number) => void;
+  /** Dead space that "remove all dead space" would cut, global frames. */
+  deadSpans?: { start: number; end: number }[];
 }
 
 // One row, not two. The event ticks used to sit in a band of their own
@@ -106,6 +108,7 @@ export function Timeline({
   savedZoom,
   savedAnchorFrame,
   onViewChange,
+  deadSpans,
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -340,6 +343,31 @@ export function Timeline({
       );
     }
 
+    // Dead space: what the event list's ✂ would remove. Hatched grey -
+    // footage where nothing happens - so it reads as distinct from both
+    // the rallies (green / amber) and the cuts already made (red), and
+    // drawn under the cuts for the same reason rallies are.
+    for (const d of deadSpans ?? []) {
+      const x0 = px(d.start);
+      const w = px(d.end) - x0;
+      if (w < 1) continue;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x0, RULER_HEIGHT, w, clipHeight);
+      ctx.clip();
+      ctx.fillStyle = "rgba(139, 148, 158, 0.14)";
+      ctx.fillRect(x0, RULER_HEIGHT, w, clipHeight);
+      ctx.strokeStyle = "rgba(170, 178, 188, 0.55)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = x0 - clipHeight; x < x0 + w; x += 6) {
+        ctx.moveTo(x, RULER_HEIGHT + clipHeight);
+        ctx.lineTo(x + clipHeight, RULER_HEIGHT);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // Cut regions (matched cut_start <-> cut_end pairs).
     const clipMap = new Map(clips.map((c, i) => [c.id, { idx: i, offset: clipOffsets[i] }]));
     const { regions: cuts, orphanIds: cutOrphans } = analyzeCuts(events);
@@ -409,6 +437,7 @@ export function Timeline({
     clipOffsets,
     zoom,
     viewHeight,
+    deadSpans,
   ]);
 
   // After a zoom change, place the cursor-anchored frame back under the cursor.

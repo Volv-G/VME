@@ -125,6 +125,60 @@ class NamingConfig:
         )
 
 
+# Dead space: a serve that comes this long after the previous event is
+# the gap between rallies nobody wants to watch - the walk back, the
+# huddle, the ball being fetched. 12s was chosen by measurement; see
+# `frontend/src/components/serveGaps.ts` for the numbers.
+DEFAULT_DEAD_SPACE_SECONDS = 12.0
+# Footage kept either side when dead space is cut, so the celebration
+# that ends one rally and the run-up to the next serve both survive.
+DEFAULT_DEAD_SPACE_PAD_SECONDS = 3.0
+
+
+@dataclass
+class EditingConfig:
+    """Per-team editing defaults. Stored under `roster.json -> editing`.
+
+    Per team, not per match, because what counts as dead space is a
+    property of how a team's matches are filmed and tagged - the gap a
+    score takes to be logged differs between operators far more than
+    between matches - and nobody should have to set it again for every
+    match.
+
+    The editor does the analysis (`serveGaps.ts`); these are its two
+    knobs. Clamped on load so a stray value cannot ask for a cut that
+    swallows the serve it was meant to lead into.
+    """
+
+    dead_space_seconds: float = DEFAULT_DEAD_SPACE_SECONDS
+    dead_space_pad_seconds: float = DEFAULT_DEAD_SPACE_PAD_SECONDS
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "dead_space_seconds": self.dead_space_seconds,
+            "dead_space_pad_seconds": self.dead_space_pad_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "EditingConfig":
+        if not isinstance(data, dict):
+            return cls()
+
+        def num(key: str, default: float, lo: float, hi: float) -> float:
+            try:
+                v = float(data.get(key))
+            except (TypeError, ValueError):
+                return default
+            return min(hi, max(lo, v))
+
+        return cls(
+            dead_space_seconds=num("dead_space_seconds", DEFAULT_DEAD_SPACE_SECONDS, 2.0, 600.0),
+            dead_space_pad_seconds=num(
+                "dead_space_pad_seconds", DEFAULT_DEAD_SPACE_PAD_SECONDS, 0.0, 30.0
+            ),
+        )
+
+
 @dataclass
 class MediaServerConfig:
     """Where finished renders get copied for a media server to play.
@@ -360,6 +414,9 @@ class Roster:
     # `youtube` and `naming`: it says where *your* videos go and means
     # nothing on an opponent roster embedded in a match.
     upload: UploadConfig = field(default_factory=UploadConfig)
+    # What counts as dead space, and how much of it a cut keeps.
+    # Admin-only like the rest: an opponent does not edit your video.
+    editing: EditingConfig = field(default_factory=EditingConfig)
 
     def __iter__(self) -> Iterator[Player]:
         return iter(self.players)
@@ -409,6 +466,7 @@ class Roster:
             out["naming"] = self.naming.to_dict()
             out["media_server"] = self.media_server.to_dict()
             out["upload"] = self.upload.to_dict()
+            out["editing"] = self.editing.to_dict()
         out["players"] = [p.to_dict() for p in self.players]
         return out
 
@@ -425,6 +483,7 @@ class Roster:
                 naming=NamingConfig.from_dict(data.get("naming")),
                 media_server=MediaServerConfig.from_dict(data.get("media_server")),
                 upload=UploadConfig.from_dict(data.get("upload")),
+                editing=EditingConfig.from_dict(data.get("editing")),
                 players=[Player.from_dict(p) for p in data.get("players", [])],
             )
         return cls()

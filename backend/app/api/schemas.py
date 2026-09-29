@@ -50,6 +50,13 @@ class NamingConfigOut(BaseModel):
     reel_template: Optional[str] = None
 
 
+class EditingConfigOut(BaseModel):
+    """Per-team editing defaults. See `domain/roster.py::EditingConfig`."""
+
+    dead_space_seconds: float = 12.0
+    dead_space_pad_seconds: float = 3.0
+
+
 class MediaServerConfigOut(BaseModel):
     """Where the server copies finished renders for a media server.
 
@@ -85,6 +92,7 @@ class RosterOut(BaseModel):
     naming: Optional[NamingConfigOut] = None
     upload: Optional[UploadConfigOut] = None
     media_server: Optional[MediaServerConfigOut] = None
+    editing: Optional[EditingConfigOut] = None
     players: list[PlayerOut] = Field(default_factory=list)
 
 
@@ -289,6 +297,28 @@ class MatchOut(BaseModel):
     timeline_zoom: float = 1.0
     timeline_anchor_frame: int = 0
     playhead_frame: int = 0
+    # The team's editing defaults, carried here because the editor gets
+    # the home roster WITHOUT its admin blocks and needs these two.
+    editing: EditingConfigOut = Field(default_factory=EditingConfigOut)
+
+
+class CutSpanIn(BaseModel):
+    """A span to cut, in global frames: footage resumes at `end_frame`."""
+
+    start_frame: int
+    end_frame: int
+
+
+class InsertCutsIn(BaseModel):
+    spans: list[CutSpanIn]
+
+
+class InsertCutsOut(BaseModel):
+    inserted: int
+    # Spans refused because a cut pair there would re-pair with one
+    # already on the match - see `insert_cuts`.
+    skipped: int
+    match: "MatchOut"
 
 
 class CreateTournamentIn(BaseModel):

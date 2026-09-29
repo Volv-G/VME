@@ -1311,6 +1311,21 @@ label {
   padding: 3px 7px;
 }
 .event-shift-all + .event-clear-all { margin-left: 0; }
+/* The bulk form of the rows' gap badges, and dressed like them. First
+   of the right-hand buttons, so it takes the auto margin. */
+.event-cut-dead {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  margin-left: auto;
+  font-size: 11px;
+  padding: 3px 7px;
+  font-family: ui-monospace, monospace;
+  background: rgba(210, 153, 34, 0.22);
+  color: #e5c07b;
+  border: 1px solid rgba(229, 192, 123, 0.35);
+}
+.event-cut-dead:hover:not(:disabled) { background: rgba(210, 153, 34, 0.38); }
+.event-cut-dead + .event-shift-all { margin-left: 0; }
 
 /* The recording time on a clip row reads as metadata; its edit is a
    quiet link rather than a third button competing with Delete. */

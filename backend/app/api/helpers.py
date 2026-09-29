@@ -16,6 +16,7 @@ from ..library import paths, scanner
 from ..render import reels
 from .schemas import (
     ClipOut,
+    EditingConfigOut,
     EventOut,
     GameStateOut,
     MatchOut,
@@ -75,6 +76,7 @@ def serialize_match(
     team: str, tournament: str, date: str, match_name: str, m: Match
 ) -> MatchOut:
     match_index, _ = paths.parse_match_folder(match_name)
+    home = scanner.load_team_roster(team)
     return MatchOut(
         team=team,
         tournament=tournament,
@@ -96,7 +98,7 @@ def serialize_match(
             for c in m.clips
         ],
         events=[serialize_event(m, e) for e in m.events],
-        home_roster=_serialize_roster(scanner.load_team_roster(team)),
+        home_roster=_serialize_roster(home),
         opponent_roster=_serialize_roster(m.opponent_roster),
         liberos=list(m.liberos),
         reel_lead_seconds=m.reel_lead_seconds,
@@ -106,6 +108,7 @@ def serialize_match(
         timeline_zoom=m.timeline_zoom,
         timeline_anchor_frame=m.timeline_anchor_frame,
         playhead_frame=m.playhead_frame,
+        editing=EditingConfigOut(**home.editing.to_dict()),
     )
 
 

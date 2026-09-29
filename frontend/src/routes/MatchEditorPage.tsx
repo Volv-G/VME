@@ -5,6 +5,7 @@ import type { MatchDto } from "../types/api";
 import { ClipManager } from "../components/ClipManager";
 import { resolveClipFromGlobal } from "../components/clipFrames";
 import { analyzeCuts } from "../components/cutAnalysis";
+import { analyzeServeGaps, type DeadSpaceOptions } from "../components/serveGaps";
 import { ControlsPanel } from "../components/Controls/ControlsPanel";
 import { EventList } from "../components/EventList";
 import { Modal } from "../components/Modal";
@@ -493,6 +494,22 @@ export function MatchEditorPage() {
    * rollback is best-effort - if it also fails, the orphan badge is
    * exactly the right way to surface that.
    */
+  /** Cut many spans in one request - "remove all dead space". */
+  async function insertCuts(spans: { start: number; end: number }[]) {
+    try {
+      const r = await api.insertCuts(team, tournament, date, match, spans);
+      setData(r.match);
+      setError(
+        r.skipped > 0
+          ? `Cut ${r.inserted} of ${spans.length}: ${r.skipped} overlapped a cut ` +
+              "already on the match and were left alone."
+          : null
+      );
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   async function insertCut(startFrame: number, endFrame: number) {
     if (!data) return;
     const s = resolveClipFromGlobal(data.clips, startFrame);
@@ -582,6 +599,24 @@ export function MatchEditorPage() {
   const cutRegions = useMemo(
     () => (data ? analyzeCuts(data.events).regions : []),
     [data]
+  );
+  // The team's idea of dead space, and the spans it amounts to here -
+  // shaded on the timeline, listed and cut from the event list.
+  const deadSpace = useMemo<DeadSpaceOptions>(
+    () => ({
+      thresholdSeconds: data?.editing?.dead_space_seconds,
+      padSeconds: data?.editing?.dead_space_pad_seconds,
+    }),
+    [data?.editing?.dead_space_seconds, data?.editing?.dead_space_pad_seconds]
+  );
+  const deadSpans = useMemo(
+    () =>
+      data
+        ? [...analyzeServeGaps(data.events, data.fps, deadSpace).values()]
+            .map((g) => g.cut)
+            .filter((c): c is { start: number; end: number } => c !== null)
+        : [],
+    [data, deadSpace]
   );
 
   if (!data) {
@@ -733,6 +768,8 @@ export function MatchEditorPage() {
             liberos={data.liberos}
             onSeek={seek}
             onInsertCut={insertCut}
+            onInsertCuts={insertCuts}
+            deadSpace={deadSpace}
             fps={data.fps}
             homeRoster={data.home_roster}
             opponentRoster={data.opponent_roster}
@@ -761,6 +798,7 @@ export function MatchEditorPage() {
             selectedEventId={selectedEventId}
             onSeek={seek}
             onSelectEvent={setSelectedEventId}
+            deadSpans={deadSpans}
           />
         </div>
       </div>

@@ -7,6 +7,7 @@ import { TeamYouTubeSettings } from "../components/TeamYouTubeSettings";
 import { TeamOneDriveSettings } from "../components/TeamOneDriveSettings";
 import { TeamNamingSettings } from "../components/TeamNamingSettings";
 import { TeamMediaServerSettings } from "../components/TeamMediaServerSettings";
+import { TeamEditingSettings } from "../components/TeamEditingSettings";
 
 /**
  * Team settings, one subject per subpage.
@@ -31,6 +32,7 @@ const SECTIONS = [
   { id: "onedrive", label: "OneDrive" },
   { id: "naming", label: "File naming" },
   { id: "media-server", label: "Media server" },
+  { id: "editing", label: "Editing" },
   { id: "roster", label: "Roster" },
 ] as const;
 
@@ -117,6 +119,9 @@ export function TeamSettingsPage() {
         )}
         {section === "media-server" && (
           <TeamMediaServerSettings team={team} roster={roster} onSaved={setRoster} />
+        )}
+        {section === "editing" && (
+          <TeamEditingSettings team={team} roster={roster} onSaved={setRoster} />
         )}
         {section === "roster" && roster && (
           <RosterEditor

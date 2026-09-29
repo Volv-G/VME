@@ -11,7 +11,12 @@ import type { EventDto, RosterDto } from "../types/api";
 import { EMPTY_STATE } from "./Controls/state";
 import { analyzeCuts } from "./cutAnalysis";
 import { analyzeFocus } from "./focusAnalysis";
-import { GAP_CUT_PAD_SECONDS, analyzeServeGaps } from "./serveGaps";
+import {
+  GAP_CUT_PAD_SECONDS,
+  SERVE_GAP_WARN_SECONDS,
+  analyzeServeGaps,
+  type DeadSpaceOptions,
+} from "./serveGaps";
 import { analyzeLiberoSwaps, type LiberoSwap } from "./liberoSwaps";
 import { analyzeAceServers } from "./aceServers";
 import { summarizeEvent } from "./eventSummary";
@@ -48,6 +53,13 @@ interface Props {
    * without it the gap warnings stay informational labels.
    */
   onInsertCut?: (startFrame: number, endFrame: number) => Promise<void>;
+  /**
+   * Cut every one of the spans at once. Optional: without it there is no
+   * "remove all dead space" button. Resolves once the match is back.
+   */
+  onInsertCuts?: (spans: { start: number; end: number }[]) => Promise<void>;
+  /** The team's dead-space threshold and padding; defaults otherwise. */
+  deadSpace?: DeadSpaceOptions;
   fps: number;
   homeRoster: RosterDto;
   opponentRoster: RosterDto;
@@ -69,6 +81,8 @@ export function EventList({
   liberos,
   onSeek,
   onInsertCut,
+  onInsertCuts,
+  deadSpace,
   fps,
   homeRoster,
   opponentRoster,
@@ -136,7 +150,43 @@ export function EventList({
   // Serves that arrive suspiciously long after the previous event -
   // usually something wasn't logged. Warning, not error: real breaks
   // exist, so we show the gap and let the user judge.
-  const serveGaps = useMemo(() => analyzeServeGaps(events, fps), [events, fps]);
+  const threshold = deadSpace?.thresholdSeconds ?? SERVE_GAP_WARN_SECONDS;
+  const pad = deadSpace?.padSeconds ?? GAP_CUT_PAD_SECONDS;
+  const serveGaps = useMemo(
+    () => analyzeServeGaps(events, fps, { thresholdSeconds: threshold, padSeconds: pad }),
+    [events, fps, threshold, pad]
+  );
+
+  // Everything the one-click badges could cut, for doing them all at
+  // once. Only the actionable ones: a gap whose span would collide with
+  // an existing cut is left for a person to look at.
+  const deadSpans = useMemo(
+    () =>
+      [...serveGaps.values()]
+        .map((g) => g.cut)
+        .filter((c): c is { start: number; end: number } => c !== null),
+    [serveGaps]
+  );
+  const deadFrames = deadSpans.reduce((t, s) => t + (s.end - s.start), 0);
+  const [cuttingAll, setCuttingAll] = useState(false);
+  async function cutAllDeadSpace() {
+    if (!onInsertCuts || deadSpans.length === 0 || cuttingAll) return;
+    const secs = Math.round(deadFrames / fps);
+    const dur = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+    const ok = window.confirm(
+      `Cut ${deadSpans.length} stretch${deadSpans.length === 1 ? "" : "es"} of dead space ` +
+        `(${dur} of footage)?\n\n` +
+        `Each is a serve more than ${threshold}s after the previous event. ` +
+        `${pad}s is kept either side. Every cut can be deleted like any other.`
+    );
+    if (!ok) return;
+    setCuttingAll(true);
+    try {
+      await onInsertCuts(deadSpans);
+    } finally {
+      setCuttingAll(false);
+    }
+  }
 
   // Serve id whose cut is being created, so the badge can't be
   // double-clicked into two overlapping cut pairs while the POSTs are in
@@ -272,15 +322,45 @@ export function EventList({
     return bestId ?? firstId;
   }, [events, currentFrame]);
 
-  // Keep the playhead row on screen while the video plays. Only fires
-  // when the row actually changes, so scrubbing within one event (or
-  // scrolling the list while paused) doesn't yank the view.
+  // Keep the playhead row on screen while the video plays - AND the row
+  // after it. Only fires when the row actually changes, so scrubbing
+  // within one event (or scrolling the list while paused) doesn't yank
+  // the view.
+  //
+  // This used to be `scrollIntoView({ block: "nearest" })` on the
+  // current row, which during playback pins each new row to the BOTTOM
+  // edge: the list was always showing what just happened and never
+  // what is coming. Now the next row is brought into view too, without
+  // ever pushing the current one off the top (under the sticky search
+  // bar, which covers the top of the pane).
   useEffect(() => {
     if (playheadId == null) return;
     if (navScrolledIdRef.current === playheadId) return;
-    listRef.current
-      ?.querySelector(`[data-event-id="${playheadId}"]`)
-      ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const list = listRef.current;
+    const cur = list?.querySelector<HTMLElement>(`[data-event-id="${playheadId}"]`);
+    if (!list || !cur) return;
+    const i = events.findIndex((e) => e.id === playheadId);
+    const nextEv = i >= 0 ? events[i + 1] : undefined;
+    const next = nextEv
+      ? list.querySelector<HTMLElement>(`[data-event-id="${nextEv.id}"]`)
+      : null;
+    const scroller = scrollParent(list);
+    if (!scroller) {
+      cur.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      return;
+    }
+    const view = scroller.getBoundingClientRect();
+    const header = list.querySelector<HTMLElement>(".event-search");
+    const top = view.top + (header ? header.getBoundingClientRect().height : 0);
+    const c = cur.getBoundingClientRect();
+    const lowest = (next ?? cur).getBoundingClientRect().bottom;
+    let delta = 0;
+    if (lowest > view.bottom) delta = lowest - view.bottom;
+    if (c.top - delta < top) delta = c.top - top;
+    if (Math.abs(delta) >= 1) scroller.scrollBy({ top: delta, behavior: "smooth" });
+    // Keyed on the row alone, like before: `events` is read as of the
+    // render where the row changed, which is the one that matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playheadId]);
 
   // Auto-scroll the selected row into view whenever the selection
@@ -368,6 +448,21 @@ export function EventList({
         {/* Only offered when the caller can actually do it, and only
             when there is something to clear - a live "Clear all" on an
             empty list is a trap with no upside. */}
+        {onInsertCuts && deadSpans.length > 0 && !trimmed && (
+          <button
+            type="button"
+            className="event-cut-dead"
+            onClick={() => void cutAllDeadSpace()}
+            disabled={cuttingAll}
+            title={
+              `Remove all dead space: ${deadSpans.length} serve${deadSpans.length === 1 ? "" : "s"} ` +
+              `more than ${threshold}s after the previous event, ` +
+              `${Math.round(deadFrames / fps)}s in total. Keeps ${pad}s either side.`
+            }
+          >
+            {cuttingAll ? "✂ …" : `✂ ${deadSpans.length}`}
+          </button>
+        )}
         {onShiftAll && events.length > 0 && !trimmed && (
           <button
             type="button"
@@ -407,7 +502,7 @@ export function EventList({
             ? ""
             : `${gap.seconds.toFixed(1)}s since the previous event - check for a missing event before this serve` +
               (canCut
-                ? `\nClick to cut from ${GAP_CUT_PAD_SECONDS}s after the previous event to ${GAP_CUT_PAD_SECONDS}s before this serve`
+                ? `\nClick to cut from ${pad}s after the previous event to ${pad}s before this serve`
                 : gap.cut === null
                   ? "\n(can't auto-cut: the gap already contains cut markers)"
                   : "");
@@ -636,4 +731,13 @@ function frameLabel(globalFrame: number | null, fps: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")} (#${globalFrame})`;
+}
+
+/** The nearest ancestor that actually scrolls vertically. */
+function scrollParent(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const oy = getComputedStyle(p).overflowY;
+    if ((oy === "auto" || oy === "scroll") && p.scrollHeight > p.clientHeight) return p;
+  }
+  return null;
 }

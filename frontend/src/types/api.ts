@@ -40,6 +40,14 @@ export interface NamingConfigDto {
   reel_template?: string | null;
 }
 
+/** Per-team editing defaults (`roster.json -> editing`). */
+export interface EditingConfigDto {
+  /** A serve this many seconds after the previous event is dead space. */
+  dead_space_seconds: number;
+  /** Footage kept either side when dead space is cut. */
+  dead_space_pad_seconds: number;
+}
+
 export interface MediaServerConfigDto {
   /** Folder ON THE SERVER that a media server (Jellyfin, Plex, ...)
    *  plays from. Empty/null = the copy button stays hidden. */
@@ -67,6 +75,8 @@ export interface RosterDto {
   /** Media-server publishing target. Optional - omitted block leaves
    *  previously-saved values intact. */
   media_server?: MediaServerConfigDto | null;
+  /** Editing defaults. Optional - omitted leaves the saved values. */
+  editing?: EditingConfigDto | null;
   players: PlayerDto[];
 }
 
@@ -181,6 +191,9 @@ export interface MatchDto {
   timeline_anchor_frame: number;
   /** Where the playhead was left, as a global frame. */
   playhead_frame: number;
+  /** The team's editing defaults - here because `home_roster` comes
+   *  without its admin blocks. */
+  editing: EditingConfigDto;
 }
 
 /** Which engine uploads what, per team. */
