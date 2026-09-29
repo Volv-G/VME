@@ -36,6 +36,24 @@ interface Props {
    * at the surrounding play is often how the question gets answered.
    */
   playbackLock?: string | null;
+  /**
+   * Global-frame spans that playback jumps over: the cuts, which the
+   * render removes. `end` is where the footage resumes. A span the
+   * playhead was already inside when play was pressed - or was put
+   * inside by a seek - plays through: that is someone looking at the
+   * cut on purpose.
+   */
+  skipRegions?: { start: number; end: number }[];
+}
+
+type Span = { start: number; end: number };
+
+/** The span containing `frame`, if any. */
+function spanAt(spans: Span[], frame: number): Span | null {
+  for (const s of spans) {
+    if (frame >= s.start && frame < s.end) return s;
+  }
+  return null;
 }
 
 /** Resolves a global frame to (clip index, local frame). */
@@ -57,7 +75,7 @@ function clipOffset(clips: ClipDto[], idx: number): number {
 }
 
 export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
-  { team, tournament, date, match, clips, fps, onFrame, playbackLock },
+  { team, tournament, date, match, clips, fps, onFrame, playbackLock, skipRegions },
   ref
 ) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -79,6 +97,16 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   const playbackRateRef = useRef(1);
 
   const activeClip = clips[activeClipIdx];
+
+  // Cut skipping. Refs, because the rAF loop reads them every frame and
+  // must not be restarted when the event list changes.
+  const skipRef = useRef<Span[]>(skipRegions ?? []);
+  skipRef.current = skipRegions ?? [];
+  // The cut the operator chose to be in - where play was pressed, or
+  // where a seek put the playhead. Played through, not skipped. Cleared
+  // the moment the playhead leaves it, so the next cut is skipped as
+  // usual.
+  const allowedSpanRef = useRef<Span | null>(null);
 
   // Read the frame the browser is actually displaying. floor(+eps) is the
   // robust choice: when the browser is mid-frame it's showing floor(t*fps),
@@ -108,6 +136,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     seekToGlobalFrame(globalFrame: number) {
       const r = resolveClip(clips, globalFrame);
       if (!r) return;
+      // A seek into a cut is a request to look at it - an event in
+      // there was clicked, or the timeline was - so playing on from
+      // it must not bounce straight back out.
+      allowedSpanRef.current = spanAt(skipRef.current, globalFrame);
       switchToClip(r.clipIdx, r.localFrame, false);
     },
     getGlobalFrame() {
@@ -250,19 +282,50 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           endedGuardRef.current = true;
           handleEnded();
         }
-        if (onFrameRef.current) {
-          const localFrame =
-            targetFrameRef.current ??
-            frameFromTime(v.currentTime, activeClip.fps || fps);
-          const global = clipOffset(clips, activeClipIdx) + localFrame;
-          onFrameRef.current(global);
+        const localFrame =
+          targetFrameRef.current ??
+          frameFromTime(v.currentTime, activeClip.fps || fps);
+        const global = clipOffset(clips, activeClipIdx) + localFrame;
+        if (!v.paused && skipCut(global)) {
+          // Jumped; the next tick reports the frame it landed on.
+          raf = requestAnimationFrame(tick);
+          return;
         }
+        if (onFrameRef.current) onFrameRef.current(global);
       }
       raf = requestAnimationFrame(tick);
     }
     raf = requestAnimationFrame(tick);
     return () => { stop = true; cancelAnimationFrame(raf); };
   }, [activeClipIdx, activeClip, clips, fps]);
+
+  // Playing into a cut jumps to where the footage resumes, the way the
+  // render will. Returns true when it jumped.
+  //
+  // Runs from the rAF loop, so at normal speed the cut is gone before
+  // a frame of it is shown; at 4x a frame or two may flash, which is
+  // the price of not scheduling seeks ahead of time.
+  function skipCut(global: number): boolean {
+    const allowed = allowedSpanRef.current;
+    if (allowed && (global < allowed.start || global >= allowed.end)) {
+      allowedSpanRef.current = null;
+    }
+    const spans = skipRef.current;
+    const span = spanAt(spans, global);
+    if (!span) return false;
+    const cur = allowedSpanRef.current;
+    if (cur && cur.start === span.start && cur.end === span.end) return false;
+    // Cuts can abut - a timeout straight into a cut - and landing on
+    // the start of the next one would only jump again a frame later.
+    let target = span.end;
+    for (let next = spanAt(spans, target); next; next = spanAt(spans, target)) {
+      target = next.end;
+    }
+    const r = resolveClip(clips, target);
+    if (!r) return false;
+    switchToClip(r.clipIdx, r.localFrame, true);
+    return true;
+  }
 
   // When the current clip ends, continue into the next one.
   function handleEnded() {
@@ -361,8 +424,19 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
 
     // Pressing play at the very end of the timeline rewinds to the start.
     if (cur >= lastFrame && isLastClip && v.paused) {
+      allowedSpanRef.current = spanAt(skipRef.current, 0);
       switchToClip(0, 0, true);
       return;
+    }
+
+    // Starting from inside a cut plays that cut - whoever pressed play
+    // there is looking at it. A rate change mid-play is not a start.
+    if (v.paused) {
+      const local = targetFrameRef.current ?? cur;
+      allowedSpanRef.current = spanAt(
+        skipRef.current,
+        clipOffset(clips, activeClipIdx) + local
+      );
     }
 
     v.playbackRate = rate;

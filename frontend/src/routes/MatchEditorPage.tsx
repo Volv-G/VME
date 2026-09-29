@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { MatchDto } from "../types/api";
 import { ClipManager } from "../components/ClipManager";
 import { resolveClipFromGlobal } from "../components/clipFrames";
+import { analyzeCuts } from "../components/cutAnalysis";
 import { ControlsPanel } from "../components/Controls/ControlsPanel";
 import { EventList } from "../components/EventList";
 import { Modal } from "../components/Modal";
@@ -576,6 +577,13 @@ export function MatchEditorPage() {
     return r;
   }
 
+  // What the render drops, so playback can drop it too. Memoised: the
+  // page re-renders on every frame while the video plays.
+  const cutRegions = useMemo(
+    () => (data ? analyzeCuts(data.events).regions : []),
+    [data]
+  );
+
   if (!data) {
     return (
       <div className="page">
@@ -669,6 +677,7 @@ export function MatchEditorPage() {
             match={match}
             clips={data.clips}
             fps={data.fps}
+            skipRegions={cutRegions}
             onFrame={(f) => setCurrentFrame(f)}
           />
           <VideoActionBar
