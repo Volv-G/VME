@@ -35,6 +35,8 @@ interface Props {
   /** Shift an event along the timeline. Optional: without it the
    *  nudge buttons are not rendered at all, rather than rendered dead. */
   onNudge?: (id: number, seconds: number) => Promise<void>;
+  /** Put an event on the playhead's frame. Optional, same rule. */
+  onMoveToPlayhead?: (id: number) => Promise<void>;
   /** Drop an event immediately after another (null = the very start);
    *  it lands one frame past its new neighbour. Optional: without it
    *  rows are not draggable at all, rather than draggable and inert. */
@@ -75,6 +77,7 @@ export function EventList({
   revealSelected,
   onDelete,
   onNudge,
+  onMoveToPlayhead,
   onMove,
   onClearAll,
   onShiftAll,
@@ -660,24 +663,49 @@ export function EventList({
             </div>
             {onNudge && ev.global_frame !== null && (
               <span className="event-nudge">
-                {[-1, 1].map((sec) => (
+                {/* The big move first: straight to where the video is.
+                    A tag late by four seconds was four taps of -1s -
+                    and a guess, where scrubbing to the moment and
+                    pressing this is exact to the frame. */}
+                {onMoveToPlayhead && (
                   <button
-                    key={sec}
                     type="button"
-                    className="nudge-btn"
-                    disabled={nudgingId !== null}
-                    title={`Move this event ${sec > 0 ? "later" : "earlier"} by 1 second`}
+                    className="nudge-btn nudge-now"
+                    disabled={nudgingId !== null || ev.global_frame === currentFrame}
+                    title={
+                      ev.global_frame === currentFrame
+                        ? "Already at the current time"
+                        : `Move this event to the current time (${frameLabel(currentFrame, fps)})`
+                    }
                     onClick={(e) => {
-                      // The row seeks on click; nudging shouldn't drag
-                      // the playhead along with it.
                       e.stopPropagation();
                       setNudgingId(ev.id);
-                      void onNudge(ev.id, sec).finally(() => setNudgingId(null));
+                      void onMoveToPlayhead(ev.id).finally(() => setNudgingId(null));
                     }}
                   >
-                    {sec > 0 ? "+1s" : "-1s"}
+                    → now
                   </button>
-                ))}
+                )}
+                <span className="event-nudge-row">
+                  {[-1, 1].map((sec) => (
+                    <button
+                      key={sec}
+                      type="button"
+                      className="nudge-btn"
+                      disabled={nudgingId !== null}
+                      title={`Move this event ${sec > 0 ? "later" : "earlier"} by 1 second`}
+                      onClick={(e) => {
+                        // The row seeks on click; nudging shouldn't drag
+                        // the playhead along with it.
+                        e.stopPropagation();
+                        setNudgingId(ev.id);
+                        void onNudge(ev.id, sec).finally(() => setNudgingId(null));
+                      }}
+                    >
+                      {sec > 0 ? "+1s" : "-1s"}
+                    </button>
+                  ))}
+                </span>
               </span>
             )}
             <button

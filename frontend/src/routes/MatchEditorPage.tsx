@@ -485,6 +485,25 @@ export function MatchEditorPage() {
       setError(String(e));
     }
   }
+  /** Put an event on the playhead's frame - the "→ now" in the list.
+   *  Frame-exact: clip and local frame are sent as they are, and the
+   *  server recomputes the event's wall-clock time from them. */
+  async function moveEventToPlayhead(id: number) {
+    if (!data) return;
+    const r = resolveClipFromGlobal(data.clips, currentFrame);
+    if (!r) return;
+    try {
+      const updated = await api.patchEvent(team, tournament, date, match, id, {
+        clip_id: r.clipId,
+        local_frame: r.localFrame,
+      });
+      setData(updated);
+      setError(null);
+      setSelectedEventId(id);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
   /** Create a cut_start/cut_end pair spanning [startFrame, endFrame].
    *
    * There is no batch event endpoint, so this is two POSTs. If the second
@@ -759,6 +778,7 @@ export function MatchEditorPage() {
             revealSelected={revealSelected}
             onDelete={(id) => void deleteEvent(id)}
             onNudge={nudgeEvent}
+            onMoveToPlayhead={moveEventToPlayhead}
             onMove={moveEvent}
             onClearAll={clearAllEvents}
             onShiftAll={() => {

@@ -794,8 +794,17 @@ label {
    compete with the summary for attention in a list of 200 rows. */
 .event-nudge {
   display: flex;
+  flex-direction: column;
   gap: 2px;
   flex: 0 0 auto;
+}
+/* -1s / +1s side by side, under "→ now" spanning both. */
+.event-nudge-row {
+  display: flex;
+  gap: 2px;
+}
+.event-nudge .nudge-now {
+  width: 100%;
 }
 .event-nudge .nudge-btn {
   min-width: 0;
