@@ -2,13 +2,16 @@ package works.vme.streamer
 
 import android.graphics.SurfaceTexture
 import android.hardware.usb.UsbDevice
+import android.os.SystemClock
 import android.view.Surface
 import com.herohan.uvcapp.CameraHelper
 import com.herohan.uvcapp.ICameraHelper
 import com.pedro.encoder.input.sources.OrientationConfig
 import com.pedro.encoder.input.sources.OrientationForced
 import com.pedro.encoder.input.sources.video.VideoSource
+import com.serenegiant.usb.IFrameCallback
 import com.serenegiant.usb.Size
+import com.serenegiant.usb.UVCCamera
 
 /**
  * A UVC video source that opens the camera with a format the device
@@ -64,7 +67,7 @@ import com.serenegiant.usb.Size
  * second route exists to avoid needing it.
  */
 class UvcVideoSource(
-    private val target: Target,
+    val target: Target,
     private val log: (String) -> Unit,
 ) : VideoSource() {
 
@@ -109,6 +112,38 @@ class UvcVideoSource(
      * outlive a change of adapter.
      */
     private var remembered: Size? = null
+
+    /**
+     * Frames the adapter actually delivers per second.
+     *
+     * Counted from a frame callback in RAW mode: the native preview
+     * thread hands over the undecoded buffer it already has, so the
+     * count costs a copy and no decode. It answers the one question the
+     * negotiated format cannot -- whether the frames are arriving --
+     * which is the difference between "the adapter is slow" and "the
+     * pipeline after it is".
+     */
+    @Volatile private var measuredFps = 0
+    @Volatile private var lastFrameAt = 0L
+    private var windowFrames = 0
+    private var windowStart = 0L
+
+    private val frameCounter = IFrameCallback {
+        val now = SystemClock.elapsedRealtime()
+        lastFrameAt = now
+        if (windowStart == 0L) windowStart = now
+        windowFrames++
+        val span = now - windowStart
+        if (span >= 1000) {
+            measuredFps = Math.round(windowFrames * 1000f / span)
+            windowFrames = 0
+            windowStart = now
+        }
+    }
+
+    /** Delivered fps, or 0 once frames have stopped arriving. */
+    fun currentFps(): Int =
+        if (SystemClock.elapsedRealtime() - lastFrameAt > 1500) 0 else measuredFps
 
     /** What the camera actually ended up running at. */
     @Volatile
@@ -238,6 +273,8 @@ class UvcVideoSource(
             // first frames have somewhere to land.
             surface?.let { helper.addSurface(it, false) }
             helper.startPreview()
+            runCatching { helper.setFrameCallback(frameCounter, UVCCamera.PIXEL_FORMAT_RAW) }
+                .onFailure { log("frame counter unavailable: $it") }
             log("startPreview() returned - if the view stays black, check " +
                 "logcat for 'could not negotiate with camera'")
         }

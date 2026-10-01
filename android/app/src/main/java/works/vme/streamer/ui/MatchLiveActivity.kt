@@ -70,6 +70,7 @@ import works.vme.streamer.logic.GameStateEngine
 import works.vme.streamer.overlay.BlackoutOverlay
 import works.vme.streamer.overlay.CardOverlay
 import works.vme.streamer.overlay.CourtOverlay
+import works.vme.streamer.overlay.LogoDisc
 import works.vme.streamer.overlay.PopupOverlay
 import works.vme.streamer.overlay.ScoreboardOverlay
 import works.vme.streamer.overlay.StreamThumbnail
@@ -319,10 +320,12 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         ) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
         }
+        window.decorView.postDelayed(fpsTicker, 1000)
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        window.decorView.removeCallbacks(fpsTicker)
         // Whatever route got us here, the broadcast is over -- do not
         // leave a foreground notification behind for a stream that no
         // longer exists.
@@ -501,27 +504,25 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             }
             override fun surfaceDestroyed(holder: SurfaceHolder) {
                 surfaceReady = false
-                // While live, let the preview go but keep the stream.
+                // Always detach the preview from a surface that is
+                // going away -- live or not.
                 //
-                // This was the bug behind "the phone goes to sleep
-                // and YouTube drops": the screen turning off destroys
-                // the SurfaceView's surface, and stopping the preview
-                // here tore down the GL pipeline the encoder is
-                // drawing through. The broadcast died with the
-                // screen, which no wake lock could have prevented
-                // because nothing was asleep -- the app had switched
-                // itself off.
-                //
-                // The preview is only a monitor. `startStream`
-                // renders to the encoder's own surface, so dropping
-                // the preview is a no-op for what YouTube receives,
-                // and `attachPreview` puts it back when the surface
-                // returns.
-                if (stream.isStreaming) {
-                    log("preview surface gone - stream continues")
-                    return
-                }
+                // This used to skip `stopPreview` while streaming, on
+                // the belief that it tore down the GL pipeline the
+                // encoder draws through. In RootEncoder 2.7.5 it does
+                // not: mid-stream, `stopPreview` only calls
+                // `deAttachPreview`, and the camera, the GL loop and
+                // the encoder all carry on (StreamBase.stopPreview).
+                // Skipping it was what killed the preview: the GL loop
+                // kept drawing into a destroyed surface, `isOnPreview`
+                // stayed true, and when the app came back to the
+                // foreground `surfaceCreated` saw a preview "already
+                // running" and never attached the new surface. Off the
+                // air it also stops the camera, which is right for an
+                // app nobody is looking at; `surfaceCreated` starts it
+                // again.
                 if (stream.isOnPreview) stream.stopPreview()
+                if (stream.isStreaming) log("preview surface gone - stream continues")
             }
         })
         col.addView(surfaceView, LinearLayout.LayoutParams(
@@ -910,7 +911,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private fun logoFor(side: Side): android.graphics.Bitmap? = PhotoCache.load(
         (if (side == Side.Home) match.homeRoster else match.opponentRoster).localLogoPath,
         LOGO_PX,
-    )
+    )?.let { LogoDisc.of(it, LOGO_PX) }
 
     /**
      * Push a team rename or recolour into the live overlays.
@@ -1116,7 +1117,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private fun onPositionTap(pos: Int) {
         val armed = armedAction
         if (armed == null) { subForPosition(pos); return }
-        val jersey = gameState.homePositions[pos]
+        val jersey = lineupState.homePositions[pos]
         if (jersey == null) {
             // Empty slot cannot be credited with anything. Say so
             // rather than silently doing nothing.
@@ -1133,12 +1134,15 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             log("assist: none")
             return
         }
+        // Taken before the kill is recorded, while it still describes
+        // the rally the kill ended.
+        val before = gameState
         disarm()
         // The prompt is answered either way it ends, so the pending
         // killer goes with it.
         if (armed == EventType.Assist) assistForKiller = null
         record(armed, mapOf("team" to Side.Home.wire, "player_number" to jersey))
-        askForAssist(armed, jersey)
+        askForAssist(armed, jersey, before)
     }
 
     /** Long-press: credit a player who is not on the court (armed),
@@ -1149,8 +1153,9 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         disarm()
         if (armed == EventType.Assist) assistForKiller = null
         pickPlayer(Side.Home, excludeOnCourt = false) { jersey ->
+            val before = gameState
             record(armed, mapOf("team" to Side.Home.wire, "player_number" to jersey))
-            askForAssist(armed, jersey)
+            askForAssist(armed, jersey, before)
         }
     }
 
@@ -1429,6 +1434,36 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * tapping it can only mean "there was no assist".
      */
     private var assistForKiller: Int? = null
+        set(value) {
+            val ending = field != null && value == null
+            field = value
+            if (value == null) stateBeforeKill = null
+            // The rotation the kill caused was held back while the setter
+            // was picked (see [stateBeforeKill]); the court diagram catches
+            // up now. The grid is repainted by whichever refresh ends the
+            // prompt.
+            if (ending) pushCourt()
+        }
+
+    /**
+     * The game state from just before the kill, while its assist prompt
+     * is open.
+     *
+     * A kill that wins a side-out rotates the team, and the log applies
+     * that the moment the kill is recorded. But the assist is picked
+     * after the kill, and the setter has to be picked from where the
+     * players WERE: rotated, everyone has moved a slot, and a libero
+     * carried into the front row may not be on the grid at all. So the
+     * grid and the court diagram keep the line-up as it stood until the
+     * prompt is answered or dismissed, and the rotation happens then.
+     * The score moves at once, as it should.
+     */
+    private var stateBeforeKill: GameState? = null
+
+    /** What the grid and the court diagram show, and what grid taps
+     *  resolve against. */
+    private val lineupState: GameState
+        get() = (if (assistForKiller != null) stateBeforeKill else null) ?: gameState
 
     /**
      * Arm [type] and wait for a tap on the rotation grid.
@@ -1524,9 +1559,13 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * [assistForKiller]); tapping nothing at all leaves the prompt
      * armed, and the next action button disarms it.
      */
-    private fun askForAssist(justRecorded: EventType, killer: Int) {
+    private fun askForAssist(justRecorded: EventType, killer: Int, before: GameState) {
         if (justRecorded != EventType.Kill) return
         assistForKiller = killer
+        stateBeforeKill = before
+        // Recording the kill already pushed the rotated line-up to the
+        // court diagram; put the held one back.
+        pushCourt()
         // The set happened at the kill, not when the operator got round
         // to naming who made it.
         beginAction()
@@ -1918,7 +1957,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      */
     private fun pushCourt() {
         val co = court ?: return
-        val s = gameState
+        val s = lineupState
         val slots = (1..6).map { pos ->
             val jersey = s.homePositions[pos]
             val player = jersey?.let { j ->
@@ -2247,6 +2286,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     /** Repaint every view that depends on `gameState` or `match`. */
     private fun refreshAllViews() {
         val s = gameState
+        val lineup = lineupState
         scoreHomeBig.text = s.homeScore.toString()
         scoreAwayBig.text = s.awayScore.toString()
         homeServeDot.visibility =
@@ -2258,7 +2298,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // Empty slot renders `P#` on top and `?` underneath so the
         // grid does not visibly change height with substitutions.
         for ((pos, btn) in positionButtons) {
-            val jersey = s.homePositions[pos]
+            val jersey = lineup.homePositions[pos]
             btn.text = positionLabel(pos, jersey)
         }
         // Ball Served greys out after a tap so the operator has a
@@ -2357,7 +2397,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                 b.alpha = 0.25f
             }
             for ((pos, btn) in positionButtons) {
-                val filled = s.homePositions[pos] != null
+                val filled = lineup.homePositions[pos] != null
                 btn.isEnabled = true
                 btn.alpha = if (filled) 1.0f else 0.35f
                 tintButton(btn, if (filled) ARMED_SLOT_BG else ARMED_SLOT_EMPTY_BG)
@@ -2741,6 +2781,21 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         setStatus("preparing encoder")
         val wasPreviewing = stream.isOnPreview
         if (wasPreviewing) runCatching { stream.stopPreview() }
+        // Ask the adapter for frames at the rate the encoder will use: a
+        // 60fps preset wants 60, anything at or under 30 wants 30 (more
+        // would only spend USB bandwidth on frames the limiter drops).
+        // The format is negotiated when the source opens, so a change of
+        // rate means a new source.
+        val camFps = cameraFps(quality)
+        if (!cameraLost && uvcSource.target.fps != camFps) {
+            log("camera: capture at ${camFps}fps for ${quality.label}")
+            uvcSource = UvcVideoSource(target.copy(fps = camFps), ::log)
+            runCatching { stream.changeVideoSource(uvcSource) }
+                .onFailure { log("camera: could not switch the video source: $it") }
+        }
+        // The encoder's own count of what it is sending - the number
+        // that matters once live.
+        stream.setFpsListener { fps -> streamFps = fps }
         val ok = try {
             // Codec before prepare: it decides which encoder is built.
             // H.265 buys roughly a third off the bitrate for the same
@@ -3024,6 +3079,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     }
 
     private fun onStopStreaming() {
+        streamFps = 0
         StreamService.stop(this)
         finishBroadcast()
         runCatching { if (stream.isStreaming) stream.stopStream() }
@@ -3144,7 +3200,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             setStatus("camera reconnected")
             return
         }
-        uvcSource = UvcVideoSource(target, ::log)
+        uvcSource = UvcVideoSource(target.copy(fps = cameraFps(quality)), ::log)
         runCatching { stream.changeVideoSource(uvcSource) }
             .onFailure { log("camera: could not restore the video source: $it") }
         court?.setShown(quality.court)
@@ -3345,7 +3401,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             // Idle: the chip advertises the ceiling that Start will
             // use, and doubles as the way to change it.
             healthLabel.text = "⚙ ${quality.shortLabel}" +
-                if (Settings.useHevc(this)) " · H.265" else ""
+                (if (Settings.useHevc(this)) " · H.265" else "") + fpsSuffix()
             healthLabel.setTextColor(Color.parseColor("#888888"))
             return
         }
@@ -3355,7 +3411,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             "%.1f Mbps".format(kbps / 1000f) else "$kbps kbps"
         // The marker says the picture is deliberately black, so a
         // healthy-looking number on a blank stream is not a mystery.
-        healthLabel.text = if (quality.video) rate else "$rate ■"
+        healthLabel.text = (if (quality.video) rate else "$rate ■") + fpsSuffix()
         healthLabel.setTextColor(
             when {
                 kbps <= 0 -> Color.parseColor("#FF5252")
@@ -3365,6 +3421,46 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             }
         )
     }
+
+    /**
+     * Frames per second, measured, for the health chip: what the
+     * encoder is sending once live, and what the camera is delivering
+     * before that. Measured rather than configured because "the
+     * stream looks choppy" is otherwise unanswerable courtside -- the
+     * preset says 30, and only a count says whether 30 is arriving.
+     */
+    private fun fpsSuffix(): String {
+        val live = prepared && stream.isStreaming && streamFps > 0
+        val fps = if (live) streamFps else if (!cameraLost) uvcSource.currentFps() else 0
+        return if (fps > 0) " · ${fps}fps" else ""
+    }
+
+    /** Frames per second the encoder reported, 0 when not streaming. */
+    @Volatile private var streamFps: Int = 0
+    private var lastFpsLogAt = 0L
+
+    /** Repaints the chip once a second, and writes the rates to the
+     *  log now and then, so a choppy stream leaves a trail. */
+    private val fpsTicker = object : Runnable {
+        override fun run() {
+            updateHealth()
+            val now = android.os.SystemClock.elapsedRealtime()
+            // `prepared` first, so this never brings the lazy stream
+            // into existence on its own.
+            if (prepared && now - lastFpsLogAt >= FPS_LOG_EVERY_MS &&
+                (stream.isOnPreview || stream.isStreaming)
+            ) {
+                lastFpsLogAt = now
+                log("fps: camera ${uvcSource.currentFps()} (${uvcSource.negotiated})" +
+                    (if (stream.isStreaming) ", stream $streamFps" else "") +
+                    ", preset ${quality.fps}")
+            }
+            window.decorView.postDelayed(this, 1000)
+        }
+    }
+
+    /** Capture rate to ask the adapter for: see [ensurePrepared]. */
+    private fun cameraFps(q: StreamQuality): Int = if (q.fps > 30) 60 else 30
 
     // ---- log --------------------------------------------------------
 
@@ -3420,6 +3516,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
          *  late to switch back costs nothing, being early costs the
          *  adapter's sound for the rest of the match. */
         private const val USB_AUDIO_SETTLE_MS = 2500L
+        private const val FPS_LOG_EVERY_MS = 30_000L
         /** Rotation slots: darker than the action buttons, because
          *  the grid is a display that happens to be tappable, not a
          *  row of commands competing for the eye. */

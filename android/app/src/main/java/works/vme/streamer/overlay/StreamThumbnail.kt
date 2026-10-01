@@ -153,21 +153,9 @@ object StreamThumbnail {
         val cy = y + d / 2f
 
         if (logo != null) {
-            fill.color = Color.WHITE
-            c.drawCircle(cx, cy, d / 2f, fill)
-            // Contained, not cropped to the circle: a crest is a
-            // shape, and cutting its corners off to fill a disc is
-            // worse than leaving white around it.
-            val pad = d * 0.13f
-            val box = d - pad * 2f
-            val scale = minOf(box / logo.width, box / logo.height)
-            val w = logo.width * scale
-            val h = logo.height * scale
-            c.drawBitmap(
-                logo, null,
-                RectF(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f),
-                bmpPaint,
-            )
+            // Already a disc (`LogoDisc`): a crest comes on its white
+            // plate, a photo cover-cropped. Drawn to fill this one.
+            c.drawBitmap(logo, null, RectF(x, y, x + d, y + d), bmpPaint)
             return
         }
 

@@ -9,6 +9,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
@@ -46,9 +47,18 @@ import java.io.File
  *
  * The frame is fixed and the image moves behind it -- the same model
  * as every avatar cropper, and the one that needs no handles to
- * drag. Pinch to zoom, drag to pan, and the image is clamped so it
- * always covers the frame, which makes a transparent-edged crop
- * impossible to produce by accident.
+ * drag. Pinch to zoom, drag to pan.
+ *
+ * The frame is a circle because the badge is drawn as one (see
+ * `overlay/LogoDisc`): what is inside it is what the stream shows.
+ *
+ * Zooming OUT is allowed, down to half the size at which the whole
+ * image fits. Covering the frame was the only option before, which
+ * made a wide crest or a square logo impossible to get into a circle
+ * whole: something always fell off the edge. Zoomed out, the image
+ * stays inside the frame and the rest of the crop is transparent --
+ * and `LogoDisc` puts a transparent badge on a white plate, so it
+ * still comes out a circle.
  *
  * Output is PNG: club crests routinely have transparent
  * backgrounds, and JPEG would fill those with black.
@@ -78,7 +88,7 @@ class LogoCropActivity : ComponentActivity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "Pinch to zoom, drag to position"
+            text = "Pinch to zoom in or out, drag to position\nThe circle is what the stream shows"
             setTextColor(Color.parseColor("#B0B0B0"))
             textSize = 13f
             gravity = Gravity.CENTER
@@ -171,7 +181,14 @@ class LogoCropActivity : ComponentActivity() {
             isAntiAlias = true
             isFilterBitmap = true
         }
-        private val scrimPaint = Paint().apply { color = Color.argb(170, 0, 0, 0) }
+        private val scrimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(170, 0, 0, 0)
+        }
+        private val scrim = Path().apply { fillType = Path.FillType.EVEN_ODD }
+        /** A dark disc behind the image, so a zoomed-out crop shows
+         *  where its margin is. The margin itself is saved transparent
+         *  and becomes the badge's white plate. */
+        private val backPaint = Paint().apply { color = Color.rgb(40, 40, 40) }
         private val framePaint = Paint().apply {
             color = Color.WHITE
             style = Paint.Style.STROKE
@@ -200,6 +217,11 @@ class LogoCropActivity : ComponentActivity() {
             val cx = w / 2f
             val cy = h / 2f
             frame.set(cx - side / 2f, cy - side / 2f, cx + side / 2f, cy + side / 2f)
+            // Everything except the circle: even-odd fill of the view's
+            // rectangle and the frame's circle leaves the circle clear.
+            scrim.reset()
+            scrim.addRect(0f, 0f, w.toFloat(), h.toFloat(), Path.Direction.CW)
+            scrim.addCircle(cx, cy, side / 2f, Path.Direction.CW)
 
             // Start covering the frame, centred: the first thing the
             // operator sees is a valid crop, not letterboxing they
@@ -217,17 +239,10 @@ class LogoCropActivity : ComponentActivity() {
 
         override fun onDraw(canvas: Canvas) {
             if (!ready) return
+            canvas.drawCircle(frame.centerX(), frame.centerY(), frame.width() / 2f, backPaint)
             canvas.drawBitmap(src, matrix, bmpPaint)
-            // Scrim as four rectangles around the frame. Cheaper and
-            // more predictable than a clipped layer, and it does not
-            // need a saveLayer on every frame of a pinch.
-            val w = width.toFloat()
-            val h = height.toFloat()
-            canvas.drawRect(0f, 0f, w, frame.top, scrimPaint)
-            canvas.drawRect(0f, frame.bottom, w, h, scrimPaint)
-            canvas.drawRect(0f, frame.top, frame.left, frame.bottom, scrimPaint)
-            canvas.drawRect(frame.right, frame.top, w, frame.bottom, scrimPaint)
-            canvas.drawRect(frame, framePaint)
+            canvas.drawPath(scrim, scrimPaint)
+            canvas.drawCircle(frame.centerX(), frame.centerY(), frame.width() / 2f, framePaint)
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -254,18 +269,22 @@ class LogoCropActivity : ComponentActivity() {
         }
 
         /**
-         * Keep the image covering the frame.
+         * Keep the image somewhere sensible.
          *
-         * Scale first -- if the image has been pinched smaller than
-         * the frame no translation can cover it -- then nudge each
-         * axis back inside. Means the crop can never contain an edge
-         * of nothing, so there is no invalid state to warn about.
+         * Scale first: no smaller than half the size at which the
+         * whole image fits the frame -- enough to sit a square logo
+         * inside the circle with room around it, not so small that a
+         * pinch can lose it. Then each axis on its own terms: where
+         * the image is wider (or taller) than the frame it must still
+         * cover it, as before; where it is smaller it must stay inside
+         * it, so it cannot be dragged out of the badge.
          */
         private fun clamp() {
             val v = FloatArray(9)
             matrix.getValues(v)
             val scale = v[Matrix.MSCALE_X]
-            val min = maxOf(frame.width() / src.width, frame.height() / src.height)
+            val fit = minOf(frame.width() / src.width, frame.height() / src.height)
+            val min = fit * MIN_ZOOM_OF_FIT
             if (scale < min) {
                 val f = min / scale
                 matrix.postScale(f, f, frame.centerX(), frame.centerY())
@@ -276,12 +295,17 @@ class LogoCropActivity : ComponentActivity() {
             val right = left + src.width * v[Matrix.MSCALE_X]
             val bottom = top + src.height * v[Matrix.MSCALE_Y]
 
-            var dx = 0f
-            var dy = 0f
-            if (left > frame.left) dx = frame.left - left
-            else if (right < frame.right) dx = frame.right - right
-            if (top > frame.top) dy = frame.top - top
-            else if (bottom < frame.bottom) dy = frame.bottom - bottom
+            fun axis(lo: Float, hi: Float, fLo: Float, fHi: Float): Float =
+                if (hi - lo >= fHi - fLo) {
+                    // Bigger than the frame: cover it.
+                    if (lo > fLo) fLo - lo else if (hi < fHi) fHi - hi else 0f
+                } else {
+                    // Smaller: stay inside it.
+                    if (lo < fLo) fLo - lo else if (hi > fHi) fHi - hi else 0f
+                }
+
+            val dx = axis(left, right, frame.left, frame.right)
+            val dy = axis(top, bottom, frame.top, frame.bottom)
             if (dx != 0f || dy != 0f) matrix.postTranslate(dx, dy)
         }
 
@@ -306,6 +330,9 @@ class LogoCropActivity : ComponentActivity() {
 
         /** Crop frame as a fraction of the view's shorter side. */
         private const val FRAME_FRAC = 0.78f
+        /** Smallest zoom, as a fraction of the size at which the whole
+         *  image fits the frame. */
+        private const val MIN_ZOOM_OF_FIT = 0.5f
         /** Longest edge the source is decoded at. */
         private const val MAX_SRC_PX = 1600
         /** Output size. Comfortably above the ~50px the scoreboard
