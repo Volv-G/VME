@@ -2,16 +2,15 @@ package works.vme.streamer
 
 import android.graphics.SurfaceTexture
 import android.hardware.usb.UsbDevice
-import android.os.SystemClock
+import android.os.Process
 import android.view.Surface
 import com.herohan.uvcapp.CameraHelper
 import com.herohan.uvcapp.ICameraHelper
 import com.pedro.encoder.input.sources.OrientationConfig
 import com.pedro.encoder.input.sources.OrientationForced
 import com.pedro.encoder.input.sources.video.VideoSource
-import com.serenegiant.usb.IFrameCallback
 import com.serenegiant.usb.Size
-import com.serenegiant.usb.UVCCamera
+import java.io.File
 
 /**
  * A UVC video source that opens the camera with a format the device
@@ -112,38 +111,6 @@ class UvcVideoSource(
      * outlive a change of adapter.
      */
     private var remembered: Size? = null
-
-    /**
-     * Frames the adapter actually delivers per second.
-     *
-     * Counted from a frame callback in RAW mode: the native preview
-     * thread hands over the undecoded buffer it already has, so the
-     * count costs a copy and no decode. It answers the one question the
-     * negotiated format cannot -- whether the frames are arriving --
-     * which is the difference between "the adapter is slow" and "the
-     * pipeline after it is".
-     */
-    @Volatile private var measuredFps = 0
-    @Volatile private var lastFrameAt = 0L
-    private var windowFrames = 0
-    private var windowStart = 0L
-
-    private val frameCounter = IFrameCallback {
-        val now = SystemClock.elapsedRealtime()
-        lastFrameAt = now
-        if (windowStart == 0L) windowStart = now
-        windowFrames++
-        val span = now - windowStart
-        if (span >= 1000) {
-            measuredFps = Math.round(windowFrames * 1000f / span)
-            windowFrames = 0
-            windowStart = now
-        }
-    }
-
-    /** Delivered fps, or 0 once frames have stopped arriving. */
-    fun currentFps(): Int =
-        if (SystemClock.elapsedRealtime() - lastFrameAt > 1500) 0 else measuredFps
 
     /** What the camera actually ended up running at. */
     @Volatile
@@ -273,8 +240,7 @@ class UvcVideoSource(
             // first frames have somewhere to land.
             surface?.let { helper.addSurface(it, false) }
             helper.startPreview()
-            runCatching { helper.setFrameCallback(frameCounter, UVCCamera.PIXEL_FORMAT_RAW) }
-                .onFailure { log("frame counter unavailable: $it") }
+            boostDecodeThread()
             log("startPreview() returned - if the view stays black, check " +
                 "logcat for 'could not negotiate with camera'")
         }
@@ -304,6 +270,22 @@ class UvcVideoSource(
 
         preferred.firstOrNull { it.width == target.width && it.height == target.height }
             ?.let { return it }
+
+        // Without an exact match, stay at the target's shape. The GL
+        // pipeline stretches whatever it is given to the encoder's frame,
+        // so a 4:3 entry - this adapter lists 1280x960 and 1024x768 right
+        // next to 1280x720 - would come out squashed.
+        val aspect = target.width.toFloat() / target.height
+        val sameShape = preferred.filter {
+            kotlin.math.abs(it.width.toFloat() / it.height - aspect) < 0.02f
+        }
+        if (sameShape.isNotEmpty() && sameShape.size < preferred.size) {
+            return chooseFrom(sameShape)
+        }
+        return chooseFrom(preferred)
+    }
+
+    private fun chooseFrom(preferred: List<Size>): Size? {
 
         val area = target.width.toLong() * target.height
         val under = preferred
@@ -337,6 +319,67 @@ class UvcVideoSource(
         }
         log("requesting ${target.fps}fps instead of ${size.fps} (available: $rates)")
         return Size(size.type, size.width, size.height, target.fps, rates)
+    }
+
+    /**
+     * Raise the priority of the thread that decodes the camera's frames.
+     *
+     * The adapter sends MJPEG, and the camera library decompresses and
+     * converts every frame in software on one native thread of its own.
+     * At 1080p30 on the S24 that thread was measured at 61% of a core:
+     * ~20ms of work per 33ms frame, so any delay - a preemption, a hop
+     * to a slower core - makes a frame late and the next one early. The
+     * display showed exactly that: an average of 30.2fps, but gaps
+     * between frames of 16, 24, 42 and 50ms instead of a steady 33.
+     *
+     * The library does not expose the thread, so it is found by what it
+     * does: two samples of every thread's CPU time from /proc, a second
+     * apart, once preview has had time to settle. The busiest one, if it
+     * is busy enough to be the decoder, gets display priority - the
+     * scheduler then keeps it on a fast core and does not preempt it for
+     * ordinary work. Best effort: if anything here fails, the camera
+     * runs exactly as before.
+     */
+    private fun boostDecodeThread() {
+        Thread {
+            runCatching {
+                Thread.sleep(2500)
+                if (!running) return@Thread
+                val before = threadCpuTicks()
+                Thread.sleep(1000)
+                val after = threadCpuTicks()
+                val busiest = after.mapNotNull { (tid, t) ->
+                    before[tid]?.let { tid to (t - it) }
+                }.maxByOrNull { it.second } ?: return@Thread
+                // Ticks are 1/100 s, so a delta over one second reads as
+                // a percentage of one core.
+                val (tid, pct) = busiest
+                if (tid == Process.myPid().toLong() || pct < 20) {
+                    log("decode thread not found (busiest $tid at $pct%) - priority unchanged")
+                    return@Thread
+                }
+                Process.setThreadPriority(tid.toInt(), Process.THREAD_PRIORITY_URGENT_DISPLAY)
+                log("decode thread $tid at $pct% of a core - raised to display priority")
+            }.onFailure { log("decode priority not raised: $it") }
+        }.apply { name = "uvc-boost"; isDaemon = true }.start()
+    }
+
+    /** utime + stime per thread of this process, in clock ticks. */
+    private fun threadCpuTicks(): Map<Long, Long> {
+        val out = HashMap<Long, Long>()
+        File("/proc/self/task").listFiles()?.forEach { dir ->
+            val tid = dir.name.toLongOrNull() ?: return@forEach
+            runCatching {
+                val stat = File(dir, "stat").readText()
+                // The command name is parenthesised and may contain
+                // spaces; the numeric fields start after the last ')'.
+                val f = stat.substringAfterLast(')').trim().split(' ')
+                // After the name: state is field 3, so utime (14) and
+                // stime (15) are at indices 11 and 12 here.
+                out[tid] = f[11].toLong() + f[12].toLong()
+            }
+        }
+        return out
     }
 
     /** Size has no useful equals(), and identity is never right here. */

@@ -69,11 +69,6 @@ enum class StreamQuality(
     /** True when the frame is the rotation diagram instead. */
     val court: Boolean = false,
 ) {
-    // 60fps for when the hall can carry it. A camera feeding HDMI runs
-    // at 60, and sport at half that judders on a phone held at 120Hz --
-    // a ball in flight jumps instead of moving. Twice the frames need
-    // more than the 6 Mbps that 30 gets, and H.265 helps most here.
-    Smooth("smooth", "Smooth – 8 Mbps, 1080p60", 8_000_000, 1920, 1080, 60, 2),
     Full("full", "Full – 6 Mbps, 1080p", 6_000_000, 1920, 1080, 30, 2),
     Medium("medium", "Reduced – 3 Mbps, 720p", 3_000_000, 1280, 720, 30, 2),
     Low("low", "Low – 1.5 Mbps, 720p", 1_500_000, 1280, 720, 30, 3),
@@ -97,8 +92,7 @@ enum class StreamQuality(
         get() = when {
             court -> "court only"
             !video -> "no video"
-            bitrate >= 1_000_000 -> "%.1f Mbps".format(bitrate / 1_000_000f) +
-                (if (fps > 30) " · ${fps}p" else "")
+            bitrate >= 1_000_000 -> "%.1f Mbps".format(bitrate / 1_000_000f)
             else -> "${bitrate / 1000} kbps"
         }
 

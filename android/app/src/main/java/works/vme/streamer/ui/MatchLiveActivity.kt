@@ -2781,15 +2781,16 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         setStatus("preparing encoder")
         val wasPreviewing = stream.isOnPreview
         if (wasPreviewing) runCatching { stream.stopPreview() }
-        // Ask the adapter for frames at the rate the encoder will use: a
-        // 60fps preset wants 60, anything at or under 30 wants 30 (more
-        // would only spend USB bandwidth on frames the limiter drops).
-        // The format is negotiated when the source opens, so a change of
-        // rate means a new source.
-        val camFps = cameraFps(quality)
-        if (!cameraLost && uvcSource.target.fps != camFps) {
-            log("camera: capture at ${camFps}fps for ${quality.label}")
-            uvcSource = UvcVideoSource(target.copy(fps = camFps), ::log)
+        // Capture at the size and rate the encoder will use. The phone
+        // decodes every camera frame in software, so capturing 1080p for
+        // a 720p stream decoded more than twice the pixels and threw the
+        // difference away in GL - on the one thread that was already the
+        // bottleneck. The format is negotiated when the source opens, so
+        // a different capture means a new source.
+        val want = cameraTarget(quality)
+        if (!cameraLost && uvcSource.target != want) {
+            log("camera: capture ${want.width}x${want.height}@${want.fps} for ${quality.label}")
+            uvcSource = UvcVideoSource(want, ::log)
             runCatching { stream.changeVideoSource(uvcSource) }
                 .onFailure { log("camera: could not switch the video source: $it") }
         }
@@ -3200,7 +3201,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             setStatus("camera reconnected")
             return
         }
-        uvcSource = UvcVideoSource(target.copy(fps = cameraFps(quality)), ::log)
+        uvcSource = UvcVideoSource(cameraTarget(quality), ::log)
         runCatching { stream.changeVideoSource(uvcSource) }
             .onFailure { log("camera: could not restore the video source: $it") }
         court?.setShown(quality.court)
@@ -3378,6 +3379,12 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             prepared = false
             log("bandwidth -> ${next.label} " +
                 "(${next.width}x${next.height}@${next.fps}, gop ${next.gop}s)")
+            // Off the air nothing is lost by rebuilding now, and the
+            // preview should show what Start will send - including the
+            // capture size, which follows the preset (see
+            // [cameraTarget]). Waiting for Start meant judging a preset
+            // by a picture captured for a different one.
+            if (surfaceReady && stream.isOnPreview) ensurePrepared()
         }
         updateHealth()
         toast(next.label)
@@ -3423,15 +3430,17 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     }
 
     /**
-     * Frames per second, measured, for the health chip: what the
-     * encoder is sending once live, and what the camera is delivering
-     * before that. Measured rather than configured because "the
-     * stream looks choppy" is otherwise unanswerable courtside -- the
-     * preset says 30, and only a count says whether 30 is arriving.
+     * Frames per second the encoder is actually sending, for the health
+     * chip once live. Measured rather than configured: the preset says
+     * 30, and only a count says whether 30 is going out.
+     *
+     * Before going live there is nothing here. The camera-side counter
+     * this used to show copied every decoded frame to Java just to count
+     * it, and cost a tenth of a core on a phone whose decoding was
+     * already the bottleneck.
      */
     private fun fpsSuffix(): String {
-        val live = prepared && stream.isStreaming && streamFps > 0
-        val fps = if (live) streamFps else if (!cameraLost) uvcSource.currentFps() else 0
+        val fps = if (prepared && stream.isStreaming) streamFps else 0
         return if (fps > 0) " · ${fps}fps" else ""
     }
 
@@ -3447,20 +3456,29 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             val now = android.os.SystemClock.elapsedRealtime()
             // `prepared` first, so this never brings the lazy stream
             // into existence on its own.
-            if (prepared && now - lastFpsLogAt >= FPS_LOG_EVERY_MS &&
-                (stream.isOnPreview || stream.isStreaming)
-            ) {
+            if (prepared && now - lastFpsLogAt >= FPS_LOG_EVERY_MS && stream.isStreaming) {
                 lastFpsLogAt = now
-                log("fps: camera ${uvcSource.currentFps()} (${uvcSource.negotiated})" +
-                    (if (stream.isStreaming) ", stream $streamFps" else "") +
-                    ", preset ${quality.fps}")
+                log("fps: stream $streamFps, preset ${quality.fps}")
             }
             window.decorView.postDelayed(this, 1000)
         }
     }
 
-    /** Capture rate to ask the adapter for: see [ensurePrepared]. */
-    private fun cameraFps(q: StreamQuality): Int = if (q.fps > 30) 60 else 30
+    /**
+     * What to ask the adapter for: see [ensurePrepared]. 720p for every
+     * preset at or below it, 1080p for the full one, 30fps throughout
+     * (the Target default). The no-video presets still run the camera under the
+     * blackout, so they take the cheap capture too. Overlays keep
+     * drawing at [target]'s 1080p either way; GL scales them with the
+     * frame.
+     */
+    private fun cameraTarget(q: StreamQuality): UvcVideoSource.Target {
+        val small = q.height <= 720
+        return UvcVideoSource.Target(
+            width = if (small) 1280 else 1920,
+            height = if (small) 720 else 1080,
+        )
+    }
 
     // ---- log --------------------------------------------------------
 
