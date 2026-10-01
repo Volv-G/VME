@@ -201,6 +201,17 @@ export function ControlsPanel({
   const [pendingAssistKiller, setPendingAssistKiller] = useState<
     number | null
   >(null);
+  // The line-up from just before that Kill, shown while the assister is
+  // picked. A Kill that wins a side-out rotates the team the moment it
+  // is logged, but the setter has to be picked from where the players
+  // WERE - rotated, everyone has moved a slot and a libero may have
+  // gone. So the rotation stays off the grid until the assist is
+  // answered or skipped. Only read while `pendingAssistKiller` is set.
+  const [assistLineup, setAssistLineup] = useState<
+    typeof live.home_positions | null
+  >(null);
+  const lineupShown =
+    pendingAssistKiller != null && assistLineup ? assistLineup : live.home_positions;
   // Why the roster picker is open when a rule opened it, not a click.
   const [subReason, setSubReason] = useState<string | null>(null);
 
@@ -374,7 +385,7 @@ export function ControlsPanel({
     // once a Kill is logged we want the next lineup tap to be the
     // assister, even if `armed` was somehow non-null.
     if (pendingAssistKiller != null) {
-      const jersey = live.home_positions[position];
+      const jersey = lineupShown[position];
       if (jersey == null) return;
       if (jersey === pendingAssistKiller) return; // no self-assist
       await commit("assist", { team: "home", player_number: jersey });
@@ -387,6 +398,8 @@ export function ControlsPanel({
       if (jersey == null) return; // no player to attribute to
       const armedType = armed.type;
       const armedPayload = armed.payload ?? {};
+      // Before the commit, while it still describes the rally.
+      const before = live.home_positions;
       const ok = await commit(
         armedType,
         { team: "home", player_number: jersey, ...armedPayload },
@@ -398,6 +411,7 @@ export function ControlsPanel({
       );
       if (ok && armedType === "kill") {
         setArmed(null);
+        setAssistLineup(before);
         setPendingAssistKiller(jersey);
       }
       return;
@@ -525,7 +539,7 @@ export function ControlsPanel({
           />
         ) : (
           <LineupGrid
-            positions={live.home_positions}
+            positions={lineupShown}
             roster={data.home_roster}
             liberos={liberos}
             armedActionLabel={
