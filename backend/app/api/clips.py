@@ -33,6 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..library import paths, scanner
 from ..library.probe import probe
+from ..library import preview_proxy
 from ..library.transcode import transcode_to_fps
 from ..domain.events.lifecycle import (
     GameEndEvent,
@@ -195,6 +196,9 @@ def _ingest_file_into_match(
     scanner.sync_match_fps(m)
     if save:
         save_match(team, tournament, date, match, m)
+    # Start the player's copy now, for a file the browser cannot decode,
+    # rather than when somebody first tries to watch it.
+    preview_proxy.ensure(dest, info.duration if info else 0.0)
     return m
 
 
@@ -817,6 +821,7 @@ def delete_clip(
         file_path.unlink(missing_ok=True)
     except OSError:
         pass
+    preview_proxy.remove(file_path)
     save_match(team, tournament, date, match, m)
     return serialize_match(team, tournament, date, match, m)
 

@@ -915,6 +915,20 @@ export const api = {
   ): string {
     return `${BASE}${matchBase(team, tournament, date, match)}/media/clips/${clipId}/stream`;
   },
+  /** Whether a clip can be played yet: `native`, `ready` (proxy built),
+   *  `building` with progress 0..1, or `failed`. Asking starts the
+   *  proxy for a clip that needs one. */
+  async clipPreviewStatus(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    clipId: string
+  ): Promise<{ state: string; progress: number; error?: string | null }> {
+    return fetchJson(
+      `${matchBase(team, tournament, date, match)}/media/clips/${clipId}/preview`
+    );
+  },
 };
 
 export type {

@@ -9,7 +9,7 @@ from typing import Iterator
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from ..library import paths
+from ..library import paths, preview_proxy
 from .helpers import load_match_or_404
 
 router = APIRouter(
@@ -37,7 +37,46 @@ def stream_clip(
     if not file_path.is_file():
         raise HTTPException(404, "Clip file missing on disk")
 
+    # A clip the browser cannot decode is played from its proxy (see
+    # `library/preview_proxy`). Until that exists, say so with a 503 -
+    # which the player turns into a progress note via `/preview` - and
+    # make sure it is being built.
+    if not preview_proxy.browser_playable(file_path):
+        proxy = preview_proxy.proxy_path(file_path)
+        if proxy.is_file():
+            return _range_response(proxy, request)
+        st = preview_proxy.ensure(file_path, clip.duration)
+        raise HTTPException(
+            503,
+            f"Preparing a browser-playable copy of {clip.filename} "
+            f"({st['state']}, {int(st['progress'] * 100)}%)",
+        )
+
     return _range_response(file_path, request)
+
+
+@router.get("/clips/{clip_id}/preview")
+def clip_preview_status(
+    team: str,
+    tournament: str,
+    date: str,
+    match: str,
+    clip_id: str,
+) -> dict:
+    """Whether the player can have this clip yet.
+
+    `native` (plays as is), `ready` (its proxy is built), `building` with
+    `progress` 0..1, or `failed` with `error`. Asking starts the build
+    for a clip that needs one and has none.
+    """
+    m = load_match_or_404(team, tournament, date, match)
+    clip = m.get_clip(clip_id)
+    if clip is None:
+        raise HTTPException(404, "Clip not found")
+    file_path = paths.match_dir(team, tournament, date, match) / clip.filename
+    if not file_path.is_file():
+        raise HTTPException(404, "Clip file missing on disk")
+    return preview_proxy.ensure(file_path, clip.duration)
 
 
 def _range_response(path: Path, request: Request) -> StreamingResponse:

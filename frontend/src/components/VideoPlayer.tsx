@@ -98,6 +98,37 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
 
   const activeClip = clips[activeClipIdx];
 
+  // A clip the browser cannot decode (an editing codec like DNxHR) is
+  // served from a proxy the server builds in the background - see
+  // `library/preview_proxy.py`. Until it exists the stream answers 503;
+  // this is the note shown over the player meanwhile, and `srcBust`
+  // re-requests the stream once the proxy is ready.
+  const [proxyNote, setProxyNote] = useState<
+    { state: string; progress: number; error?: string | null } | null
+  >(null);
+  const [srcBust, setSrcBust] = useState(0);
+  useEffect(() => {
+    setProxyNote(null);
+  }, [activeClip?.id]);
+  useEffect(() => {
+    if (!proxyNote || proxyNote.state !== "building" || !activeClip) return;
+    const id = activeClip.id;
+    const t = window.setTimeout(async () => {
+      try {
+        const s = await api.clipPreviewStatus(team, tournament, date, match, id);
+        if (s.state === "ready" || s.state === "native") {
+          setProxyNote(null);
+          setSrcBust(Date.now());
+        } else {
+          setProxyNote(s);
+        }
+      } catch {
+        setProxyNote({ ...proxyNote });
+      }
+    }, 2000);
+    return () => window.clearTimeout(t);
+  }, [proxyNote, activeClip, team, tournament, date, match]);
+
   // Cut skipping. Refs, because the rAF loop reads them every frame and
   // must not be restarted when the event list changes.
   const skipRef = useRef<Span[]>(skipRegions ?? []);
@@ -481,6 +512,14 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   return (
     <div className="player-root">
       <div className="editor-video">
+        {proxyNote && (
+          <div className="playback-lock" role="status">
+            {proxyNote.state === "failed"
+              ? `Couldn't make a playable copy of ${activeClip.filename}: ${proxyNote.error ?? "unknown error"}`
+              : `Preparing a browser-playable copy of ${activeClip.filename} ` +
+                `(its codec can't play in a browser) - ${Math.round(proxyNote.progress * 100)}%`}
+          </div>
+        )}
         {playbackLock && (
           // Over the video rather than beside the controls: that is
           // where the operator is looking when playback stops under
@@ -507,7 +546,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           >
             <video
               ref={videoRef}
-              src={api.clipStreamUrl(team, tournament, date, match, activeClip.id)}
+              src={
+                api.clipStreamUrl(team, tournament, date, match, activeClip.id) +
+                (srcBust ? `?v=${srcBust}` : "")
+              }
               controls={false}
               onPlay={() => {
                 targetFrameRef.current = null;
@@ -527,6 +569,17 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
                   videoRef.current?.error
                 );
                 setSwitching(false);
+                // Not necessarily broken: maybe not playable YET.
+                const id = activeClip?.id;
+                if (id) {
+                  void api
+                    .clipPreviewStatus(team, tournament, date, match, id)
+                    .then((s) => {
+                      if (s.state === "building" || s.state === "failed") setProxyNote(s);
+                      else if (s.state === "ready") setSrcBust(Date.now());
+                    })
+                    .catch(() => undefined);
+                }
               }}
               onEnded={handleEnded}
               preload="metadata"
