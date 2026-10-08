@@ -25,9 +25,6 @@ enum class EventType(val wire: String) {
     GameStart("game_start"),
     GameEnd("game_end"),
     SetEnd("set_end"),
-    /** The teams have changed ends: the scoreboard flips. Each one
-     *  toggles. Same wire name as VME's `SwapSidesEvent`. */
-    SwapSides("swap_sides"),
     /** A timeout, as the two moments that bound it: called, and play
      *  resumed. VME cuts the span between them, so both have to be in
      *  the log -- the card coming down is not enough on its own.
@@ -131,9 +128,6 @@ data class GameState(
     val homePositions: Map<Int, Int?> = (1..6).associateWith { null },
     val gameStarted: Boolean = false,
     val gameEnded: Boolean = false,
-    /** True while the away team is on the left of the frame, so the
-     *  scoreboard draws it on the left. Toggled by `swap_sides`. */
-    val sidesSwapped: Boolean = false,
     val ballServedSinceLastScore: Boolean = false,
     /** Per-point winner in the current set: `true` for home,
      *  `false` for away. Reset on set end / game start. Consumed by
@@ -237,6 +231,16 @@ data class Match(
      * remembered verbatim at import rather than derived at send time.
      */
     val vmeOrigin: VmeOrigin? = null,
+    /**
+     * Draw the stream's scoreboard with the away team on the left.
+     *
+     * A setting of the match, flipped from the ⇄ on the score header,
+     * rather than an event in its log: it describes which way round the
+     * teams are for this camera, and on a live stream "from now on" is
+     * all a change can mean anyway. Written as `sides_swapped`, the
+     * name VME's match uses for the same thing.
+     */
+    val sidesSwapped: Boolean = false,
 )
 
 /** Where a match lives in VME: exactly the four path segments its API
@@ -286,6 +290,7 @@ fun matchFromJson(slug: String, obj: JSONObject): Match {
         opponentRoster = obj.optJSONObject("opponent_roster")?.toRoster()
             ?: Roster(teamName = obj.optString("opponent")),
         events = events,
+        sidesSwapped = obj.optBoolean("sides_swapped", false),
         liberos = obj.optJSONArray("liberos")?.let { a ->
             (0 until a.length()).map { a.getInt(it) }.toSet()
         } ?: emptySet(),
@@ -330,6 +335,7 @@ fun Match.toJson(): JSONObject {
     }
     obj.put("events", arr)
     obj.put("liberos", JSONArray(liberos.sorted()))
+    obj.put("sides_swapped", sidesSwapped)
     if (youtubeVideoUrl != null) obj.put("_youtube_video_url", youtubeVideoUrl)
     if (youtubeBroadcastId != null) obj.put("_youtube_broadcast_id", youtubeBroadcastId)
     if (streamStartedAt != null) obj.put("_stream_started_at", streamStartedAt)

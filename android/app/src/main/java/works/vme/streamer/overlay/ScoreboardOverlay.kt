@@ -218,7 +218,7 @@ class ScoreboardOverlay(
         val scoreW = measurePaint.measureText("99  -  99")
 
         // One width for both team sections, the wider team's. The
-        // teams trade places when they change ends (`swap_sides`), and
+        // teams trade places when the sides are swapped mid-stream, and
         // the bar's geometry is frozen at attach - so each section has
         // to fit either name.
         val teamW = maxOf(homeW, awayW)
@@ -303,15 +303,15 @@ class ScoreboardOverlay(
     /** Redraw with the current state and push it to the filter.
      *  Allocates a fresh backing bitmap so `setImage` always sees a
      *  new reference (see class KDoc). */
-    fun update(@Suppress("UNUSED_PARAMETER") match: Match, state: GameState) {
+    fun update(match: Match, state: GameState) {
         val bmp = newBar()
         val c = Canvas(bmp)
         // Fully opaque clear -- see class KDoc.
         c.drawColor(SECTION_CENTER_COLOR, PorterDuff.Mode.SRC)
 
         // Which team is drawn on which side: home on the left unless
-        // the teams have changed ends, when the bar follows them.
-        val swapped = state.sidesSwapped
+        // the match is set to have the sides swapped.
+        val swapped = match.sidesSwapped
         val leftName = if (swapped) awayName else homeName
         val rightName = if (swapped) homeName else awayName
         val leftLogo = if (swapped) awayLogo else homeLogo

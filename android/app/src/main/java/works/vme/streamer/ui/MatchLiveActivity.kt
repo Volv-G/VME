@@ -603,7 +603,9 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             includeFontPadding = false
         }
         homeCol.addView(scoreHomeBig)
-        row.addView(homeCol, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        homeCol.layoutParams =
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        scoreHomeCol = homeCol
 
         // Between the two big scores we stack a subtle dash and an
         // Undo button. Undo rolls back the very last event -- the
@@ -624,11 +626,21 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // 48dp was making the whole score-header row 48dp+padding
         // tall regardless of the score font size.
         undoButton = compactButton("Undo") { onUndo() }
-        midCol.addView(undoButton)
-        row.addView(midCol, LinearLayout.LayoutParams(
+        // The sides toggle sits beside Undo rather than under it: a
+        // second stacked button would make the header taller, and it
+        // is kept slim on purpose.
+        swapButton = compactButton("\u21C4") { toggleSides() }
+        midCol.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(swapButton)
+            addView(undoButton)
+        })
+        midCol.layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
-        ).apply { setMargins(16, 0, 16, 0) })
+        ).apply { setMargins(16, 0, 16, 0) }
+        scoreMidCol = midCol
 
         val awayCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -653,8 +665,46 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             includeFontPadding = false
         }
         awayCol.addView(scoreAwayBig)
-        row.addView(awayCol, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        awayCol.layoutParams =
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        scoreAwayCol = awayCol
+        scoreRow = row
+        layoutScoreHeader()
         return row
+    }
+
+    private lateinit var scoreRow: LinearLayout
+    private lateinit var scoreHomeCol: View
+    private lateinit var scoreAwayCol: View
+    private lateinit var scoreMidCol: View
+    private lateinit var swapButton: Button
+
+    /**
+     * Put the header's two teams on the sides the stream's scoreboard
+     * draws them on, so what the operator reads is what viewers see.
+     */
+    private fun layoutScoreHeader() {
+        scoreRow.removeAllViews()
+        val (left, right) =
+            if (match.sidesSwapped) scoreAwayCol to scoreHomeCol else scoreHomeCol to scoreAwayCol
+        scoreRow.addView(left)
+        scoreRow.addView(scoreMidCol)
+        scoreRow.addView(right)
+        swapButton.alpha = if (match.sidesSwapped) 1.0f else 0.6f
+    }
+
+    /**
+     * The ⇄ on the score header: swap which side of the scoreboard each
+     * team is drawn on. Teams change ends between sets; this keeps the
+     * score on the side of the court the team is playing on. A setting
+     * of the match, saved with it, and live on the stream at once.
+     */
+    private fun toggleSides() {
+        match = match.copy(sidesSwapped = !match.sidesSwapped)
+        store.save(match)
+        layoutScoreHeader()
+        pushOverlay()
+        log(if (match.sidesSwapped) "sides: away team on the left" else "sides: home team on the left")
     }
 
     /**
@@ -1229,15 +1279,6 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             gameStartButton,
             gated(simpleButton("\u23F9\uFE0F Game End", BG_LIFECYCLE) { confirmGameEnd() }),
             gated(simpleButton("\uD83C\uDFC1 End Set", BG_LIFECYCLE) { confirmSetEnd() }),
-        ))
-        // Teams change ends every set, and the scoreboard follows them.
-        // Not gated: a team can start the match at the far end, so the
-        // swap has to be possible before Game Start too.
-        col.addView(rowOf(
-            simpleButton("\uD83D\uDD00 Swap sides", BG_LIFECYCLE) {
-                record(EventType.SwapSides)
-                log("sides swapped - scoreboard flipped")
-            },
         ))
 
         col.addView(spacer(16))

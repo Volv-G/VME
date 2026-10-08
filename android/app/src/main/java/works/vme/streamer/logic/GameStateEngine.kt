@@ -84,7 +84,6 @@ object GameStateEngine {
         )
         EventType.GameEnd -> onSetEnd(state).copy(gameEnded = true)
         EventType.SetEnd -> onSetEnd(state)
-        EventType.SwapSides -> state.copy(sidesSwapped = !state.sidesSwapped)
         EventType.FirstServe -> state.copy(servingTeam = teamOf(e))
         EventType.BallServed -> state.copy(ballServedSinceLastScore = true)
         EventType.Replay -> state.copy(ballServedSinceLastScore = false)
