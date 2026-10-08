@@ -1230,6 +1230,15 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             gated(simpleButton("\u23F9\uFE0F Game End", BG_LIFECYCLE) { confirmGameEnd() }),
             gated(simpleButton("\uD83C\uDFC1 End Set", BG_LIFECYCLE) { confirmSetEnd() }),
         ))
+        // Teams change ends every set, and the scoreboard follows them.
+        // Not gated: a team can start the match at the far end, so the
+        // swap has to be possible before Game Start too.
+        col.addView(rowOf(
+            simpleButton("\uD83D\uDD00 Swap sides", BG_LIFECYCLE) {
+                record(EventType.SwapSides)
+                log("sides swapped - scoreboard flipped")
+            },
+        ))
 
         col.addView(spacer(16))
         col.addView(liberoButton())
@@ -3081,6 +3090,12 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
 
     private fun onStopStreaming() {
         streamFps = 0
+        backlogSec = 0f
+        lastDropAt = 0L
+        droppedSoFar = 0L
+        // The client's own count outlives a broadcast; a fresh one must
+        // not open on the last one's drops.
+        runCatching { stream.getStreamClient().resetDroppedVideoFrames() }
         StreamService.stop(this)
         finishBroadcast()
         runCatching { if (stream.isStreaming) stream.stopStream() }
@@ -3391,14 +3406,24 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     }
 
     /**
-     * Paint the upload rate into the header.
+     * Paint the upload's health into the header.
      *
-     * Colour-coded against the configured video bitrate rather than
-     * an absolute number, because "healthy" depends entirely on what
-     * we asked the encoder for. Below half of target sustained means
-     * the network is throttling us and the picture is visibly
-     * degrading; that is worth a red light courtside, where the
-     * operator cannot see the stream itself.
+     * The colour comes from how far behind the upload is, not from the
+     * bitrate. The rate shown is what reached the socket each second,
+     * and while the network keeps up that is simply what the encoder
+     * produced - which on a still picture (a timeout, the court-only
+     * mode) is a fraction of the ceiling. Judged against the ceiling it
+     * looked like a failing network on a perfectly good one, and on a
+     * failing one it could not tell "the wifi is slow" from "the
+     * picture is simple".
+     *
+     * The send queue can. Encoded frames wait in it until the socket
+     * takes them: on a network that keeps up it stays near empty
+     * whatever the picture, and on one that does not it grows - that
+     * growth IS the delay viewers see - until it overflows and frames
+     * are dropped. So: green while under half a second is waiting,
+     * amber past that, red past two seconds or on any dropped frame in
+     * the last ten. The bitrate stays in the text as information.
      */
     private fun updateHealth() {
         healthLabel.visibility = View.VISIBLE
@@ -3412,21 +3437,56 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             healthLabel.setTextColor(Color.parseColor("#888888"))
             return
         }
-        val targetKbps = quality.bitrate / 1000
         val kbps = lastBitrateKbps
         val rate = if (kbps >= 1000)
             "%.1f Mbps".format(kbps / 1000f) else "$kbps kbps"
+        val dropping = lastDropAt > 0 &&
+            android.os.SystemClock.elapsedRealtime() - lastDropAt < DROP_MEMORY_MS
+        val lag = backlogSec
+        val lagText = when {
+            dropping -> " · dropping"
+            lag >= 0.1f -> " · %.1fs behind".format(lag)
+            else -> ""
+        }
         // The marker says the picture is deliberately black, so a
-        // healthy-looking number on a blank stream is not a mystery.
-        healthLabel.text = (if (quality.video) rate else "$rate ■") + fpsSuffix()
+        // modest number on a blank stream is not a mystery.
+        healthLabel.text = (if (quality.video) rate else "$rate ■") + lagText + fpsSuffix()
         healthLabel.setTextColor(
             when {
                 kbps <= 0 -> Color.parseColor("#FF5252")
-                kbps < targetKbps / 2 -> Color.parseColor("#FF5252")
-                kbps < targetKbps * 4 / 5 -> Color.parseColor("#FFC107")
+                dropping || lag > LAG_RED_S -> Color.parseColor("#FF5252")
+                lag > LAG_AMBER_S -> Color.parseColor("#FFC107")
                 else -> Color.parseColor("#4CAF50")
             }
         )
+    }
+
+    /** Seconds of encoded media waiting in the send queue. */
+    @Volatile private var backlogSec = 0f
+    /** Elapsed-realtime of the last dropped video frame, 0 if none. */
+    private var lastDropAt = 0L
+    private var droppedSoFar = 0L
+
+    /**
+     * Read the send queue: how much is waiting, and whether anything was
+     * thrown away since the last look.
+     *
+     * The queue holds audio and video packets alike, so its depth in
+     * seconds is items over the rate they are produced at: the video
+     * frame rate plus AAC's 48000/1024 packets a second.
+     */
+    private fun sampleNetwork() {
+        if (!prepared || !stream.isStreaming) {
+            backlogSec = 0f
+            return
+        }
+        runCatching {
+            val client = stream.getStreamClient()
+            backlogSec = client.getItemsInCache() / (quality.fps + AAC_PACKETS_PER_S)
+            val dropped = client.getDroppedVideoFrames()
+            if (dropped > droppedSoFar) lastDropAt = android.os.SystemClock.elapsedRealtime()
+            droppedSoFar = dropped
+        }
     }
 
     /**
@@ -3452,13 +3512,18 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      *  log now and then, so a choppy stream leaves a trail. */
     private val fpsTicker = object : Runnable {
         override fun run() {
+            sampleNetwork()
             updateHealth()
             val now = android.os.SystemClock.elapsedRealtime()
             // `prepared` first, so this never brings the lazy stream
             // into existence on its own.
             if (prepared && now - lastFpsLogAt >= FPS_LOG_EVERY_MS && stream.isStreaming) {
                 lastFpsLogAt = now
-                log("fps: stream $streamFps, preset ${quality.fps}")
+                val queue = runCatching {
+                    stream.getStreamClient().let { "${it.getItemsInCache()}/${it.getCacheSize()}" }
+                }.getOrDefault("?")
+                log("net: ${lastBitrateKbps} kbps sent, %.1fs queued (%s), %d video frames dropped; fps %d of %d"
+                    .format(backlogSec, queue, droppedSoFar, streamFps, quality.fps))
             }
             window.decorView.postDelayed(this, 1000)
         }
@@ -3535,6 +3600,13 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
          *  adapter's sound for the rest of the match. */
         private const val USB_AUDIO_SETTLE_MS = 2500L
         private const val FPS_LOG_EVERY_MS = 30_000L
+        /** Upload health thresholds, in seconds of media still queued. */
+        private const val LAG_AMBER_S = 0.5f
+        private const val LAG_RED_S = 2.0f
+        /** How long a dropped frame keeps the chip red. */
+        private const val DROP_MEMORY_MS = 10_000L
+        /** AAC at 48 kHz: one packet per 1024 samples. */
+        private const val AAC_PACKETS_PER_S = 48_000f / 1024f
         /** Rotation slots: darker than the action buttons, because
          *  the grid is a display that happens to be tappable, not a
          *  row of commands competing for the eye. */

@@ -217,8 +217,13 @@ class ScoreboardOverlay(
         measurePaint.textSize = scoreFontPx
         val scoreW = measurePaint.measureText("99  -  99")
 
-        hSection = (homeW + serveSlotW + padPx * 2 + skewPx).toInt()
-        aSection = (awayW + serveSlotW + padPx * 2 + skewPx).toInt()
+        // One width for both team sections, the wider team's. The
+        // teams trade places when they change ends (`swap_sides`), and
+        // the bar's geometry is frozen at attach - so each section has
+        // to fit either name.
+        val teamW = maxOf(homeW, awayW)
+        hSection = (teamW + serveSlotW + padPx * 2 + skewPx).toInt()
+        aSection = hSection
         sSection = (setsW + padPx * 2 + skewPx).toInt()
         cSection = (scoreW + padPx * 2 + skewPx).toInt()
 
@@ -304,7 +309,25 @@ class ScoreboardOverlay(
         // Fully opaque clear -- see class KDoc.
         c.drawColor(SECTION_CENTER_COLOR, PorterDuff.Mode.SRC)
 
-        drawSlantedSections(c)
+        // Which team is drawn on which side: home on the left unless
+        // the teams have changed ends, when the bar follows them.
+        val swapped = state.sidesSwapped
+        val leftName = if (swapped) awayName else homeName
+        val rightName = if (swapped) homeName else awayName
+        val leftLogo = if (swapped) awayLogo else homeLogo
+        val rightLogo = if (swapped) homeLogo else awayLogo
+        val leftSide = if (swapped) Side.Away else Side.Home
+        val rightSide = if (swapped) Side.Home else Side.Away
+        val leftSets = if (swapped) state.awaySets else state.homeSets
+        val rightSets = if (swapped) state.homeSets else state.awaySets
+        val leftScore = if (swapped) state.awayScore else state.homeScore
+        val rightScore = if (swapped) state.homeScore else state.awayScore
+
+        drawSlantedSections(
+            c,
+            if (swapped) awayColor else homeColor,
+            if (swapped) homeColor else awayColor,
+        )
 
         val textCy = mainH / 2f
 
@@ -312,35 +335,35 @@ class ScoreboardOverlay(
         // Badge first, name after it -- the same order as the section
         // is measured in `init`, so the text lands where the width
         // was reserved for it.
-        val homeX = padPx.toFloat()
-        drawLogo(c, homeLogo, homeX, textCy)
-        val homeNameX = homeX + logoSlotW(homeLogo)
-        drawTextLeft(c, homeName, homeNameX, textCy)
+        val leftX = padPx.toFloat()
+        drawLogo(c, leftLogo, leftX, textCy)
+        val leftNameX = leftX + logoSlotW(leftLogo)
+        drawTextLeft(c, leftName, leftNameX, textCy)
         // Both dots sit on the inner edge of their block, flanking the
         // score, so the pair reads as one indicator with two states.
-        if (state.servingTeam == Side.Home) {
+        if (state.servingTeam == leftSide) {
             drawServeDot(
                 c,
-                homeNameX + textPaint.measureText(homeName) + serveGapPx + serveDotPx / 2,
+                leftNameX + textPaint.measureText(leftName) + serveGapPx + serveDotPx / 2,
                 textCy,
             )
         }
 
-        val awayX = (hSec + sSec + cSec + sSec + padPx).toFloat()
-        if (state.servingTeam == Side.Away) {
-            drawServeDot(c, awayX + serveDotPx / 2, textCy)
+        val rightX = (hSec + sSec + cSec + sSec + padPx).toFloat()
+        if (state.servingTeam == rightSide) {
+            drawServeDot(c, rightX + serveDotPx / 2, textCy)
         }
-        drawLogo(c, awayLogo, awayX + serveSlotW, textCy)
-        drawTextLeft(c, awayName, awayX + serveSlotW + logoSlotW(awayLogo), textCy)
+        drawLogo(c, rightLogo, rightX + serveSlotW, textCy)
+        drawTextLeft(c, rightName, rightX + serveSlotW + logoSlotW(rightLogo), textCy)
 
         textPaint.textSize = setsFontPx
-        drawTextCentre(c, state.homeSets.toString(),
+        drawTextCentre(c, leftSets.toString(),
             (hSec + sSec / 2f), textCy)
-        drawTextCentre(c, state.awaySets.toString(),
+        drawTextCentre(c, rightSets.toString(),
             (hSec + sSec + cSec + sSec / 2f), textCy)
 
         textPaint.textSize = scoreFontPx
-        drawTextCentre(c, "${state.homeScore}  -  ${state.awayScore}",
+        drawTextCentre(c, "$leftScore  -  $rightScore",
             (hSec + sSec + cSec / 2f), textCy)
 
         drawPointHistory(c, state)
@@ -401,7 +424,7 @@ class ScoreboardOverlay(
         )
     }
 
-    private fun drawSlantedSections(c: Canvas) {
+    private fun drawSlantedSections(c: Canvas, leftColor: Int, rightColor: Int) {
         val h = mainH.toFloat()
         val skew = skewPx.toFloat()
 
@@ -415,7 +438,7 @@ class ScoreboardOverlay(
         val d3t = b3 + skew; val d3b = b3 - skew
         val d4t = b4 + skew; val d4b = b4 - skew
 
-        drawPoly(c, homeColor,
+        drawPoly(c, leftColor,
             0f, 0f, d1t, 0f, d1b, h, 0f, h)
         drawPoly(c, SECTION_SETS_COLOR,
             d1t, 0f, d2t, 0f, d2b, h, d1b, h)
@@ -423,7 +446,7 @@ class ScoreboardOverlay(
             d2t, 0f, d3t, 0f, d3b, h, d2b, h)
         drawPoly(c, SECTION_SETS_COLOR,
             d3t, 0f, d4t, 0f, d4b, h, d3b, h)
-        drawPoly(c, awayColor,
+        drawPoly(c, rightColor,
             d4t, 0f, barW.toFloat(), 0f, barW.toFloat(), h, d4b, h)
     }
 

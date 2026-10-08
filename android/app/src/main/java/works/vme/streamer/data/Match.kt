@@ -25,6 +25,9 @@ enum class EventType(val wire: String) {
     GameStart("game_start"),
     GameEnd("game_end"),
     SetEnd("set_end"),
+    /** The teams have changed ends: the scoreboard flips. Each one
+     *  toggles. Same wire name as VME's `SwapSidesEvent`. */
+    SwapSides("swap_sides"),
     /** A timeout, as the two moments that bound it: called, and play
      *  resumed. VME cuts the span between them, so both have to be in
      *  the log -- the card coming down is not enough on its own.
@@ -128,6 +131,9 @@ data class GameState(
     val homePositions: Map<Int, Int?> = (1..6).associateWith { null },
     val gameStarted: Boolean = false,
     val gameEnded: Boolean = false,
+    /** True while the away team is on the left of the frame, so the
+     *  scoreboard draws it on the left. Toggled by `swap_sides`. */
+    val sidesSwapped: Boolean = false,
     val ballServedSinceLastScore: Boolean = false,
     /** Per-point winner in the current set: `true` for home,
      *  `false` for away. Reset on set end / game start. Consumed by
