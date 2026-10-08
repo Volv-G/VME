@@ -122,6 +122,11 @@ class Match:
     # on, and in a two-hour match that is a real search - the scroll
     # position alone only restores the view, not the video.
     playhead_frame: int = 0
+    # Draw the scoreboard with the away team on the left. A setting of
+    # the match rather than an event in it: it says which way round the
+    # teams are for this camera, and is changed from the scoreboard
+    # itself in the editor.
+    sides_swapped: bool = False
     schema_version: int = SCHEMA_VERSION
 
     # ---- Clip operations -------------------------------------------------
@@ -523,6 +528,7 @@ class Match:
             "timeline_zoom": self.timeline_zoom,
             "timeline_anchor_frame": self.timeline_anchor_frame,
             "playhead_frame": self.playhead_frame,
+            "sides_swapped": self.sides_swapped,
         }
 
     @classmethod
@@ -540,6 +546,7 @@ class Match:
             timeline_zoom=float(data.get("timeline_zoom") or 1.0),
             timeline_anchor_frame=int(data.get("timeline_anchor_frame") or 0),
             playhead_frame=int(data.get("playhead_frame") or 0),
+            sides_swapped=bool(data.get("sides_swapped", False)),
             schema_version=int(data.get("schema_version", SCHEMA_VERSION)),
         )
         m._sort_events()

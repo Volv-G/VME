@@ -1055,6 +1055,25 @@ label {
 }
 
 /* --- Action grids --- */
+/* The dash between the two scores, with the sides toggle under it. */
+.score-sep {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.score-swap {
+  padding: 0 6px;
+  font-size: 13px;
+  line-height: 18px;
+  opacity: 0.55;
+}
+.score-swap:hover:not(:disabled) { opacity: 1; }
+.score-swap.on {
+  opacity: 1;
+  color: var(--accent, #4f8bff);
+  border-color: var(--accent, #4f8bff);
+}
 .action-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1064,11 +1083,6 @@ label {
    is the smallest grid that divides evenly into both, so the two
    shapes share one set of gutters and the buttons below still line up
    with the ones above. */
-/* An odd button out at the end of the Match grid takes the whole row
-   rather than leaving a hole beside it. */
-.match-actions .action-grid > :last-child:nth-child(odd) {
-  grid-column: 1 / -1;
-}
 .action-grid--lead-three {
   grid-template-columns: repeat(6, 1fr);
 }

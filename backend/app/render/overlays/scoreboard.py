@@ -90,9 +90,14 @@ class TeamBranding:
 class ScoreboardOverlay:
     """Render a broadcast-style scoreboard bar from a `GameState`."""
 
-    def __init__(self, home: TeamBranding, away: TeamBranding) -> None:
+    def __init__(
+        self, home: TeamBranding, away: TeamBranding, *, swapped: bool = False
+    ) -> None:
         self.home = home
         self.away = away
+        # The match's "sides swapped" setting: away on the left of the
+        # bar, home on the right. See `Match.sides_swapped`.
+        self.swapped = swapped
         self._cache: Optional[Image.Image] = None
         self._cache_key: Optional[tuple] = None
         # Numpy form of `_cache`, derived lazily by `apply`: straight RGB
@@ -126,7 +131,6 @@ class ScoreboardOverlay:
             # has ended, and a cached bar would not know.
             state.game_ended,
             tuple(tuple(x) for x in state.set_scores),
-            state.sides_swapped,
         )
         if self._cache is not None and self._cache_key == cache_key:
             return self._cache
@@ -137,10 +141,9 @@ class ScoreboardOverlay:
             self._cache_key = cache_key
             return overlay
 
-        # Which team is drawn on which side. Normally home on the left;
-        # after a `swap_sides` the away team, because the teams have
-        # changed ends and the bar follows them across the court.
-        swapped = state.sides_swapped
+        # Which team is drawn on which side: home on the left, unless the
+        # match is set to have the sides swapped.
+        swapped = self.swapped
         left, right = (self.away, self.home) if swapped else (self.home, self.away)
         left_score, right_score = (
             (state.away_score, state.home_score) if swapped

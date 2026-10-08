@@ -46,12 +46,6 @@ class GameState:
 
     game_started: bool = False
     game_ended: bool = False
-    # True while the away team is on the left of the frame. Teams change
-    # ends every set, and the scoreboard follows them so each team's
-    # score sits on its own side of the court. Toggled by
-    # `SwapSidesEvent`; not reset by anything else, since which end a
-    # team starts at is a fact about the hall, not the set.
-    sides_swapped: bool = False
 
     point_history: list[bool] = field(default_factory=list)
 
@@ -76,7 +70,6 @@ class GameState:
             away_positions=self.away_positions.copy(),
             game_started=self.game_started,
             game_ended=self.game_ended,
-            sides_swapped=self.sides_swapped,
             point_history=self.point_history.copy(),
             validation_state=ValidationState.VALID,
             validation_errors=[],

@@ -601,6 +601,21 @@ export function MatchEditorPage() {
     }
   }
 
+  /** Flip the scoreboard's sides for this match (the ⇄ on the score). */
+  async function swapSides() {
+    if (!data) return;
+    try {
+      setData(
+        await api.patchMatch(team, tournament, date, match, {
+          sides_swapped: !data.sides_swapped,
+        })
+      );
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function setLiberos(liberos: number[]) {
     if (!data) return;
     setData(await api.patchMatch(team, tournament, date, match, { liberos }));
@@ -757,6 +772,7 @@ export function MatchEditorPage() {
             onAutoCuts={runAutoCuts}
             onTeamColorChange={setTeamColor}
             onLiberosChange={setLiberos}
+            onSwapSides={swapSides}
             onPlaybackLock={setPlaybackLock}
             liberoCheckFrame={liberoCheckFrame}
             onStepPoint={(dir) => stepToEvent(dir, POINT_TYPES)}

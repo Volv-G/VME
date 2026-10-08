@@ -120,6 +120,8 @@ def patch_match(
         m.timeline_anchor_frame = max(0, int(body.timeline_anchor_frame))
     if body.playhead_frame is not None:
         m.playhead_frame = max(0, int(body.playhead_frame))
+    if body.sides_swapped is not None:
+        m.sides_swapped = bool(body.sides_swapped)
     if body.liberos is not None:
         # Order-preserving dedupe; a jersey need not be on the roster
         # (the phone adds ad-hoc jerseys), it just has to be a number.

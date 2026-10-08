@@ -137,8 +137,6 @@ export function summarizeEvent(
     }
     case "set_end":
       return "End of set";
-    case "swap_sides":
-      return "Teams swap sides";
     case "game_start":
       return "Game start";
     case "game_end":

@@ -66,7 +66,7 @@ class MatchRenderer:
         self.skip_overlays = skip_overlays
 
         self._clips: dict[str, VideoFileClip] = {}
-        self._scoreboard = ScoreboardOverlay(home, away)
+        self._scoreboard = ScoreboardOverlay(home, away, swapped=match.sides_swapped)
         self._messages = MessageOverlayRenderer(
             home_roster=home_roster,
             away_roster=away_roster or match.opponent_roster,

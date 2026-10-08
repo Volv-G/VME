@@ -297,6 +297,8 @@ class MatchOut(BaseModel):
     timeline_zoom: float = 1.0
     timeline_anchor_frame: int = 0
     playhead_frame: int = 0
+    # Scoreboard drawn away-team-left. See `Match.sides_swapped`.
+    sides_swapped: bool = False
     # The team's editing defaults, carried here because the editor gets
     # the home roster WITHOUT its admin blocks and needs these two.
     editing: EditingConfigOut = Field(default_factory=EditingConfigOut)
@@ -358,6 +360,7 @@ class UpdateMatchIn(BaseModel):
     timeline_zoom: Optional[float] = None
     timeline_anchor_frame: Optional[int] = None
     playhead_frame: Optional[int] = None
+    sides_swapped: Optional[bool] = None
 
 
 class ReorderClipsIn(BaseModel):

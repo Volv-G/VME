@@ -191,6 +191,8 @@ export interface MatchDto {
   timeline_anchor_frame: number;
   /** Where the playhead was left, as a global frame. */
   playhead_frame: number;
+  /** Scoreboard drawn with the away team on the left. */
+  sides_swapped: boolean;
   /** The team's editing defaults - here because `home_roster` comes
    *  without its admin blocks. */
   editing: EditingConfigDto;
@@ -407,7 +409,6 @@ export const EVENT_TYPES = [
   "game_start",
   "game_end",
   "set_end",
-  "swap_sides",
   "first_serve",
   "ball_served",
   "score",
