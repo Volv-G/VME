@@ -47,6 +47,9 @@ export const EVENT_COLORS: Record<string, string> = {
 
   // --- Set boundary (dark gold, sits between offense and lifecycle) ---
   set_end: "#bf8700",
+  // Teams changing ends - usually right after a set end, so a sibling
+  // of its colour rather than a new family.
+  swap_sides: "#d29922",
 
   // --- Game lifecycle (green) ---
   game_start: "#3fb950",
@@ -126,6 +129,7 @@ export const EVENT_ICONS: Record<string, string> = {
   game_start: "▶️",
   game_end: "🏁",
   set_end: "📍",
+  swap_sides: "🔀",
   cut_start: "✂️",
   cut_end: "🎬",
   timeout_start: "⏸️",

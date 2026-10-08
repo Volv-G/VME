@@ -407,6 +407,7 @@ export const EVENT_TYPES = [
   "game_start",
   "game_end",
   "set_end",
+  "swap_sides",
   "first_serve",
   "ball_served",
   "score",

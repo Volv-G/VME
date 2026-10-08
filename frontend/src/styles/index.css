@@ -1064,6 +1064,11 @@ label {
    is the smallest grid that divides evenly into both, so the two
    shapes share one set of gutters and the buttons below still line up
    with the ones above. */
+/* An odd button out at the end of the Match grid takes the whole row
+   rather than leaving a hole beside it. */
+.match-actions .action-grid > :last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
 .action-grid--lead-three {
   grid-template-columns: repeat(6, 1fr);
 }

@@ -122,6 +122,27 @@ class GameEndEvent(LifecycleEvent):
 
 @register_event
 @dataclass
+class SwapSidesEvent(MatchEvent):
+    """The teams have changed ends: flip the scoreboard.
+
+    Volleyball changes ends after every set, and a fixed camera then has
+    the home team on the right. The bar follows, so the score on the left
+    belongs to whoever is playing on the left. A plain event, not a
+    lifecycle one: nothing fades, nothing is cut, the next frame simply
+    has the teams the other way round. Each one toggles, so the second
+    swap puts them back.
+    """
+
+    type_name: ClassVar[str] = "swap_sides"
+
+    def apply(self, state: GameState, all_events):
+        new_state = super().apply(state, all_events)
+        new_state.sides_swapped = not state.sides_swapped
+        return new_state
+
+
+@register_event
+@dataclass
 class SetEndEvent(LifecycleEvent):
     """End of a set: increment winner's set count, reset scores+positions."""
 

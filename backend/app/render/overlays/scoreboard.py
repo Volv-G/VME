@@ -126,6 +126,7 @@ class ScoreboardOverlay:
             # has ended, and a cached bar would not know.
             state.game_ended,
             tuple(tuple(x) for x in state.set_scores),
+            state.sides_swapped,
         )
         if self._cache is not None and self._cache_key == cache_key:
             return self._cache
@@ -136,6 +137,23 @@ class ScoreboardOverlay:
             self._cache_key = cache_key
             return overlay
 
+        # Which team is drawn on which side. Normally home on the left;
+        # after a `swap_sides` the away team, because the teams have
+        # changed ends and the bar follows them across the court.
+        swapped = state.sides_swapped
+        left, right = (self.away, self.home) if swapped else (self.home, self.away)
+        left_score, right_score = (
+            (state.away_score, state.home_score) if swapped
+            else (state.home_score, state.away_score)
+        )
+        left_sets, right_sets = (
+            (state.away_sets, state.home_sets) if swapped
+            else (state.home_sets, state.away_sets)
+        )
+        left_team = Team.AWAY if swapped else Team.HOME
+        left_serving = state.serving_team == left_team
+        right_serving = state.serving_team is not None and not left_serving
+
         score_font_size = int(video_height * SCORE_FONT_SCALE)
         main_h = max(1, int(score_font_size / FONT_SCALE_SCORE))
 
@@ -144,22 +162,22 @@ class ScoreboardOverlay:
         tmp = Image.new("RGBA", (1, 1))
         td = ImageDraw.Draw(tmp)
 
-        home_w = _text_w(td, self.home.name, team_font)
-        away_w = _text_w(td, self.away.name, team_font)
-        score_text = f"{state.home_score}  -  {state.away_score}"
+        left_w = _text_w(td, left.name, team_font)
+        right_w = _text_w(td, right.name, team_font)
+        score_text = f"{left_score}  -  {right_score}"
         score_w = _text_w(td, score_text, score_font)
         single_set_w = _text_w(td, "0", sets_font)
 
         pad = 16
         # Logo discs live inside the team blocks, at the outer edges
-        # (home on the far left, away on the far right) - the broadcast
+        # (left team on the far left, right on the far right) - the broadcast
         # convention. A team with no logo simply keeps the old layout.
         logo_d = max(8, int(main_h * LOGO_HEIGHT_SCALE))
         logo_gap = max(4, int(logo_d * LOGO_GAP_SCALE))
-        home_logo = self._logo_disc(self.home.logo_path, logo_d)
-        away_logo = self._logo_disc(self.away.logo_path, logo_d)
-        home_extra = (logo_d + logo_gap) if home_logo is not None else 0
-        away_extra = (logo_d + logo_gap) if away_logo is not None else 0
+        left_logo = self._logo_disc(left.logo_path, logo_d)
+        right_logo = self._logo_disc(right.logo_path, logo_d)
+        left_extra = (logo_d + logo_gap) if left_logo is not None else 0
+        right_extra = (logo_d + logo_gap) if right_logo is not None else 0
 
         # Serve indicator. Room is reserved on both sides in every
         # state, so the bar is the same width all match and the dot
@@ -175,12 +193,12 @@ class ScoreboardOverlay:
         # slant eats into padding rather than into the text.
         skew = max(1, int(main_h * SKEW_SCALE))
 
-        home_section = home_w + pad * 2 + home_extra + serve_extra + skew
-        away_section = away_w + pad * 2 + away_extra + serve_extra + skew
+        left_section = left_w + pad * 2 + left_extra + serve_extra + skew
+        right_section = right_w + pad * 2 + right_extra + serve_extra + skew
         sets_section = single_set_w + pad * 2 + skew
         center_section = score_w + pad * 2 + skew
 
-        total_w = home_section + sets_section + center_section + sets_section + away_section
+        total_w = left_section + sets_section + center_section + sets_section + right_section
 
         slots = max(15, len(state.point_history))
         max_d = 4 * total_w / (5 * slots + 1)
@@ -192,8 +210,8 @@ class ScoreboardOverlay:
         overlay = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        home_rgba = _hex_to_rgba(self.home.color)
-        away_rgba = _hex_to_rgba(self.away.color)
+        left_rgba = _hex_to_rgba(left.color)
+        right_rgba = _hex_to_rgba(right.color)
         sets_color = (80, 60, 100, 255)
         center_color = (45, 35, 75, 255)
 
@@ -202,7 +220,7 @@ class ScoreboardOverlay:
         # Boundary x positions, measured at MID height - so the section
         # widths above still describe the bar where the text sits, and a
         # change of `skew` never shifts the labels.
-        b1 = home_section
+        b1 = left_section
         b2 = b1 + sets_section
         b3 = b2 + center_section
         b4 = b3 + sets_section
@@ -216,27 +234,27 @@ class ScoreboardOverlay:
             total_w,
             (b1, b2, b3, b4),
             skew,
-            (home_rgba, sets_color, center_color, sets_color, away_rgba),
+            (left_rgba, sets_color, center_color, sets_color, right_rgba),
         )
 
-        if home_logo is not None:
-            overlay.alpha_composite(home_logo, (pad, (main_h - logo_d) // 2))
+        if left_logo is not None:
+            overlay.alpha_composite(left_logo, (pad, (main_h - logo_d) // 2))
         draw.text(
-            (pad + home_extra, text_y),
-            self.home.name,
+            (pad + left_extra, text_y),
+            left.name,
             font=team_font,
             fill=(255, 255, 255, 255),
             anchor="lm",
         )
         # Both dots sit on the inner edge of their block, flanking the
         # score, so the pair reads as one indicator with two states.
-        if state.serving_team == Team.HOME:
-            _serve_dot(draw, pad + home_extra + home_w + serve_gap, text_y, serve_d)
+        if left_serving:
+            _serve_dot(draw, pad + left_extra + left_w + serve_gap, text_y, serve_d)
 
-        x = home_section
+        x = left_section
         draw.text(
             (x + sets_section // 2, text_y),
-            str(state.home_sets),
+            str(left_sets),
             font=sets_font,
             fill=(255, 255, 255, 255),
             anchor="mm",
@@ -254,28 +272,30 @@ class ScoreboardOverlay:
 
         draw.text(
             (x + sets_section // 2, text_y),
-            str(state.away_sets),
+            str(right_sets),
             font=sets_font,
             fill=(255, 255, 255, 255),
             anchor="mm",
         )
         x += sets_section
 
-        if state.serving_team == Team.AWAY:
+        if right_serving:
             _serve_dot(draw, x + pad + skew, text_y, serve_d)
         draw.text(
             (x + pad + skew + serve_extra, text_y),
-            self.away.name,
+            right.name,
             font=team_font,
             fill=(255, 255, 255, 255),
             anchor="lm",
         )
-        if away_logo is not None:
+        if right_logo is not None:
             overlay.alpha_composite(
-                away_logo, (total_w - pad - logo_d, (main_h - logo_d) // 2)
+                right_logo, (total_w - pad - logo_d, (main_h - logo_d) // 2)
             )
 
         draw.rectangle([(0, main_h), (total_w, total_h)], fill=center_color)
+        home_dot = _hex_to_rgba(self.home.color)
+        away_dot = _hex_to_rgba(self.away.color)
         if state.point_history:
             cy = main_h + point_h / 2
             r = circle_d / 2
@@ -283,7 +303,8 @@ class ScoreboardOverlay:
             x0 = gap + r
             for i, is_home in enumerate(state.point_history):
                 cx = x0 + i * step
-                pc = home_rgba if is_home else away_rgba
+                # Dots keep their TEAM's colour whichever side it is on.
+                pc = home_dot if is_home else away_dot
                 draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=pc)
         draw.line([(0, main_h - 1), (total_w - 1, main_h - 1)], fill=center_color, width=3)
 

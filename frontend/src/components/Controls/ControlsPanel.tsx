@@ -115,8 +115,9 @@ const PLAYER_ACTIONS: ActionDef[] = [
 //   Cut Start   | Cut End       (cut boundaries)
 //   Timeout St. | Timeout End   (cut boundaries the phone usually logs)
 //   Game Start  | Game End      (game lifecycle)
-//   End Set     | Auto Cuts     (two singletons paired together)
-//   Score Fix   | Message       (annotations / dialogs)
+//   End Set     | Swap Sides    (teams change ends when a set ends)
+//   Auto Cuts   | Score Fix     (bulk operation / dialog)
+//   Message                     (the odd one out spans the row)
 // Score Fix, Message, and Auto Cuts open dialogs / run bulk operations, so
 // they're rendered inline below rather than driven by this table.
 const MATCH_ACTIONS: ActionDef[] = [
@@ -156,6 +157,9 @@ const MATCH_ACTIONS: ActionDef[] = [
     needsPlayer: false,
     payload: { fade_frames: 60 },
   },
+  // Flips the rendered scoreboard from here on: the team on the left of
+  // the frame gets the left of the bar. See `SwapSidesEvent`.
+  { type: "swap_sides", label: "Swap Sides", needsPlayer: false },
 ];
 
 export function ControlsPanel({
