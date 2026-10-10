@@ -96,8 +96,8 @@ import java.util.Locale
  *
  *   1. `+1` when the last score has not yet been followed by a
  *      `ball_served` event (i.e. `gameState.ballServedSinceLastScore
- *      == false`). Catches mis-taps where the operator adds a point
- *      before the rally actually started.
+ *      == false`). No rally was started, so a confirmed point is
+ *      recorded as a `score_correction` of +1, not as a `score`.
  *   2. `-1` on either team. There is no undo in this UI; a subtraction
  *      is almost always a correction of a previous mis-tap, so making
  *      it confirm-once removes the "did I just double-tap?" risk.
@@ -1708,21 +1708,38 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
 
     /**
      * `+1` for [side]. If the last score has not yet been followed by
-     * a `ball_served` event, prompt for confirmation -- almost always
-     * the operator hit `+1` before the rally actually started.
+     * a `ball_served` event, prompt for confirmation, and record what
+     * is confirmed as a score correction rather than a point.
+     *
+     * No serve means no rally, so a point here is the operator fixing
+     * the score - one that went unrecorded, or a tap on the wrong team
+     * a moment ago - not a rally won. Logged as a `score` it LOOKED
+     * like a rally: VME's editor listed it as a point, a "Point"
+     * pop-up went out, and anything reading the log for rallies
+     * counted it. As a `score_correction` it is what it is: the score
+     * moves, and nothing claims a rally happened. The serve and the
+     * rotation stay put either way.
+     *
+     * Only in a match that marks serves at all. Where nobody uses Ball
+     * Served, every point is serve-less, and treating each as a
+     * correction would stop the team ever rotating - the engine makes
+     * the same distinction (`tracksServes`).
      */
     private fun onPlusOne(side: Side) {
         beginAction()
-        val need = !gameState.ballServedSinceLastScore
+        val tracksServes = match.events.any { it.type == EventType.BallServed }
+        val need = tracksServes && !gameState.ballServedSinceLastScore
         if (need) {
             AlertDialog.Builder(this)
-                .setTitle("Add point without ball served?")
+                .setTitle("Add a point without a serve?")
                 .setMessage(
-                    "No 'ball served' since the last score. " +
-                    "Tap Confirm if the rally really happened and " +
-                    "you missed the ball-served tap."
+                    "No 'ball served' since the last score, so no rally " +
+                    "was started. This will be recorded as a score " +
+                    "correction of +1 for " +
+                    "${if (side == Side.Home) "us" else "them"}: the " +
+                    "score changes, the serve and rotation do not."
                 )
-                .setPositiveButton("Confirm") { _, _ -> doScore(side) }
+                .setPositiveButton("Correct +1") { _, _ -> doCorrection(side, +1) }
                 .setNegativeButton("Cancel", null)
                 .show()
         } else {
