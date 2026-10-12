@@ -135,7 +135,10 @@ class ScoreboardOverlay(
     // ---- geometry: computed ONCE ----------------------------------
 
     // Bar height math ported from Python: main_h = video_height * 0.025 / 0.5.
-    private val mainH: Int = (videoHeight * 0.05f).toInt().coerceAtLeast(48)
+    // 6% of the frame: about a fifth bigger than the original 5%, so the
+    // bar reads from across a room. Everything below is sized from it.
+    // VME's renders use the same proportion (SCORE_FONT_SCALE 0.030).
+    private val mainH: Int = (videoHeight * 0.06f).toInt().coerceAtLeast(56)
     private val padPx: Int = (mainH * 0.30f).toInt().coerceAtLeast(12)
     private val skewPx: Int = (mainH * 0.34f).toInt().coerceAtLeast(6)
 
@@ -486,8 +489,9 @@ class ScoreboardOverlay(
 
         val slots = maxOf(15, points.size)
         val available = barW * 4f / (5f * slots + 1f)
+        // Grows with the bar, as in VME (POINT_CIRCLE_MAX_SCALE).
         val diameter = available
-            .coerceAtMost(10f * (videoHeight / 720f))
+            .coerceAtMost(mainH * 0.24f)
             .coerceAtLeast(2f)
         val gap = diameter / 4f
         val step = diameter + gap
@@ -499,7 +503,21 @@ class ScoreboardOverlay(
             if (cx + r > barW) break
             fillPaint.color = if (isHome) homeColor else awayColor
             c.drawCircle(cx, cy, r, fillPaint)
+            // A ring round each dot, so a team colour close to the strip's
+            // dark background still shows. Inset by half its width so the
+            // dot keeps its size.
+            pointRingPaint.strokeWidth = (diameter * 0.12f).coerceAtLeast(1f)
+            c.drawCircle(cx, cy, r - pointRingPaint.strokeWidth / 2f, pointRingPaint)
         }
+    }
+
+    /** The ring round each point-history dot. Opaque: a translucent one
+     *  would let the video show through round every dot. Matches VME's
+     *  POINT_RING_COLOR. */
+    private val pointRingPaint = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.STROKE
+        color = Color.rgb(210, 208, 222)
     }
 
     @Suppress("unused")

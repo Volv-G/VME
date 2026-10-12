@@ -20,11 +20,23 @@ from ...domain.team import Team
 logger = logging.getLogger(__name__)
 
 OVERLAY_OPACITY = 0.9
-SCORE_FONT_SCALE = 0.025
+# Scales the whole bar: every font, logo, section and the full-time table
+# are sized from the bar height this sets (score font / FONT_SCALE_SCORE).
+# 0.030 - about a fifth bigger than the original 0.025 - so it reads from
+# across a room; the phone's live bar uses the same proportion.
+SCORE_FONT_SCALE = 0.030
 FONT_SCALE_TEAM = 0.45
 FONT_SCALE_SETS = 0.40
 FONT_SCALE_SCORE = 0.50
-POINT_CIRCLE_MAX_DIAMETER = 10
+# Point-history dots: largest diameter as a fraction of the bar height, so
+# they grow with the bar (they used to be capped at a fixed 10px whatever
+# the resolution), and the ring drawn round each one. The ring is what
+# keeps a dark team colour visible on the dark strip; opaque rather than
+# translucent, since a translucent ring would let the video show through
+# round every dot.
+POINT_CIRCLE_MAX_SCALE = 0.24
+POINT_RING_COLOR = (210, 208, 222, 255)
+POINT_RING_FRAC = 0.12
 # Logo disc size as a fraction of the main bar height, and the gap
 # between the disc and the team name.
 LOGO_HEIGHT_SCALE = 0.82
@@ -205,7 +217,7 @@ class ScoreboardOverlay:
 
         slots = max(15, len(state.point_history))
         max_d = 4 * total_w / (5 * slots + 1)
-        circle_d = max(2, min(POINT_CIRCLE_MAX_DIAMETER, max_d))
+        circle_d = max(2, min(main_h * POINT_CIRCLE_MAX_SCALE, max_d))
         gap = circle_d / 4
         point_h = int(circle_d + 2 * gap)
 
@@ -299,6 +311,7 @@ class ScoreboardOverlay:
         draw.rectangle([(0, main_h), (total_w, total_h)], fill=center_color)
         home_dot = _hex_to_rgba(self.home.color)
         away_dot = _hex_to_rgba(self.away.color)
+        ring_w = max(1, round(circle_d * POINT_RING_FRAC))
         if state.point_history:
             cy = main_h + point_h / 2
             r = circle_d / 2
@@ -308,7 +321,12 @@ class ScoreboardOverlay:
                 cx = x0 + i * step
                 # Dots keep their TEAM's colour whichever side it is on.
                 pc = home_dot if is_home else away_dot
-                draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=pc)
+                draw.ellipse(
+                    [cx - r, cy - r, cx + r, cy + r],
+                    fill=pc,
+                    outline=POINT_RING_COLOR,
+                    width=ring_w,
+                )
         draw.line([(0, main_h - 1), (total_w - 1, main_h - 1)], fill=center_color, width=3)
 
         self._cache = overlay
