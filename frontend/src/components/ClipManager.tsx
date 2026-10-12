@@ -12,12 +12,20 @@ interface Props {
     onProgress: (pct: number) => void,
     signal: AbortSignal
   ) => Promise<void>;
-  /** Server-side path import. Returns the basenames the backend
-   *  imported, so we can show a quick "imported N file(s)" confirmation. */
-  onImportPath: (
+  /** The files a server-side import of `sourcePath` would bring in: the
+   *  file itself, or a folder's videos in import order. */
+  onListImportPath: (
+    sourcePath: string
+  ) => Promise<{ source_path: string; name: string; size: number }[]>;
+  /** Server-side import of one file. Progress is the server's copy;
+   *  `phase` turns to "processing" once the bytes are across. Aborting
+   *  `signal` stops the copy. */
+  onImportFile: (
     sourcePath: string,
-    mode: "copy" | "move"
-  ) => Promise<string[]>;
+    mode: "copy" | "move",
+    onProgress: (pct: number, phase: "copying" | "processing") => void,
+    signal: AbortSignal
+  ) => Promise<void>;
   onReorder: (ids: string[]) => Promise<void>;
   onDelete: (clipId: string) => Promise<void>;
   /** Correct a clip's recording time (Unix seconds, or null for
@@ -75,11 +83,21 @@ function toLocalInput(seconds: number): string {
  *  affect the others. We hold the controller in a sibling array keyed
  *  by row index rather than putting it in state - AbortController isn't
  *  serializable and stuffing it into setState confuses React DevTools.
+ *
+ *  A row is either a browser upload (`file`) or a server-side import
+ *  (`source`). Both run through the same queue, one at a time, so a
+ *  folder import shows each clip's progress the way an upload does.
  */
 interface QueueItem {
-  file: File;
+  name: string;
+  file?: File;
+  source?: { path: string; mode: "copy" | "move" };
   status: "pending" | "uploading" | "done" | "failed" | "cancelled";
   percent: number;
+  /** An import's bytes are across and the server is probing the clip -
+   *  and transcoding it, if its frame rate differs. No longer
+   *  cancellable. */
+  processing?: boolean;
   error?: string;
 }
 
@@ -88,7 +106,8 @@ const VIDEO_RX = /\.(mp4|mov|mkv|avi|m4v|webm)$/i;
 export function ClipManager({
   clips,
   onUpload,
-  onImportPath,
+  onListImportPath,
+  onImportFile,
   onReorder,
   onDelete,
   onSetClipTime,
@@ -106,7 +125,6 @@ export function ClipManager({
   const [importPath, setImportPath] = useState("");
   const [importMode, setImportMode] = useState<"copy" | "move">("copy");
   const [importBusy, setImportBusy] = useState(false);
-  const [importMessage, setImportMessage] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
 
   // Recording-time editor: the clip being corrected, plus its draft.
@@ -178,11 +196,17 @@ export function ClipManager({
   function enqueue(files: File[]) {
     const accepted = files.filter((f) => VIDEO_RX.test(f.name));
     if (accepted.length === 0) return;
-    const items: QueueItem[] = accepted.map((file) => ({
-      file,
-      status: "pending",
-      percent: 0,
-    }));
+    addToQueue(
+      accepted.map((file) => ({
+        name: file.name,
+        file,
+        status: "pending",
+        percent: 0,
+      }))
+    );
+  }
+
+  function addToQueue(items: QueueItem[]) {
     // Allocate controller slots in lock-step with the queue so indices
     // line up; we add nulls now and replace with real controllers when
     // the row actually starts uploading.
@@ -210,13 +234,28 @@ export function ClipManager({
         const item = queueRef.current[idx];
         const ctrl = new AbortController();
         controllersRef.current[idx] = ctrl;
-        patchItem(idx, { status: "uploading", percent: 0, error: undefined });
+        patchItem(idx, {
+          status: "uploading",
+          percent: 0,
+          processing: false,
+          error: undefined,
+        });
         try {
-          await onUpload(
-            item.file,
-            (pct) => patchItem(idx, { percent: pct }),
-            ctrl.signal
-          );
+          if (item.file) {
+            await onUpload(
+              item.file,
+              (pct) => patchItem(idx, { percent: pct }),
+              ctrl.signal
+            );
+          } else if (item.source) {
+            await onImportFile(
+              item.source.path,
+              item.source.mode,
+              (pct, phase) =>
+                patchItem(idx, { percent: pct, processing: phase === "processing" }),
+              ctrl.signal
+            );
+          }
           patchItem(idx, { status: "done", percent: 100 });
         } catch (e) {
           // Distinguish "user aborted" from "server / network failure"
@@ -282,19 +321,25 @@ export function ClipManager({
     if (files.length) void enqueue(files);
   }
 
+  /** Resolve the path to its files, queue one row per file, and close:
+   *  the queue shows each clip's progress from there. */
   async function submitImport() {
     const trimmed = importPath.trim();
     if (!trimmed) return;
     setImportBusy(true);
     setImportError(null);
-    setImportMessage(null);
     try {
-      const imported = await onImportPath(trimmed, importMode);
-      setImportMessage(
-        `Imported ${imported.length} file${imported.length === 1 ? "" : "s"}: ` +
-          imported.join(", ")
+      const files = await onListImportPath(trimmed);
+      addToQueue(
+        files.map((f) => ({
+          name: f.name,
+          source: { path: f.source_path, mode: importMode },
+          status: "pending",
+          percent: 0,
+        }))
       );
       setImportPath("");
+      setImportOpen(false);
     } catch (e) {
       setImportError(String(e));
     } finally {
@@ -369,7 +414,7 @@ export function ClipManager({
             }}
           >
             <strong style={{ fontSize: 13 }}>
-              Upload queue: {pendingCount} pending, {finishedCount} done
+              Queue: {pendingCount} pending, {finishedCount} done
             </strong>
             {finishedCount > 0 && (
               <button
@@ -399,7 +444,7 @@ export function ClipManager({
                   whiteSpace: "nowrap",
                 }}
               >
-                {q.file.name}
+                {q.name}
               </span>
               <span
                 style={{
@@ -408,7 +453,8 @@ export function ClipManager({
                   color: "var(--text-dim)",
                 }}
               >
-                {q.status === "uploading" && `${q.percent.toFixed(0)}%`}
+                {q.status === "uploading" &&
+                  (q.processing ? "processing" : `${q.percent.toFixed(0)}%`)}
                 {q.status === "pending" && "queued"}
                 {q.status === "done" && "✓"}
                 {q.status === "cancelled" && (
@@ -427,7 +473,7 @@ export function ClipManager({
                   for any non-terminal-success state so the user can
                   recover from network blips without re-picking the
                   file from disk. */}
-              {q.status === "uploading" && (
+              {q.status === "uploading" && !q.processing && (
                 <button
                   onClick={() => cancelItem(i)}
                   title="Cancel this upload"
@@ -510,10 +556,9 @@ export function ClipManager({
       <Modal
         open={importOpen}
         onClose={() => {
-          if (importBusy) return; // don't allow close mid-import
+          if (importBusy) return; // don't allow close mid-listing
           setImportOpen(false);
           setImportError(null);
-          setImportMessage(null);
         }}
         title="Import from server-side path"
         width="min(560px, 95vw)"
@@ -569,17 +614,11 @@ export function ClipManager({
             {importError}
           </div>
         )}
-        {importMessage && (
-          <div style={{ color: "var(--ok, #5a5)", fontSize: 12, marginBottom: 8 }}>
-            {importMessage}
-          </div>
-        )}
         <div className="toolbar" style={{ justifyContent: "flex-end" }}>
           <button
             onClick={() => {
               setImportOpen(false);
               setImportError(null);
-              setImportMessage(null);
             }}
             disabled={importBusy}
           >
@@ -590,7 +629,7 @@ export function ClipManager({
             onClick={submitImport}
             disabled={importBusy || !importPath.trim()}
           >
-            {importBusy ? "Importing…" : "Import"}
+            {importBusy ? "Finding files…" : "Import"}
           </button>
         </div>
       </Modal>

@@ -30,6 +30,7 @@ from threading import Lock
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from ..library import paths, scanner
 from ..library.probe import probe
@@ -42,13 +43,17 @@ from ..domain.events.lifecycle import (
 )
 from ..domain.events.timeline import CutEndEvent, CutStartEvent
 from ..domain.match import Clip, Match, new_clip_id
-from .locks import match_lock_dep
+from .locks import match_lock, match_lock_dep
 from .helpers import load_match_or_404, save_match, serialize_match
 from .schemas import (
     AutoCutsIn,
     AutoCutsOut,
+    ImportFileIn,
+    ImportListFileOut,
+    ImportListOut,
     ImportPathIn,
     ImportPathOut,
+    ImportProgressOut,
     MatchOut,
     ReorderClipsIn,
     UpdateClipIn,
@@ -452,6 +457,206 @@ def cancel_upload(
 # --- Server-side path import --------------------------------------------------
 
 
+def _import_sources(source_path: str) -> list[Path]:
+    """The video files a path import brings in: the file itself, or the
+    top-level video files of a folder in filename order."""
+    src = Path(source_path).expanduser()
+    if not src.is_absolute():
+        raise HTTPException(400, "source_path must be absolute")
+    if not src.exists():
+        raise HTTPException(404, f"Source not found: {src}")
+    if src.is_dir():
+        files = sorted(
+            p for p in src.iterdir()
+            if p.is_file() and p.suffix.lower() in _VIDEO_EXTENSIONS
+        )
+        if not files:
+            raise HTTPException(
+                400, f"No recognized video files in directory: {src}"
+            )
+        return files
+    if src.suffix.lower() not in _VIDEO_EXTENSIONS:
+        raise HTTPException(
+            400, f"Not a recognized video file extension: {src.suffix}"
+        )
+    return [src]
+
+
+# Per-file import with progress.
+#
+# The folder import below is one request for the whole lot, which leaves
+# the browser with nothing to show for minutes: an SD card's worth of
+# 4 GB clips is a long copy. These endpoints import one file per request
+# and publish how far the copy has got, so the editor can run them
+# through the same queue as browser uploads, with a percentage per clip.
+#
+# They are on their own router because the match lock must not cover the
+# copy. The lock serializes every write to a match, and holding it for a
+# multi-gigabyte copy froze the editor - every event tagged and every
+# playhead save - until it finished. Only the ingest at the end, which is
+# what writes match.json, takes it.
+
+_IMPORT_PART_PREFIX = ".import-"
+_COPY_BLOCK = 8 * 1024 * 1024
+
+
+@dataclass
+class _ImportProgress:
+    total: int
+    copied: int = 0
+    phase: str = "copying"
+    cancelled: bool = False
+
+
+_imports: dict[str, _ImportProgress] = {}
+_imports_lock = Lock()
+
+
+class _ImportCancelled(Exception):
+    pass
+
+
+def _copy_with_progress(src: Path, dst: Path, prog: _ImportProgress) -> None:
+    """`shutil.copy2`, a block at a time, so the progress is observable
+    and a cancel lands within one block."""
+    with open(src, "rb") as fi, open(dst, "wb") as fo:
+        while True:
+            if prog.cancelled:
+                raise _ImportCancelled()
+            block = fi.read(_COPY_BLOCK)
+            if not block:
+                break
+            fo.write(block)
+            prog.copied += len(block)
+    # copy2 kept the timestamps, and the probe falls back to the file's
+    # mtime for a clip whose metadata carries no recording time.
+    shutil.copystat(src, dst)
+
+
+def _same_volume(a: Path, b: Path) -> bool:
+    try:
+        return os.stat(a).st_dev == os.stat(b).st_dev
+    except OSError:
+        return False
+
+
+import_router = APIRouter(
+    prefix="/teams/{team}/tournaments/{tournament}/dates/{date}/matches/{match}/clips",
+    tags=["clips"],
+)
+
+
+@import_router.post("/import-path/list", response_model=ImportListOut)
+def list_import_path(
+    team: str, tournament: str, date: str, match: str, body: ImportPathIn
+) -> ImportListOut:
+    """What an import of `source_path` would bring in, without doing it."""
+    _resolve_match_folder(team, tournament, date, match)
+    out = []
+    for p in _import_sources(body.source_path):
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = 0
+        out.append(ImportListFileOut(source_path=str(p), name=p.name, size=size))
+    return ImportListOut(files=out)
+
+
+@import_router.post("/import-path/file", response_model=ImportPathOut)
+async def import_file(
+    team: str, tournament: str, date: str, match: str, body: ImportFileIn
+) -> ImportPathOut:
+    """Import one file, publishing progress under `body.import_id`.
+
+    The copy lands on a `.import-*.part` name first, so a cancelled or
+    failed copy never shows up as a clip. A move on the same drive is a
+    rename and completes at once; across drives it is a copy, and the
+    source is removed only once the clip is in the match.
+    """
+    files = _import_sources(body.source_path)
+    if len(files) != 1 or files[0] != Path(body.source_path).expanduser():
+        raise HTTPException(400, "source_path must be a single video file")
+    src = files[0]
+    folder = _resolve_match_folder(team, tournament, date, match)
+    move = body.mode == "move"
+
+    prog = _ImportProgress(total=src.stat().st_size)
+    with _imports_lock:
+        _imports[body.import_id] = prog
+    part = folder / f"{_IMPORT_PART_PREFIX}{body.import_id}.{src.name}.part"
+    renamed = move and _same_volume(src, folder)
+    try:
+        try:
+            if renamed:
+                await run_in_threadpool(os.replace, src, part)
+                prog.copied = prog.total
+            else:
+                await run_in_threadpool(_copy_with_progress, src, part, prog)
+        except _ImportCancelled:
+            raise HTTPException(409, f"Import of {src.name} cancelled")
+        except OSError as exc:
+            raise HTTPException(
+                500, f"Failed to {'move' if move else 'copy'} {src}: {exc}"
+            ) from exc
+
+        prog.phase = "processing"
+
+        def ingest() -> tuple[str, MatchOut]:
+            dest = _next_available_name(folder, src.name)
+            os.replace(part, dest)
+            m = _ingest_file_into_match(team, tournament, date, match, dest)
+            return dest.name, serialize_match(team, tournament, date, match, m)
+
+        async with match_lock(team, tournament, date, match):
+            name, out = await run_in_threadpool(ingest)
+        if move and not renamed:
+            try:
+                src.unlink()
+            except OSError:
+                logger.warning("imported %s but could not remove the source", src)
+        return ImportPathOut(imported=[name], match=out)
+    finally:
+        if part.exists():
+            # A renamed move's part file IS the source; a failure after
+            # the rename puts it back rather than deleting the original.
+            if renamed:
+                try:
+                    os.replace(part, src)
+                except OSError:
+                    logger.warning("could not return %s to %s", part, src)
+            else:
+                part.unlink(missing_ok=True)
+        with _imports_lock:
+            _imports.pop(body.import_id, None)
+
+
+@import_router.get(
+    "/import-path/progress/{import_id}", response_model=ImportProgressOut
+)
+def import_progress(
+    team: str, tournament: str, date: str, match: str, import_id: str
+) -> ImportProgressOut:
+    with _imports_lock:
+        prog = _imports.get(import_id)
+    if prog is None:
+        raise HTTPException(404, "No import in progress under that id")
+    return ImportProgressOut(phase=prog.phase, copied=prog.copied, total=prog.total)
+
+
+@import_router.delete("/import-path/progress/{import_id}")
+def cancel_import(
+    team: str, tournament: str, date: str, match: str, import_id: str
+) -> dict[str, bool]:
+    """Stop a copy in flight. Too late once it is processing: the clip is
+    going into the match by then, and Delete removes it."""
+    with _imports_lock:
+        prog = _imports.get(import_id)
+    if prog is None or prog.phase != "copying":
+        return {"cancelled": False}
+    prog.cancelled = True
+    return {"cancelled": True}
+
+
 @router.post("/import-path", response_model=ImportPathOut)
 def import_from_path(
     team: str,
@@ -477,28 +682,7 @@ def import_from_path(
     copy+delete). Move is preferable for large files to avoid doubling
     disk usage during ingest.
     """
-    src = Path(body.source_path).expanduser()
-    if not src.is_absolute():
-        raise HTTPException(400, "source_path must be absolute")
-    if not src.exists():
-        raise HTTPException(404, f"Source not found: {src}")
-
-    if src.is_dir():
-        files = sorted(
-            p for p in src.iterdir()
-            if p.is_file() and p.suffix.lower() in _VIDEO_EXTENSIONS
-        )
-        if not files:
-            raise HTTPException(
-                400, f"No recognized video files in directory: {src}"
-            )
-    else:
-        if src.suffix.lower() not in _VIDEO_EXTENSIONS:
-            raise HTTPException(
-                400, f"Not a recognized video file extension: {src.suffix}"
-            )
-        files = [src]
-
+    files = _import_sources(body.source_path)
     folder = _resolve_match_folder(team, tournament, date, match)
     move = body.mode == "move"
 

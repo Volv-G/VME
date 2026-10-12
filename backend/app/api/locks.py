@@ -81,3 +81,10 @@ async def match_lock_dep(
     """
     async with _lock_for((team, tournament, date, match)):
         yield
+
+
+def match_lock(team: str, tournament: str, date: str, match: str) -> asyncio.Lock:
+    """The same lock, for a handler that holds it for only part of its
+    work - an import that copies gigabytes first and touches the match
+    record only at the end. Use from the event loop (an async handler)."""
+    return _lock_for((team, tournament, date, match))

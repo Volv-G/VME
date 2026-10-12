@@ -128,17 +128,26 @@ export function MatchEditorPage() {
     );
     setData(m);
   }
-  async function importClipPath(sourcePath: string, mode: "copy" | "move") {
-    const res = await api.importClipPath(
+  async function listImportPath(sourcePath: string) {
+    return api.listImportPath(team, tournament, date, match, sourcePath);
+  }
+  async function importClipFile(
+    sourcePath: string,
+    mode: "copy" | "move",
+    onProgress: (pct: number, phase: "copying" | "processing") => void,
+    signal: AbortSignal
+  ) {
+    const res = await api.importClipFile(
       team,
       tournament,
       date,
       match,
       sourcePath,
-      mode
+      mode,
+      onProgress,
+      signal
     );
     setData(res.match);
-    return res.imported;
   }
   async function reorderClips(ids: string[]) {
     setData(await api.reorderClips(team, tournament, date, match, ids));
@@ -861,7 +870,8 @@ export function MatchEditorPage() {
         <ClipManager
           clips={data.clips}
           onUpload={uploadClip}
-          onImportPath={importClipPath}
+          onListImportPath={listImportPath}
+          onImportFile={importClipFile}
           onReorder={reorderClips}
           onDelete={deleteClip}
           onSetClipTime={setClipTime}

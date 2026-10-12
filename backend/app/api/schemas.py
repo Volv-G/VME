@@ -463,6 +463,43 @@ class ImportPathIn(BaseModel):
     mode: str = "copy"  # "copy" | "move"
 
 
+class ImportListFileOut(BaseModel):
+    """One file a path import would bring in."""
+
+    source_path: str
+    name: str
+    size: int
+
+
+class ImportListOut(BaseModel):
+    """What `source_path` resolves to: the file itself, or the video
+    files in the folder, in the order they would be imported."""
+
+    files: list[ImportListFileOut]
+
+
+class ImportFileIn(BaseModel):
+    """Import ONE file, reporting progress under `import_id`.
+
+    `import_id` is chosen by the client so it can start polling
+    `.../import-path/progress/{import_id}` before this request returns.
+    """
+
+    source_path: str
+    mode: str = "copy"  # "copy" | "move"
+    import_id: str
+
+
+class ImportProgressOut(BaseModel):
+    """Where one file import has got to. `phase` is "copying" while bytes
+    move (`copied` of `total`), then "processing" while the clip is
+    probed and, if its frame rate differs, transcoded."""
+
+    phase: str
+    copied: int
+    total: int
+
+
 class ImportPathOut(BaseModel):
     """Result of a path-import. `imported` is the list of destination
     basenames added to the match folder (collision-resolved). `match`

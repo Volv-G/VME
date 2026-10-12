@@ -613,6 +613,82 @@ export const api = {
       }
     );
   },
+  /** The video files an import of `sourcePath` would bring in - the file
+   *  itself, or a folder's videos in import order - without importing. */
+  async listImportPath(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    sourcePath: string
+  ): Promise<{ source_path: string; name: string; size: number }[]> {
+    const r = await fetchJson<{
+      files: { source_path: string; name: string; size: number }[];
+    }>(`${matchBase(team, tournament, date, match)}/clips/import-path/list`, {
+      method: "POST",
+      body: JSON.stringify({ source_path: sourcePath }),
+    });
+    return r.files;
+  },
+  /** Server-side import of ONE file, with progress.
+   *
+   *  The server copies on its own, so there is no request body to count
+   *  bytes of; it publishes how far the copy has got under an id chosen
+   *  here, and this polls it while the import request is open. `phase`
+   *  turns to "processing" once the bytes are across and the clip is
+   *  being probed (and transcoded, if its frame rate differs). Aborting
+   *  `signal` asks the server to stop the copy. */
+  async importClipFile(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    sourcePath: string,
+    mode: "copy" | "move",
+    onProgress: (pct: number, phase: "copying" | "processing") => void,
+    signal?: AbortSignal
+  ): Promise<{ imported: string[]; match: MatchDto }> {
+    const base = `${matchBase(team, tournament, date, match)}/clips/import-path`;
+    // Not crypto.randomUUID: that only exists on a secure origin, and
+    // the editor is often opened over plain http on the LAN.
+    const id =
+      Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    let done = false;
+    void (async () => {
+      while (!done) {
+        await new Promise((r) => setTimeout(r, 500));
+        if (done) break;
+        try {
+          const p = await fetchJson<{
+            phase: "copying" | "processing";
+            copied: number;
+            total: number;
+          }>(`${base}/progress/${id}`);
+          if (!done) {
+            onProgress(p.total > 0 ? (p.copied / p.total) * 100 : 0, p.phase);
+          }
+        } catch {
+          // Not registered yet, or already finished: the next poll or
+          // the import's own response settles it.
+        }
+      }
+    })();
+    const onAbort = () => {
+      void fetchJson(`${base}/progress/${id}`, { method: "DELETE" }).catch(
+        () => undefined
+      );
+    };
+    signal?.addEventListener("abort", onAbort);
+    try {
+      return await fetchJson(`${base}/file`, {
+        method: "POST",
+        body: JSON.stringify({ source_path: sourcePath, mode, import_id: id }),
+      });
+    } finally {
+      done = true;
+      signal?.removeEventListener("abort", onAbort);
+    }
+  },
   async reorderClips(
     team: string,
     tournament: string,
