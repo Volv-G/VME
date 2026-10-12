@@ -116,7 +116,7 @@ if not defined SERIAL (
 echo.
 echo === logcat ^(Ctrl+C to stop^)
 "%ADB%" -s !SERIAL! logcat -c
-"%ADB%" -s !SERIAL! logcat -s VMESpike:V UVCCamera:V libUVCCamera:V UVCPreview:V RootEncoder:V AndroidRuntime:E
+"%ADB%" -s !SERIAL! logcat -s VMESpike:V VMEMatch:V UVCCamera:V libUVCCamera:V UVCPreview:V RootEncoder:V AndroidRuntime:E
 exit /b %ERRORLEVEL%
 
 :build

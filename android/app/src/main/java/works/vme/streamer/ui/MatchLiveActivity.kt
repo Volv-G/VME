@@ -152,6 +152,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private var surfaceReady = false
     private var accessToken: String? = null
     private lateinit var consentLauncher: ActivityResultLauncher<IntentSenderRequest>
+    /** What the token is for when Google has to ask for consent first:
+     *  the consent screen answers through [consentLauncher], which has
+     *  to know whether to go live or to end the broadcast. */
+    private var afterConsent: ((String) -> Unit)? = null
 
     /**
      * Opponent badge picker.
@@ -290,7 +294,9 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         ) { result ->
             YouTubeAuth.handleResult(this, result.data, ::log) { token ->
                 accessToken = token
-                goLiveWithToken(token)
+                val then = afterConsent ?: ::goLiveWithToken
+                afterConsent = null
+                then(token)
             }
         }
 
@@ -1243,13 +1249,15 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // looking at the court rather than the phone. It gets the
         // full width and extra height so it can be hit without
         // aiming. Everything else in this section is occasional.
+        // Taller than the rest, but not the 72dp it was: that pushed
+        // the Game Start row below the fold.
         ballServedButton = gated(simpleButton(LBL_BALL_SERVED, BG_SERVE) {
             record(EventType.BallServed)
         }).apply {
             textSize = 18f
             val d = resources.displayMetrics.density
-            minimumHeight = (72 * d).toInt()
-            minHeight = (72 * d).toInt()
+            minimumHeight = (BALL_SERVED_DP * d).toInt()
+            minHeight = (BALL_SERVED_DP * d).toInt()
         }
         col.addView(ballServedButton, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1448,6 +1456,13 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         text = label
         setTextColor(Color.WHITE)
         background = buttonFill(tint)
+        // Shorter than the stock 48dp: three rows of these at full
+        // height pushed Game Start and End Set off the bottom of the
+        // screen. Still a full-width half-card target each.
+        val d = resources.displayMetrics.density
+        minHeight = (ACTION_BUTTON_DP * d).toInt()
+        minimumHeight = (ACTION_BUTTON_DP * d).toInt()
+        setPadding(paddingLeft, (4 * d).toInt(), paddingRight, (4 * d).toInt())
         setOnClickListener {
             when {
                 // The Kill button wears the Assist label during the
@@ -2083,6 +2098,12 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // `show` cuts the first one's slide short, and one card that
         // says who scored, what it was and where the score now stands
         // beats half of two.
+        // Entering the starting line-up before the game is not a
+        // substitution anyone should see announced.
+        if (type == EventType.Substitution && !before.gameStarted) {
+            log("popup: line-up entry is silent")
+            return
+        }
         val spec = pointSpec(type, payload) ?: popupSpec(type, payload, before)
         if (spec == null) {
             log("popup: ${type.wire} is silent (matches VME)")
@@ -2392,6 +2413,16 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         for (b in gatedButtons) {
             b.isEnabled = live
             b.alpha = if (live) 1.0f else 0.4f
+        }
+        // The rotation grid opens before the first whistle: the
+        // starting six are known during warm-up, and entering them then
+        // is the calm moment for it - not the seconds between Game
+        // Start and the first serve. Game Start keeps the line-up.
+        if (!s.gameStarted) {
+            for (b in positionButtons.values) {
+                b.isEnabled = true
+                b.alpha = 1.0f
+            }
         }
         // Ball Served has its own within-rally rule on top of the gate.
         if (live && served) {
@@ -2794,17 +2825,29 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         wantPreview = true
         if (surfaceReady) attachPreview() else log("waiting for camera surface...")
 
-        val token = accessToken
-        if (token != null) {
+        setStatus("waiting for Google sign-in")
+        withToken { fresh ->
             setStatus("contacting YouTube")
-            goLiveWithToken(token)
-        } else {
-            setStatus("waiting for Google sign-in")
-            YouTubeAuth.requestToken(this, consentLauncher, ::log) { fresh ->
-                accessToken = fresh
-                setStatus("contacting YouTube")
-                goLiveWithToken(fresh)
-            }
+            goLiveWithToken(fresh)
+        }
+    }
+
+    /**
+     * A current Google access token, then [use] it.
+     *
+     * Asked for every time rather than kept from the last Start: a
+     * token lasts an hour and a match runs two, so the one Start got
+     * was dead by the time Stop needed it, and the broadcast was left
+     * live on YouTube with nothing feeding it. Asking again is cheap -
+     * Google hands back the cached token while it is valid and a fresh
+     * one when it is not, without showing anything.
+     */
+    private fun withToken(use: (String) -> Unit) {
+        afterConsent = use
+        YouTubeAuth.requestToken(this, consentLauncher, ::log) { fresh ->
+            afterConsent = null
+            accessToken = fresh
+            use(fresh)
         }
     }
 
@@ -3043,21 +3086,30 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * the operator saying they are done, so it is the right moment
      * to release the key.
      *
-     * Best effort on a background thread. A broadcast that cannot be
-     * completed (expired token, no network at the end of a match)
-     * only costs the automatic cleanup -- the next Start ends it as
-     * a stale broadcast anyway, and Studio can end it by hand.
+     * On a background thread, with a token fetched for the purpose
+     * (see [withToken]). A broadcast that cannot be completed (no
+     * network at the end of a match) is said so on the status line,
+     * not just in the log: from the phone's side the stream has
+     * stopped, but YouTube still shows it live until it is ended, and
+     * the operator is the one who can end it in Studio.
      */
     private fun finishBroadcast() {
-        val token = accessToken ?: return
         val id = match.youtubeBroadcastId ?: return
-        Thread {
-            runCatching { YouTubeLive.completeBroadcast(token, id) }
-                .onSuccess { runOnUiThread { log("live: broadcast marked finished") } }
-                .onFailure {
-                    runOnUiThread { log("live: could not finish broadcast - ${it.message}") }
-                }
-        }.start()
+        setStatus("ending the broadcast")
+        withToken { token ->
+            Thread {
+                runCatching { YouTubeLive.completeBroadcast(token, id) }
+                    .onSuccess {
+                        log("live: broadcast marked finished")
+                        setStatus("stopped - broadcast ended")
+                    }
+                    .onFailure {
+                        log("live: could not finish broadcast - ${it.message}")
+                        setStatus("stopped - end the broadcast in YouTube Studio")
+                        runOnUiThread { toast("Could not end the YouTube broadcast") }
+                    }
+            }.start()
+        }
     }
 
     /**
@@ -3155,8 +3207,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // not open on the last one's drops.
         runCatching { stream.getStreamClient().resetDroppedVideoFrames() }
         StreamService.stop(this)
-        finishBroadcast()
         runCatching { if (stream.isStreaming) stream.stopStream() }
+            .onFailure { log("stopStream threw: $it") }
         runCatching { if (stream.isOnPreview) stream.stopPreview() }
         overlay = null
         popup?.hide()
@@ -3180,6 +3232,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         statusLabel.text = "stopped"
         log("stream stopped - match still open, scoring continues")
         setStatus("stopped")
+        // Last, so its status line is the one left showing: the video
+        // has stopped either way, and whether YouTube agrees the
+        // broadcast is over is the thing still in doubt.
+        finishBroadcast()
         // Deliberately no export prompt here. Stop ends the *stream*,
         // not the match: the operator may be swapping a battery,
         // moving the tripod at the change of ends, or recovering from
@@ -3620,6 +3676,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     companion object {
         const val EXTRA_SLUG = "match_slug"
         private const val TAG = "VMEMatch"
+
+        /** Heights, in dp, of the player-action buttons and Ball Served. */
+        private const val ACTION_BUTTON_DP = 36
+        private const val BALL_SERVED_DP = 52
 
         private const val DEFAULT_HOME_COLOR = "#E5484D"
         private const val DEFAULT_AWAY_COLOR = "#8A5CF6"
