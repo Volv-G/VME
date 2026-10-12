@@ -602,12 +602,13 @@ def apply_overlay_state(
 #
 # Rally length over the whole library when this was set - 2,103 rallies in
 # 18 matches, serve to the point being logged: median 10.7s, p75 16.0s,
-# p90 22.5s. The threshold started at the 75th percentile and was raised to
-# 20s, about the 86th (294 rallies longer): the clock marks roughly one rally
-# in seven, the genuinely long ones, which is what makes it mean something;
-# on every rally it would be furniture.
+# p90 22.5s. The threshold started at the 75th percentile (one rally in
+# four) and was raised to 25s, about the 93rd: 151 rallies longer, roughly
+# one in fourteen and a median of seven a match - the standout ones, which
+# is what makes the clock mean something; on every rally it would be
+# furniture.
 
-RALLY_CLOCK_THRESHOLD_S = 20.0
+RALLY_CLOCK_THRESHOLD_S = 25.0
 RALLY_CLOCK_HOLD_S = 3.0
 # Events that end a rally (the point being logged), and ones that mean we
 # cannot say when it ended - play stopped some other way first.
