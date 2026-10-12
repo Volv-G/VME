@@ -58,6 +58,28 @@ class MatchStore(context: Context) {
         }
     }
 
+    /**
+     * Opponents already played on this phone, one each, by name.
+     *
+     * Each is the opponent roster of the latest match that says
+     * anything about them -- a colour, a badge or a player -- so a
+     * match typed in bare, before anyone got round to the badge, does
+     * not hide the one that has it. Names are compared ignoring case
+     * and spacing; the list is sorted by name.
+     */
+    fun knownOpponents(): List<Roster> = list()
+        .map { m ->
+            m.opponentRoster.copy(teamName = m.opponentRoster.teamName.ifBlank { m.opponent })
+        }
+        .filter { it.teamName.isNotBlank() }
+        // `list()` is newest first, so the first rich entry per name is
+        // the latest one; a bare-only opponent keeps its latest bare.
+        .sortedByDescending { r ->
+            r.teamColor != null || r.localLogoPath != null || r.players.isNotEmpty()
+        }
+        .distinctBy { opponentKey(it.teamName) }
+        .sortedBy { it.teamName.lowercase() }
+
     fun delete(slug: String) {
         File(root, slug).deleteRecursively()
     }
@@ -111,4 +133,11 @@ class MatchStore(context: Context) {
 
     private fun today(): String =
         SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+
+    companion object {
+        /** An opponent name as compared: case and spacing ignored, so
+         *  "Bellevue " and "bellevue" are the same club. */
+        fun opponentKey(name: String): String =
+            name.trim().split(Regex("\\s+")).joinToString(" ").lowercase()
+    }
 }

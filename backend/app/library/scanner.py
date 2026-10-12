@@ -8,6 +8,7 @@ from pathlib import Path
 
 import hashlib
 import json
+import shutil
 
 from ..config import MEDIA_ROOT, VIDEO_EXTENSIONS
 from ..domain.match import Clip, Match, new_clip_id
@@ -134,6 +135,23 @@ class MatchSummary:
     has_video: bool
 
 
+@dataclass
+class OpponentSummary:
+    """An opponent the team has played, as its best-kept match left it.
+
+    `tournament` / `date` / `match` address that match, which is where
+    a new match copies the opponent from - roster, colour and badge.
+    """
+
+    name: str
+    team_color: str | None
+    has_logo: bool
+    player_count: int
+    tournament: str
+    date: str
+    match: str
+
+
 def list_teams() -> list[TeamSummary]:
     """List all team folders under `MEDIA_ROOT`."""
     if not MEDIA_ROOT.exists():
@@ -220,6 +238,73 @@ def list_matches(team: str, tournament: str) -> list[MatchSummary]:
                 )
             )
     return summaries
+
+
+def _opponent_logo(folder: Path, roster: Roster) -> Path | None:
+    """The opponent badge in a match folder, found the way it is served:
+    by the recorded name, else by the fixed stem."""
+    if roster.team_logo_path:
+        named = folder / Path(roster.team_logo_path).name
+        if named.is_file():
+            return named
+    return paths.find_logo(folder, paths.OPPONENT_LOGO_STEM)
+
+
+def list_opponents(team: str) -> list[OpponentSummary]:
+    """Every opponent this team has a match against, one entry each.
+
+    Opponents are told apart by name, ignoring case and spacing. Where
+    several matches name the same one, the entry comes from the latest
+    match that says anything about them - a colour, a badge or a
+    player. Latest alone would let a match typed in bare, before anyone
+    got round to its badge, hide the one that has it.
+
+    Sorted by name. Reads only the opponent block of each match.json;
+    a match that cannot be read is skipped, not fatal - the list is a
+    convenience and one broken file should not take it away.
+    """
+    best: dict[str, tuple[tuple, OpponentSummary]] = {}
+    for t_dir in paths.iter_tournament_dirs(team):
+        for date_d in t_dir.iterdir():
+            if not date_d.is_dir():
+                continue
+            for d in date_d.iterdir():
+                match_json = d / "match.json"
+                if not d.is_dir() or not match_json.is_file():
+                    continue
+                try:
+                    data = Match.read_json(match_json)
+                except Exception as exc:
+                    logger.warning("failed to read %s: %s", match_json, exc)
+                    continue
+                roster = Roster.from_dict(data.get("opponent_roster") or {})
+                idx, opponent_part = paths.parse_match_folder(d.name)
+                name = (
+                    (data.get("opponent") or "").strip()
+                    or (roster.team_name or "").strip()
+                    or opponent_part.replace("_", " ")
+                )
+                key = " ".join(name.casefold().split())
+                if not key:
+                    continue
+                has_logo = _opponent_logo(d, roster) is not None
+                summary = OpponentSummary(
+                    name=name,
+                    team_color=roster.team_color or None,
+                    has_logo=has_logo,
+                    player_count=len(roster.players),
+                    tournament=t_dir.name,
+                    date=date_d.name,
+                    match=d.name,
+                )
+                rank = (
+                    bool(roster.team_color or has_logo or roster.players),
+                    date_d.name,
+                    idx or 0,
+                )
+                if key not in best or rank > best[key][0]:
+                    best[key] = (rank, summary)
+    return sorted((s for _, s in best.values()), key=lambda s: s.name.casefold())
 
 
 def load_team_roster(team: str) -> Roster:
@@ -723,8 +808,16 @@ def create_match(
     date: str,
     opponent: str,
     match_index: int | None = None,
+    opponent_from: tuple[str, str, str] | None = None,
 ) -> tuple[str, Match]:
     """Create a new match folder under `<Tournament>/<Date>/<NN>_<Opponent>/`.
+
+    `opponent_from` is `(tournament, date, match)` of an earlier match
+    against the same opponent. Their roster, colour and badge are copied
+    in, so an opponent is set up once and not again every time they
+    turn up. The badge is copied, not referenced: each match owns the
+    files in its folder, and deleting the old match must not blank the
+    new one.
 
     `match_index` is the 1-based match order on that date. When omitted, the
     server picks `max(existing) + 1`. When supplied, it must not collide with
@@ -738,6 +831,22 @@ def create_match(
     Returns `(match_name, Match)` where `match_name` is the on-disk folder
     leaf (e.g. `"03_North_Vipers"`).
     """
+    # Read the source first: a bad reference should fail the request
+    # before it leaves an empty match folder behind.
+    source_roster: Roster | None = None
+    source_logo: Path | None = None
+    if opponent_from is not None:
+        src_dir = paths.match_dir(team, *opponent_from)
+        src_json = src_dir / "match.json"
+        if not src_json.is_file():
+            raise ValueError(
+                f"No match {'/'.join(opponent_from)} to copy the opponent from"
+            )
+        source_roster = Roster.from_dict(
+            Match.read_json(src_json).get("opponent_roster") or {}
+        )
+        source_logo = _opponent_logo(src_dir, source_roster)
+
     parent = paths.date_dir(team, tournament, date)
     parent.mkdir(parents=True, exist_ok=True)
 
@@ -778,6 +887,24 @@ def create_match(
     folder.mkdir(parents=True, exist_ok=False)
 
     m = Match(opponent=opponent or folder_name, date=date, fps=30.0)
+    if source_roster is not None:
+        logo_name: str | None = None
+        if source_logo is not None:
+            logo_name = f"{paths.OPPONENT_LOGO_STEM}{source_logo.suffix.lower()}"
+            try:
+                shutil.copyfile(source_logo, folder / logo_name)
+            except OSError:
+                # The roster is the bulk of what is being reused; a badge
+                # that will not copy can be uploaded again, so it costs
+                # the badge and not the match.
+                logger.warning("could not copy opponent logo %s", source_logo)
+                logo_name = None
+        m.opponent_roster = Roster(
+            team_name=source_roster.team_name or m.opponent,
+            team_color=source_roster.team_color,
+            team_logo_path=logo_name,
+            players=list(source_roster.players),
+        )
     m.save(folder / "match.json")
     return folder_name, m
 

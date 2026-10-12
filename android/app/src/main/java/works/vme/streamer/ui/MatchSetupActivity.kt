@@ -5,7 +5,9 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.View
 import android.view.Gravity
 import android.view.ViewGroup
@@ -16,11 +18,13 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import works.vme.streamer.data.MatchStore
 import works.vme.streamer.data.PhotoCache
+import works.vme.streamer.data.Roster
 import works.vme.streamer.data.Settings
 import works.vme.streamer.data.Team
 import works.vme.streamer.data.TeamStore
 import works.vme.streamer.data.VmeClient
 import works.vme.streamer.data.VmeOrigin
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -32,9 +36,11 @@ import java.util.Locale
  * folder name so a courtside-created match imports into a discoverable
  * subfolder in VME rather than the tournament root.
  *
- * There is no roster editor here for the opponent. The opponent's
+ * There is no roster editor here for the opponent. A new opponent's
  * roster starts empty; players can be added on the fly from the live
- * screen when a substitution or per-player action needs one.
+ * screen when a substitution or per-player action needs one. An
+ * opponent played before on this phone is reused whole instead --
+ * players, colour and badge -- so they are set up once, not per match.
  *
  * The fixture can also be pulled from VME, which is worth it when the
  * match already exists there: the opponent's name as the library spells
@@ -69,6 +75,17 @@ class MatchSetupActivity : ComponentActivity() {
     private var importedLogo: ByteArray? = null
     /** VME's address for the imported fixture. See [Match.vmeOrigin]. */
     private var importedOrigin: VmeOrigin? = null
+    /** The opponent name that import brought, so its colour and badge
+     *  are not pinned on a different opponent typed over it. */
+    private var importedName: String? = null
+
+    /** Opponents from earlier matches on this phone. */
+    private val knownOpponents: List<Roster> by lazy { MatchStore(this).knownOpponents() }
+    /** The earlier opponent this match reuses -- players, colour and
+     *  badge -- or null for one met for the first time. Follows the
+     *  name field, see [opponentChanged]. */
+    private var reuse: Roster? = null
+    private lateinit var reuseLabel: TextView
 
     private val knownTournaments: List<String> by lazy {
         MatchStore(this).list()
@@ -138,8 +155,32 @@ class MatchSetupActivity : ComponentActivity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: Editable?) = opponentChanged()
+            })
         }
-        root.addView(opponentInput)
+        val opponentRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        opponentRow.addView(opponentInput, LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+        ))
+        if (knownOpponents.isNotEmpty()) {
+            opponentRow.addView(Button(this).apply {
+                text = "Pick"
+                setOnClickListener { pickOpponent() }
+            })
+        }
+        root.addView(opponentRow)
+        reuseLabel = TextView(this).apply {
+            setTextColor(Color.GRAY)
+            textSize = 11f
+            visibility = View.GONE
+        }
+        root.addView(reuseLabel)
 
         root.addView(label("Date"))
         dateInput = EditText(this).apply {
@@ -238,17 +279,29 @@ class MatchSetupActivity : ComponentActivity() {
             date = date, tournament = tournament,
             vmeOrigin = origin,
         )
-        // Branding from a VME import, if there was one. Written here
-        // rather than at import time because the badge is cached under
+        // Branding from a VME import, if there was one and the opponent
+        // is still the one imported; else from the opponent reused.
+        // VME's goes first because it is this fixture's own. Written
+        // here rather than earlier because the badge is cached under
         // the match slug, which does not exist until now.
-        if (importedColor != null || importedLogo != null) {
-            val logoPath = importedLogo?.let {
+        val imported = importedName?.let {
+            MatchStore.opponentKey(it) == MatchStore.opponentKey(opponent)
+        } == true
+        val color = (if (imported) importedColor else null) ?: reuse?.teamColor
+        // Copied rather than pointed at: each match owns its badge, and
+        // deleting the earlier match must not blank this one.
+        val logo = (if (imported) importedLogo else null)
+            ?: reuse?.localLogoPath?.let { runCatching { File(it).readBytes() }.getOrNull() }
+        val players = reuse?.players.orEmpty()
+        if (color != null || logo != null || players.isNotEmpty()) {
+            val logoPath = logo?.let {
                 PhotoCache.storeLogo(this, PhotoCache.opponentKey(match.slug), it)
             }
             match = match.copy(
                 opponentRoster = match.opponentRoster.copy(
-                    teamColor = importedColor ?: match.opponentRoster.teamColor,
+                    teamColor = color ?: match.opponentRoster.teamColor,
                     localLogoPath = logoPath ?: match.opponentRoster.localLogoPath,
+                    players = players,
                 ),
             )
         }
@@ -358,6 +411,7 @@ class MatchSetupActivity : ComponentActivity() {
             runOnUiThread {
                 busy(false, null)
                 result.onSuccess { meta ->
+                    importedName = meta.opponent
                     opponentInput.setText(meta.opponent)
                     dateInput.setText(meta.date)
                     tournamentInput.setText(meta.tournament)
@@ -392,6 +446,38 @@ class MatchSetupActivity : ComponentActivity() {
 
     private fun toast(msg: String) =
         android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
+
+    /**
+     * The name decides the reuse. Picking an opponent only fills the
+     * name in; typing one already played picks it just the same, or a
+     * typed "Bellevue" would start a second, bare Bellevue beside the
+     * one with the badge. Typing any other name drops it.
+     */
+    private fun opponentChanged() {
+        val key = MatchStore.opponentKey(opponentInput.text.toString())
+        reuse = knownOpponents.firstOrNull { MatchStore.opponentKey(it.teamName) == key }
+        val r = reuse
+        reuseLabel.visibility = if (r == null) View.GONE else View.VISIBLE
+        if (r != null) {
+            val parts = listOfNotNull(
+                r.teamColor?.let { "colour" },
+                r.localLogoPath?.let { "badge" },
+                r.players.size.takeIf { it > 0 }?.let { "$it player" + if (it == 1) "" else "s" },
+            )
+            reuseLabel.text = "Played before" +
+                (if (parts.isEmpty()) "" else " - reusing " + parts.joinToString(", "))
+        }
+    }
+
+    /** Choose from the opponents already played on this phone. */
+    private fun pickOpponent() {
+        val names = knownOpponents.map { it.teamName }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Opponent")
+            .setItems(names) { _, which -> opponentInput.setText(names[which]) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
 
     /** Choose from the tournaments already on this phone. */
     private fun pickTournament() {

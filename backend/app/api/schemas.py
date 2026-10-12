@@ -341,6 +341,14 @@ class CreateTournamentIn(BaseModel):
     name: str
 
 
+class MatchRefIn(BaseModel):
+    """One match of the team the request is addressed to."""
+
+    tournament: str
+    date: str
+    match: str
+
+
 class CreateMatchIn(BaseModel):
     """New-match request. The folder is `<Tournament>/<date>/<NN>_<opponent>/`
     where `NN` is the 1-based match order on that date. If `match_index` is
@@ -353,6 +361,22 @@ class CreateMatchIn(BaseModel):
     opponent: str
     date: str
     match_index: Optional[int] = None
+    # An earlier match to copy the opponent from - roster, colour and
+    # badge. Omitted for an opponent met for the first time.
+    opponent_from: Optional[MatchRefIn] = None
+
+
+class OpponentOut(BaseModel):
+    """An opponent the team has played, and the match that knows them
+    best. Pass that match back as `opponent_from` to reuse them."""
+
+    name: str
+    team_color: Optional[str] = None
+    has_logo: bool = False
+    player_count: int = 0
+    tournament: str
+    date: str
+    match: str
 
 
 class UpdateMatchIn(BaseModel):

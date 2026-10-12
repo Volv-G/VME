@@ -572,13 +572,23 @@ class Match:
         milliseconds apart covers a replace; anything longer is a real
         problem and should surface as itself.
         """
+        return cls.from_dict(cls.read_json(path))
+
+    @staticmethod
+    def read_json(path: str | Path) -> dict[str, Any]:
+        """The raw `match.json`, read under the same lock as [load].
+
+        For callers that want one field out of many matches - the
+        opponent list reads every match a team has played - and should
+        not pay for replaying each one's events to get it.
+        """
         p = Path(path)
         with _save_lock(p):
             last: OSError | None = None
             for attempt in range(3):
                 try:
                     with open(p, "r", encoding="utf-8") as f:
-                        return cls.from_dict(json.load(f))
+                        return json.load(f)
                 except PermissionError as exc:
                     last = exc
                     time.sleep(0.02 * (attempt + 1))

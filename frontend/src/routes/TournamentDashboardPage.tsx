@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { MatchSummary, TournamentInfoDto } from "../types/api";
+import type { MatchSummary, OpponentDto, TournamentInfoDto } from "../types/api";
 import { Modal } from "../components/Modal";
 import { displayName } from "../util/names";
 
@@ -31,6 +31,10 @@ export function TournamentDashboardPage() {
   // True after the user has manually edited the match-# field; we stop
   // auto-suggesting once they take over.
   const [matchIndexTouched, setMatchIndexTouched] = useState(false);
+  // Opponents met before, across every tournament, and the one this
+  // match reuses - roster, colour and badge copied from their match.
+  const [opponents, setOpponents] = useState<OpponentDto[]>([]);
+  const [reuse, setReuse] = useState<OpponentDto | null>(null);
 
   /** Next available match number for a given date, based on already-loaded matches. */
   const nextIndexFor = useCallback(
@@ -105,7 +109,30 @@ export function TournamentDashboardPage() {
   function openCreate() {
     setNewMatch({ opponent: "", date: "", match_index: "" });
     setMatchIndexTouched(false);
+    setReuse(null);
     setCreating(true);
+    // Fetched per opening rather than once: a match created a minute
+    // ago in another tournament is an opponent to offer now.
+    api.listOpponents(team).then(setOpponents).catch(() => setOpponents([]));
+  }
+
+  const opponentKey = (o: OpponentDto) => `${o.tournament}/${o.date}/${o.match}`;
+  const sameName = (a: string, b: string) =>
+    a.trim().replace(/\s+/g, " ").toLowerCase() ===
+    b.trim().replace(/\s+/g, " ").toLowerCase();
+
+  /** Typing a name already played reuses that opponent, as picking it
+   *  would. Otherwise a typed "Bellevue" makes a second, bare one
+   *  beside the one with the badge. */
+  function typeOpponent(name: string) {
+    setNewMatch({ ...newMatch, opponent: name });
+    setReuse(opponents.find((o) => sameName(o.name, name)) ?? null);
+  }
+
+  function pickOpponent(key: string) {
+    const picked = opponents.find((o) => opponentKey(o) === key) ?? null;
+    setReuse(picked);
+    if (picked) setNewMatch({ ...newMatch, opponent: picked.name });
   }
 
   async function createMatch() {
@@ -120,8 +147,12 @@ export function TournamentDashboardPage() {
         opponent: newMatch.opponent.trim(),
         date: newMatch.date.trim(),
         match_index: idx,
+        opponent_from: reuse
+          ? { tournament: reuse.tournament, date: reuse.date, match: reuse.match }
+          : null,
       });
       setNewMatch({ opponent: "", date: "", match_index: "" });
+      setReuse(null);
       setMatchIndexTouched(false);
       setCreating(false);
       await load();
@@ -234,16 +265,56 @@ export function TournamentDashboardPage() {
         onClose={() => setCreating(false)}
         width="min(520px, 92vw)"
       >
+        {opponents.length > 0 && (
+          <div className="field-row">
+            <label style={{ flex: 1 }}>
+              Played before
+              <select
+                value={reuse ? opponentKey(reuse) : ""}
+                onChange={(e) => pickOpponent(e.target.value)}
+              >
+                <option value="">New opponent</option>
+                {opponents.map((o) => (
+                  <option key={opponentKey(o)} value={opponentKey(o)}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
         <div className="field-row">
           <label style={{ flex: 1 }}>
             Opponent
             <input
               value={newMatch.opponent}
-              onChange={(e) => setNewMatch({ ...newMatch, opponent: e.target.value })}
+              onChange={(e) => typeOpponent(e.target.value)}
               autoFocus
             />
           </label>
         </div>
+        {reuse && (
+          <div
+            className="muted"
+            style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, margin: "2px 0 10px" }}
+          >
+            {reuse.has_logo && (
+              <img
+                src={api.opponentLogoUrl(team, reuse.tournament, reuse.date, reuse.match)}
+                alt=""
+                style={{ width: 24, height: 24, objectFit: "contain" }}
+              />
+            )}
+            {reuse.team_color && (
+              <span className="team-swatch" style={{ background: reuse.team_color }} />
+            )}
+            <span>
+              Reusing {reuse.name} from {displayName(reuse.tournament)}, {reuse.date}
+              {reuse.player_count > 0 &&
+                ` - ${reuse.player_count} player${reuse.player_count === 1 ? "" : "s"}`}
+            </span>
+          </div>
+        )}
         <div className="field-row">
           <label style={{ flex: 1 }}>
             Date

@@ -114,6 +114,19 @@ export interface MatchSummary {
   has_video: boolean;
 }
 
+/** An opponent the team has played, and the match that knows them best
+ *  (roster, colour, badge). Passed back as `opponent_from` when
+ *  creating a match, to reuse them. */
+export interface OpponentDto {
+  name: string;
+  team_color: string | null;
+  has_logo: boolean;
+  player_count: number;
+  tournament: string;
+  date: string;
+  match: string;
+}
+
 export interface ClipDto {
   id: string;
   filename: string;

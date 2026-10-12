@@ -26,6 +26,7 @@ from .schemas import (
     MediaServerConfigOut,
     UploadConfigOut,
     NamingConfigOut,
+    OpponentOut,
     PlayerOut,
     RosterOut,
     TeamSummaryOut,
@@ -169,6 +170,18 @@ def _keep_photo(data: dict, existing: dict[int, str | None]) -> dict:
         if saved:
             data = {**data, "profile_pic_path": saved}
     return data
+
+
+@router.get("/{team}/opponents", response_model=list[OpponentOut])
+def list_opponents(team: str) -> list[OpponentOut]:
+    """Opponents this team has played, for the new-match picker.
+
+    One per opponent, across every tournament, each naming the match
+    to copy them from (see `scanner.list_opponents`).
+    """
+    if not paths.team_dir(team).is_dir():
+        raise HTTPException(404, "Team not found")
+    return [OpponentOut(**vars(o)) for o in scanner.list_opponents(team)]
 
 
 @router.get("/{team}/full-renders", response_model=list[FullRenderOut])

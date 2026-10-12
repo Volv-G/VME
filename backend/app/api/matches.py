@@ -65,6 +65,15 @@ def create_match(team: str, tournament: str, body: CreateMatchIn) -> MatchOut:
             body.date.strip(),
             body.opponent.strip(),
             match_index=body.match_index,
+            opponent_from=(
+                (
+                    body.opponent_from.tournament,
+                    body.opponent_from.date,
+                    body.opponent_from.match,
+                )
+                if body.opponent_from is not None
+                else None
+            ),
         )
     except scanner.MatchIndexConflict as exc:
         raise HTTPException(409, str(exc)) from exc
