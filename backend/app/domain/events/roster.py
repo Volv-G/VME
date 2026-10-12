@@ -1,4 +1,4 @@
-"""Roster events: substitutions."""
+"""Roster events: substitutions, and the libero's 3-way rotation."""
 
 from __future__ import annotations
 
@@ -66,4 +66,57 @@ class SubstitutionEvent(MatchEvent):
             player_number=self.player_in_number,
             player_out_number=out_number,
             team=self.team,
+        )
+
+
+@register_event
+@dataclass
+class LiberoRotationEvent(MatchEvent):
+    """The libero's swap at a rotation, as the one event it is.
+
+    When the rotation carries the libero to the front row they come off
+    at `exit_position` for the player they were covering
+    (`player_in_number`), and in the same stoppage go back on at
+    `entry_position` for whoever has just rotated to the back row. That
+    used to be two substitutions - `Libero -> #12`, `#9 -> Libero` -
+    logged seconds apart by the phone (the first automatically when the
+    point is scored, the second by the operator), so the video showed two
+    "Sub" pop-ups at two moments for one thing happening once. The
+    editor collapses such a pair into this (`POST /events/libero-rotation`).
+
+    Applies both moves at once; the player going off is read from the
+    state before it, like `SubstitutionEvent`'s outgoing player.
+    """
+
+    type_name: ClassVar[str] = "libero_rotation"
+
+    team: Team = Team.HOME
+    libero_number: int = 0
+    # Defaults of 0, which is never a position, so both are always
+    # written out: fields equal to their default are omitted from the
+    # payload, and readers would otherwise have to know what 4 and 1
+    # meant by their absence.
+    exit_position: int = 0
+    player_in_number: int = 0
+    entry_position: int = 0
+
+    def apply(self, state: GameState, all_events):
+        positions = (
+            state.home_positions if self.team == Team.HOME else state.away_positions
+        )
+        self._player_out_number = positions.get(self.entry_position)
+        new_state = super().apply(state, all_events)
+        new_state.set_position(self.team, self.exit_position, self.player_in_number)
+        new_state.set_position(self.team, self.entry_position, self.libero_number)
+        new_state.last_substitution_frame = self.local_frame
+        return new_state
+
+    @property
+    def overlay_effect(self) -> Optional[OverlayEffect]:
+        return PlayerPopupEffect(
+            text="Libero rotation",
+            player_number=self.player_in_number,
+            player_out_number=getattr(self, "_player_out_number", None),
+            team=self.team,
+            kind="libero_rotation",
         )

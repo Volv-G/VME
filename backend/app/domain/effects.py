@@ -83,6 +83,10 @@ class PlayerPopupEffect:
     bg_color: Optional[str] = None  # explicit hex override; else from team
     player_out_number: Optional[int] = None
     title_scale: float = 1.0
+    # How the renderer phrases a two-player subtitle. "" is a substitution
+    # ("#OUT → #IN"); "libero_rotation" is the libero's 3-way swap, where
+    # one player comes back and another goes off ("#IN in · #OUT out").
+    kind: str = ""
 
 
 @dataclass(frozen=True)

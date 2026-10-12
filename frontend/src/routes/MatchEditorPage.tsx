@@ -485,6 +485,18 @@ export function MatchEditorPage() {
       setError(String(e));
     }
   }
+  /** The list's "↻ 3-way": a libero's two substitutions become one
+   *  libero rotation, which is then selected. */
+  async function collapseLiberoSwap(exitId: number, entryId: number) {
+    try {
+      const r = await api.collapseLiberoSwap(team, tournament, date, match, exitId, entryId);
+      setData(r.match);
+      setSelectedEventId(r.event_id);
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
   /** Put an event on the playhead's frame - the "→ now" in the list.
    *  Frame-exact: clip and local frame are sent as they are, and the
    *  server recomputes the event's wall-clock time from them. */
@@ -795,6 +807,7 @@ export function MatchEditorPage() {
             onDelete={(id) => void deleteEvent(id)}
             onNudge={nudgeEvent}
             onMoveToPlayhead={moveEventToPlayhead}
+            onCollapseLiberoSwap={collapseLiberoSwap}
             onMove={moveEvent}
             onClearAll={clearAllEvents}
             onShiftAll={() => {

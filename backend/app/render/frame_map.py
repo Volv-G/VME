@@ -41,6 +41,8 @@ class ActiveMessage:
     # popups (e.g. "Sub") shrink the headline when the meaningful
     # content lives in the subtitle.
     title_scale: float = 1.0
+    # See `PlayerPopupEffect.kind`.
+    kind: str = ""
 
 
 @dataclass

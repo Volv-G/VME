@@ -54,6 +54,7 @@ export const EVENT_COLORS: Record<string, string> = {
 
   // --- Substitution (teal - between lifecycle green and serve cyan) ---
   substitution: "#19b8a6",
+  libero_rotation: "#19b8a6",
 
   // --- Serve flow (cyan family) ---
   first_serve: "#39c5cf",
@@ -121,6 +122,7 @@ export const EVENT_ICONS: Record<string, string> = {
 
   // Substitution
   substitution: "🔄",
+  libero_rotation: "🔃",
 
   // Lifecycle / cuts
   game_start: "▶️",

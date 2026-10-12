@@ -724,6 +724,21 @@ export const api = {
       }
     );
   },
+  /** Collapse a libero's exit + re-entry substitutions into one
+   *  libero rotation, in one save. */
+  async collapseLiberoSwap(
+    team: string,
+    tournament: string,
+    date: string,
+    match: string,
+    exitId: number,
+    entryId: number
+  ): Promise<{ event_id: number; match: MatchDto }> {
+    return fetchJson(
+      `${matchBase(team, tournament, date, match)}/events/libero-rotation`,
+      { method: "POST", body: JSON.stringify({ exit_id: exitId, entry_id: entryId }) }
+    );
+  },
   /** Empty the event list. Clip transitions survive - they are
    *  structure, not tagging. */
   async clearEvents(

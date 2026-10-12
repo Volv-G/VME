@@ -59,6 +59,21 @@ export function summarizeEvent(
       return `Sub: ${inLabel} for ${outLabel} at P${pos}${teamStr}`;
     }
 
+    case "libero_rotation": {
+      const team = String(p.team || "home");
+      const libero = Number(p.libero_number);
+      const exitPos = Number(p.exit_position);
+      const entryPos = Number(p.entry_position);
+      const positions = team === "home" ? prevState.home_positions : prevState.away_positions;
+      const roster = rosterFor(team);
+      const back = playerLabel(roster, (p.player_in_number as number | null) ?? null);
+      const off = playerLabel(roster, positions[entryPos] ?? null);
+      return (
+        `Libero rotation: ${back} in at P${exitPos}, ` +
+        `${playerLabel(roster, libero)} in for ${off} at P${entryPos}${teamSuffix(team)}`
+      );
+    }
+
     case "score": {
       const team = String(p.team || "home");
       const after = event.state;

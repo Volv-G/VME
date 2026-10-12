@@ -42,6 +42,7 @@ from ..domain.events.timeline import (
 )
 from ..domain.match import Match
 from .frame_map import ActiveMessage, FrameEntry, FrameInput, FrameMap
+from .overlays.message import SLIDE_IN_FRAC, SLIDE_OUT_FRAC
 
 logger = logging.getLogger(__name__)
 
@@ -527,6 +528,7 @@ def apply_overlay_state(
         indexed = index_events(match, fmap)
 
     scoreboard_visible = False
+    rallies = _long_rallies(indexed, fps)
     # (start_idx, resolved overlay effect). The EFFECT is stored rather
     # than the event so state-dependent popups are resolved once, at the
     # frame the event fires, instead of being recomputed per frame.
@@ -570,6 +572,7 @@ def apply_overlay_state(
                         player_number=ovr.player_number,
                         player_out_number=ovr.player_out_number,
                         title_scale=ovr.title_scale,
+                        kind=ovr.kind,
                     )
                 )
             elif isinstance(ovr, MessagePopupEffect):
@@ -582,6 +585,95 @@ def apply_overlay_state(
                     )
                 )
         active_popups = still_active
+
+        # The rally clock, under everything else in the stack: it can be
+        # up for half a minute, and other pop-ups coming and going above
+        # it should not make it jump.
+        for r in rallies:
+            if r.show_from <= i < r.show_until:
+                fmap[i].messages.insert(0, _rally_message(r, i, fps, popup_frames))
+
+
+# ----- Rally clock ------------------------------------------------------------
+#
+# A long rally gets a running clock: "Rally duration: 17s" appears once the
+# rally has gone on longer than most, counts while play continues, and holds
+# its final number for a few seconds after the point.
+#
+# The threshold is the 75th percentile of rally length over the whole
+# library at the time it was set - 2,103 rallies in 18 matches, serve to the
+# point being logged: median 10.7s, p75 16.0s, p90 22.5s. So the clock marks
+# roughly one rally in four, which is what makes it mean something; on every
+# rally it would be furniture.
+
+RALLY_CLOCK_THRESHOLD_S = 16.0
+RALLY_CLOCK_HOLD_S = 3.0
+# Events that end a rally (the point being logged), and ones that mean we
+# cannot say when it ended - play stopped some other way first.
+_RALLY_END = {"score", "kill", "ace"}
+_RALLY_BREAK = {
+    "ball_served", "first_serve", "replay", "cut_start", "timeout_start",
+    "set_end", "game_start", "game_end",
+}
+
+
+@dataclass
+class _Rally:
+    serve: int  # output frame of the serve
+    end: int  # output frame of the point
+    show_from: int
+    show_until: int  # exclusive
+
+
+def _long_rallies(indexed: list[tuple[int, MatchEvent]], fps: float) -> list[_Rally]:
+    """Rallies longer than the threshold, in output frames."""
+    threshold = int(round(RALLY_CLOCK_THRESHOLD_S * fps))
+    hold = int(round(RALLY_CLOCK_HOLD_S * fps))
+    out: list[_Rally] = []
+    for k, (i, ev) in enumerate(indexed):
+        if ev.type_name != "ball_served":
+            continue
+        end: Optional[int] = None
+        for i2, ev2 in indexed[k + 1:]:
+            if ev2.type_name in _RALLY_END:
+                end = i2
+                break
+            if ev2.type_name in _RALLY_BREAK:
+                break
+        if end is None or end - i <= threshold:
+            continue
+        out.append(_Rally(serve=i, end=end, show_from=i + threshold, show_until=end + hold))
+    return out
+
+
+def _rally_message(r: _Rally, i: int, fps: float, popup_frames: int) -> ActiveMessage:
+    """The clock on frame `i`: counting while the rally runs, then still.
+
+    Whole seconds, like any clock - the number ticks once a second and
+    stops where the rally stopped. `progress` is paced so it slides in and
+    out exactly as fast as an ordinary pop-up: the renderer slides over a
+    fixed FRACTION of a pop-up's life, and over a 25-second life that
+    fraction would be a slow crawl.
+    """
+    seconds = int((min(i, r.end) - r.serve) / fps)
+    total = r.show_until - r.show_from
+    age = i - r.show_from
+    slide_in = max(1, int(popup_frames * SLIDE_IN_FRAC))
+    slide_out = max(1, int(popup_frames * SLIDE_OUT_FRAC))
+    if total <= slide_in + slide_out:
+        progress = age / total
+    elif age < slide_in:
+        progress = SLIDE_IN_FRAC * age / slide_in
+    elif age >= total - slide_out:
+        progress = (1.0 - SLIDE_OUT_FRAC) + SLIDE_OUT_FRAC * (age - (total - slide_out)) / slide_out
+    else:
+        progress = 0.5
+    return ActiveMessage(
+        text=f"Rally duration: {seconds}s",
+        image_path=None,
+        bg_color=None,
+        progress=progress,
+    )
 
 
 # ----- Pass 4: bookend fades -------------------------------------------------

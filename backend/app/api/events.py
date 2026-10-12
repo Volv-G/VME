@@ -18,6 +18,8 @@ from .schemas import (
     EventUpdateIn,
     ImportEventsIn,
     ImportEventsOut,
+    CollapseLiberoIn,
+    CollapseLiberoOut,
     InsertCutsIn,
     InsertCutsOut,
     MatchOut,
@@ -402,6 +404,55 @@ def shift_events(
         moved=moved,
         clamped=clamped,
         match=serialize_match(team, tournament, date, match, m),
+    )
+
+
+@router.post("/libero-rotation", response_model=CollapseLiberoOut)
+def collapse_libero_rotation(
+    team: str, tournament: str, date: str, match: str, body: CollapseLiberoIn
+) -> CollapseLiberoOut:
+    """Replace a libero's exit + re-entry substitutions with one event.
+
+    `exit_id` is `Libero -> A` (the libero comes off at a position, A
+    back on), `entry_id` is `B -> Libero` (the libero back on at another
+    position, B off). They become one `libero_rotation` at the exit's
+    moment - where the first of the two already was - in a single save,
+    so a failure cannot leave the match with one half of the swap.
+
+    Checked against the match as it is, not as the editor last saw it:
+    both must be substitutions for the same team, the exit must take the
+    libero off and the entry must put the same libero back on.
+    """
+    from ..domain.events.roster import LiberoRotationEvent, SubstitutionEvent
+
+    m = load_match_or_404(team, tournament, date, match)
+    exit_ev = m.get_event(body.exit_id)
+    entry_ev = m.get_event(body.entry_id)
+    if not isinstance(exit_ev, SubstitutionEvent) or not isinstance(entry_ev, SubstitutionEvent):
+        raise HTTPException(400, "Both events must be substitutions")
+    if exit_ev.team != entry_ev.team:
+        raise HTTPException(400, "The two substitutions are for different teams")
+    libero = entry_ev.player_in_number
+    if getattr(exit_ev, "_player_out_number", None) != libero:
+        raise HTTPException(
+            400, f"The first substitution does not take #{libero} off, so they are not one swap"
+        )
+
+    rotation = LiberoRotationEvent(
+        team=exit_ev.team,
+        libero_number=libero,
+        exit_position=exit_ev.position,
+        player_in_number=exit_ev.player_in_number,
+        entry_position=entry_ev.position,
+    )
+    rotation.clip_id = exit_ev.clip_id
+    rotation.local_frame = exit_ev.local_frame
+    rotation.at_ms = exit_ev.at_ms
+    m.events = [e for e in m.events if e.id not in (exit_ev.id, entry_ev.id)]
+    new_id = m.add_event(rotation)
+    save_match(team, tournament, date, match, m)
+    return CollapseLiberoOut(
+        event_id=new_id, match=serialize_match(team, tournament, date, match, m)
     )
 
 

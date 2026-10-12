@@ -311,6 +311,18 @@ class CutSpanIn(BaseModel):
     end_frame: int
 
 
+class CollapseLiberoIn(BaseModel):
+    """A libero's exit and re-entry substitutions, to become one event."""
+
+    exit_id: int
+    entry_id: int
+
+
+class CollapseLiberoOut(BaseModel):
+    event_id: int
+    match: "MatchOut"
+
+
 class InsertCutsIn(BaseModel):
     spans: list[CutSpanIn]
 

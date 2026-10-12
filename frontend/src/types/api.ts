@@ -421,6 +421,7 @@ export const EVENT_TYPES = [
   "dig",
   "highlight",
   "substitution",
+  "libero_rotation",
   "replay",
   "cut_start",
   "cut_end",

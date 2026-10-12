@@ -160,6 +160,12 @@ class MessageOverlayRenderer:
         if msg.player_out_number is not None:
             in_label = self._format_player(roster, msg.player_number)
             out_label = self._format_player(roster, msg.player_out_number)
+            # A libero rotation moves three people, and the libero is the
+            # one in the title: what the viewer needs is who came back and
+            # who went off. An arrow between those two would read as one
+            # replacing the other, which is not what happened.
+            if msg.kind == "libero_rotation":
+                return f"{in_label} in · {out_label} out"
             return f"{out_label} → {in_label}"
         return self._format_player(roster, msg.player_number)
 
@@ -209,6 +215,10 @@ class MessageOverlayRenderer:
                 (photos.get(msg.player_out_number), msg.player_out_number),
                 (photos.get(msg.player_number), msg.player_number),
             ]
+            # Faces in the subtitle's order: a libero rotation reads
+            # "in · out", a substitution "out → in".
+            if msg.kind == "libero_rotation":
+                pair.reverse()
             return pair if any(path for path, _ in pair) else []
         path = photos.get(msg.player_number)
         return [(path, msg.player_number)] if path else []

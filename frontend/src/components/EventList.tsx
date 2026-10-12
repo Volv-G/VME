@@ -41,6 +41,9 @@ interface Props {
    *  it lands one frame past its new neighbour. Optional: without it
    *  rows are not draggable at all, rather than draggable and inert. */
   onMove?: (id: number, afterId: number | null) => Promise<void>;
+  /** Collapse a libero's exit and re-entry substitutions into one
+   *  libero rotation. Optional: without it libero pairs are not flagged. */
+  onCollapseLiberoSwap?: (exitId: number, entryId: number) => Promise<void>;
   /** Delete every event on the match. Optional: without it the button
    *  is not rendered at all. The caller owns the confirmation. */
   onClearAll?: () => void;
@@ -79,6 +82,7 @@ export function EventList({
   onNudge,
   onMoveToPlayhead,
   onMove,
+  onCollapseLiberoSwap,
   onClearAll,
   onShiftAll,
   liberos,
@@ -208,31 +212,33 @@ export function EventList({
     [onInsertCut, cuttingId]
   );
 
-  // Libero exit/entry pairs that drifted apart, and the same one-at-a-
-  // time guard: the list only re-analyzes once the match comes back, so
-  // a second click before then would be aimed at stale positions.
-  const [aligningId, setAligningId] = useState<number | null>(null);
+  // Libero exit/entry pairs, to collapse into one libero rotation, and
+  // a one-at-a-time guard: the list only re-analyzes once the match
+  // comes back, so a second click before then would be aimed at stale
+  // events.
+  const [collapsingId, setCollapsingId] = useState<number | null>(null);
   // Aces credited to somebody who was not serving. Pure inspection, so
   // no busy state and no action - the fix is a judgement about which of
   // the two records is wrong.
   const aceMismatches = useMemo(() => analyzeAceServers(events), [events]);
   const liberoSwaps = useMemo(
-    () => (onMove ? analyzeLiberoSwaps(events, liberos ?? [], fps) : new Map()),
-    [events, liberos, fps, onMove]
+    () =>
+      onCollapseLiberoSwap
+        ? analyzeLiberoSwaps(events, liberos ?? [], fps)
+        : new Map<number, LiberoSwap>(),
+    [events, liberos, fps, onCollapseLiberoSwap]
   );
-  const alignSwap = useCallback(
+  const collapseSwap = useCallback(
     async (swap: LiberoSwap) => {
-      if (!onMove || aligningId !== null) return;
-      setAligningId(swap.id);
+      if (!onCollapseLiberoSwap || collapsingId !== null) return;
+      setCollapsingId(swap.id);
       try {
-        // Onto the exit, which lands it one frame later - the same dead
-        // ball, and it keeps the pair in the order they happened.
-        await onMove(swap.id, swap.anchorId);
+        await onCollapseLiberoSwap(swap.anchorId, swap.id);
       } finally {
-        setAligningId(null);
+        setCollapsingId(null);
       }
     },
-    [onMove, aligningId]
+    [onCollapseLiberoSwap, collapsingId]
   );
 
   // Pre-compute summary strings so the empty-list check below still has a
@@ -638,20 +644,20 @@ export function EventList({
                     type="button"
                     className="gap-badge actionable"
                     title={
-                      `This is the other half of the #${swap.jersey} libero ` +
-                      `substitution ${swap.seconds.toFixed(1)}s earlier - one ` +
-                      "swap at one dead ball, logged as two moments.\n" +
-                      "Click to move it back onto that one."
+                      `This and the #${swap.jersey} libero substitution ` +
+                      (swap.seconds > 0 ? `${swap.seconds.toFixed(1)}s earlier ` : "before it ") +
+                      "are one libero rotation at one dead ball.\n" +
+                      "Click to collapse them into a single libero rotation event."
                     }
-                    disabled={aligningId !== null}
+                    disabled={collapsingId !== null}
                     onClick={(e) => {
-                      // The row seeks on click; aligning shouldn't drag
+                      // The row seeks on click; collapsing shouldn't drag
                       // the playhead along with it.
                       e.stopPropagation();
-                      void alignSwap(swap);
+                      void collapseSwap(swap);
                     }}
                   >
-                    {aligningId === ev.id ? "…" : "⇡"} {swap.seconds.toFixed(1)}s
+                    {collapsingId === ev.id ? "…" : "↻ 3-way"}
                   </button>
                 )}
                 <span className="event-row-icon" aria-hidden="true">

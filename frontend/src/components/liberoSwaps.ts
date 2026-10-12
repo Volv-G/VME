@@ -12,19 +12,15 @@ import type { EventDto } from "../types/api";
  * logged, and the operator taps the second a few seconds later - so the
  * pair arrives at VME several seconds apart, and the overlay shows two
  * substitutions at two different moments of a match where nothing
- * happened in between. The fix is to put the second where the first is.
+ * happened in between. The fix is to collapse the pair into the one
+ * `libero_rotation` it is (`POST /events/libero-rotation`) - so every
+ * pair is flagged, however close together, since even two simultaneous
+ * substitutions are still two "Sub" pop-ups for one thing.
  *
  * Only ever within one gap between rallies: a serve means play resumed,
  * and a libero going off in one rally has nothing to do with one coming
  * on in the next.
  */
-
-/**
- * Below this the pair is already effectively simultaneous, and a badge
- * on every libero swap in the match would be noise. Half a second is
- * thirty frames at 60fps - visible in a render, which is the point.
- */
-export const LIBERO_SWAP_WARN_SECONDS = 0.5;
 
 /**
  * Play resuming, or the set's structure changing. Either way a libero
@@ -49,7 +45,8 @@ export interface LiberoSwap {
   id: number;
   /** The `Libero → #12` event it belongs with. */
   anchorId: number;
-  /** How far behind the anchor it sits, in seconds. */
+  /** How far behind the anchor it sits, in seconds (0 when it is
+   *  already at the same moment). */
   seconds: number;
   /** The libero's jersey, for the explanation. */
   jersey: number;
@@ -68,8 +65,8 @@ function outgoing(ev: EventDto, before: EventDto | undefined): number | null {
 }
 
 /**
- * Libero entries that are sitting later than the exit they belong with,
- * keyed by event id.
+ * Libero entries and the exit each belongs with, keyed by the entry's
+ * event id.
  *
  * `liberos` is the match's libero jerseys; without any there is nothing
  * to pair and the map comes back empty.
@@ -111,8 +108,7 @@ export function analyzeLiberoSwaps(
     // a mis-tag - does not chain off the same exit.
     pendingExit.delete(came as number);
     if (ev.global_frame == null || exit.global_frame == null) continue;
-    const seconds = (ev.global_frame - exit.global_frame) / fps;
-    if (seconds < LIBERO_SWAP_WARN_SECONDS) continue;
+    const seconds = Math.max(0, (ev.global_frame - exit.global_frame) / fps);
     out.set(ev.id, {
       id: ev.id,
       anchorId: exit.id,

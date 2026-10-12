@@ -154,6 +154,20 @@ export function liberoPairs(
           delete current[incoming];
         }
       }
+    } else if (e.type === "libero_rotation" && (e.payload.team ?? "home") === "home") {
+      // Both halves of a libero swap in one event: off at one position,
+      // straight back on at another for whoever is there - and that
+      // player is now the one the libero covers.
+      const libero = Number(e.payload.libero_number);
+      const covered = prev.home_positions[Number(e.payload.entry_position)] ?? null;
+      if (isLibero(libero)) {
+        if (covered != null && !isLibero(covered)) {
+          current[libero] = covered;
+          last[libero] = covered;
+        } else {
+          delete current[libero];
+        }
+      }
     }
     prev = e.state;
   }
