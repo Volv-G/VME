@@ -160,6 +160,24 @@ def _collect_cut_regions(match: Match) -> list[_CutRegion]:
     return regions
 
 
+def cut_regions_global(match: Match) -> list[tuple[int, int]]:
+    """What the render removes, as `[start, end)` spans of global frames.
+
+    The same pairing the render uses - lifecycle-closed markers included -
+    for callers that have to know whether a frame is already being cut.
+    A cut spanning clips comes back as one span per clip.
+    """
+    out: list[tuple[int, int]] = []
+    for r in _collect_cut_regions(match):
+        if r.end_local <= r.start_local:
+            continue
+        start = match.to_global_frame(r.clip_id, r.start_local)
+        last = match.to_global_frame(r.clip_id, r.end_local - 1)
+        if start is not None and last is not None:
+            out.append((start, last + 1))
+    return out
+
+
 def _resolve_open_cuts(
     match: Match, placed: list[_Placed], orphans: list[_Placed]
 ) -> list[_CutRegion]:

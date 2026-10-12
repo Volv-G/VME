@@ -26,14 +26,14 @@ import { analyzeCuts } from "./cutAnalysis";
 //
 // (Those counts predate cut_end resetting the clock; see MARKER_TYPES.)
 //
-// 12s by request: it catches gaps 15s misses, at the cost of more
-// noise. Now the DEFAULT: each team sets its own (Team settings ->
-// Editing), which is what the next paragraph argues for.
+// 15s by request, after a spell at 12s: 12 caught gaps 15 misses, but
+// at the cost of more noise. Only the DEFAULT: each team sets its own
+// (Team settings -> Editing), which is what the next paragraph argues for.
 // Note the spread between matches - 12s flags 39% of Liberty
 // but 14% of Mercer Island, because Liberty's scores were logged
 // several seconds later in the rally. The threshold is really
 // measuring tagging latency, so expect it to feel different per match.
-export const SERVE_GAP_WARN_SECONDS = 12;
+export const SERVE_GAP_WARN_SECONDS = 15;
 
 // Markers, not things that happened in the match. A cut_start dropped in
 // front of a serve is the user saying "skip this", not evidence that
@@ -70,16 +70,20 @@ const MARKER_TYPES = new Set(["cut_start", "timeout_start", "clip_transition"]);
  * celebration is the end of the rally, and the serve needs its run-up to
  * make sense. Cutting hard against either lands mid-motion.
  *
- * 3s by request. Applied symmetrically because the padding is protecting
- * the two neighbouring events equally - unlike reel or rally windows,
- * where the asymmetry comes from events being tagged when they finish.
+ * 5s after and 3s before, by request. Uneven because the two ends are
+ * not worth the same: the end of a rally is what people watch, the walk
+ * back to the service line is not.
  */
-export const GAP_CUT_PAD_SECONDS = 3;
+export const GAP_CUT_KEEP_AFTER_SECONDS = 5;
+export const GAP_CUT_KEEP_BEFORE_SECONDS = 3;
 
-/** A team's own values for the two constants above. */
+/** A team's own values for the constants above. */
 export interface DeadSpaceOptions {
   thresholdSeconds?: number;
-  padSeconds?: number;
+  /** Kept after the event before the gap. */
+  keepAfterSeconds?: number;
+  /** Kept before the serve that ends it. */
+  keepBeforeSeconds?: number;
 }
 
 export interface ServeGap {
@@ -128,7 +132,8 @@ export function analyzeServeGaps(
   const out = new Map<number, ServeGap>();
   if (!Number.isFinite(fps) || fps <= 0) return out;
   const threshold = opts.thresholdSeconds ?? SERVE_GAP_WARN_SECONDS;
-  const padSeconds = opts.padSeconds ?? GAP_CUT_PAD_SECONDS;
+  const keepAfter = opts.keepAfterSeconds ?? GAP_CUT_KEEP_AFTER_SECONDS;
+  const keepBefore = opts.keepBeforeSeconds ?? GAP_CUT_KEEP_BEFORE_SECONDS;
   const { regions } = analyzeCuts(events);
   // Every cut marker's frame, paired or not. `regions` only covers matched
   // pairs, and an unpaired cut_start inside a proposed span would still
@@ -151,7 +156,9 @@ export function analyzeServeGaps(
           seconds,
           prevFrame,
           frame,
-          cut: proposeCut(prevFrame, frame, fps, padSeconds, regions, markerFrames),
+          cut: proposeCut(
+            prevFrame, frame, fps, keepAfter, keepBefore, regions, markerFrames
+          ),
         });
       }
     }
@@ -161,8 +168,9 @@ export function analyzeServeGaps(
 }
 
 /**
- * Span to remove between two events, padded by `GAP_CUT_PAD_SECONDS`, or
- * null when inserting one would make a mess.
+ * Span to remove between two events, keeping `keepAfter` seconds after the
+ * first and `keepBefore` before the serve, or null when inserting one would
+ * make a mess.
  *
  * Refused in two cases:
  *
@@ -173,20 +181,20 @@ export function analyzeServeGaps(
  *   already being cut, in the render. Silently inverting the user's
  *   earlier edit is far worse than declining.
  * - Nothing is left after padding. The threshold makes this unreachable
- *   today (a >12s gap keeps >6s), but the constants are independent and
+ *   today (a >15s gap keeps >7s), but the constants are independent and
  *   a zero-length cut is not worth creating.
  */
 function proposeCut(
   prevFrame: number,
   frame: number,
   fps: number,
-  padSeconds: number,
+  keepAfterSeconds: number,
+  keepBeforeSeconds: number,
   regions: { start: number; end: number }[],
   markerFrames: number[]
 ): { start: number; end: number } | null {
-  const pad = Math.round(padSeconds * fps);
-  const start = prevFrame + pad;
-  const end = frame - pad;
+  const start = prevFrame + Math.round(keepAfterSeconds * fps);
+  const end = frame - Math.round(keepBeforeSeconds * fps);
   if (end <= start) return null;
   if (markerFrames.some((f) => f >= start && f <= end)) return null;
   if (regions.some((r) => r.end > start && r.start < end)) return null;

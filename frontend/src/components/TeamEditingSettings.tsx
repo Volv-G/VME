@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { RosterDto } from "../types/api";
-import { GAP_CUT_PAD_SECONDS, SERVE_GAP_WARN_SECONDS } from "./serveGaps";
+import {
+  GAP_CUT_KEEP_AFTER_SECONDS,
+  GAP_CUT_KEEP_BEFORE_SECONDS,
+  SERVE_GAP_WARN_SECONDS,
+} from "./serveGaps";
 
 /**
  * Team-level editing defaults: what counts as dead space, and how much
@@ -20,36 +24,43 @@ interface Props {
 
 export function TeamEditingSettings({ team, roster, onSaved }: Props) {
   const [threshold, setThreshold] = useState("");
-  const [pad, setPad] = useState("");
+  const [keepAfter, setKeepAfter] = useState("");
+  const [keepBefore, setKeepBefore] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
   const saved = {
     threshold: roster?.editing?.dead_space_seconds ?? SERVE_GAP_WARN_SECONDS,
-    pad: roster?.editing?.dead_space_pad_seconds ?? GAP_CUT_PAD_SECONDS,
+    keepAfter:
+      roster?.editing?.dead_space_keep_after_seconds ?? GAP_CUT_KEEP_AFTER_SECONDS,
+    keepBefore:
+      roster?.editing?.dead_space_keep_before_seconds ?? GAP_CUT_KEEP_BEFORE_SECONDS,
   };
 
   useEffect(() => {
     setThreshold(String(saved.threshold));
-    setPad(String(saved.pad));
+    setKeepAfter(String(saved.keepAfter));
+    setKeepBefore(String(saved.keepBefore));
     // Re-hydrate only when a new roster arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roster]);
 
   const t = Number(threshold);
-  const p = Number(pad);
-  // Two pads have to leave something to cut, or every gap is kept whole
-  // and the button quietly does nothing.
+  const a = Number(keepAfter);
+  const b = Number(keepBefore);
+  // What is kept has to leave something to cut, or every gap is kept
+  // whole and the button quietly does nothing.
   const problem =
     !Number.isFinite(t) || t < 2
       ? "Dead space must be at least 2 seconds."
-      : !Number.isFinite(p) || p < 0
-        ? "Padding can't be negative."
-        : 2 * p >= t
-          ? `Two ${p}s pads leave nothing of a ${t}s gap to cut.`
+      : !Number.isFinite(a) || a < 0 || !Number.isFinite(b) || b < 0
+        ? "Footage kept can't be negative."
+        : a + b >= t
+          ? `Keeping ${a}s + ${b}s leaves nothing of a ${t}s gap to cut.`
           : null;
-  const dirty = t !== saved.threshold || p !== saved.pad;
+  const dirty =
+    t !== saved.threshold || a !== saved.keepAfter || b !== saved.keepBefore;
 
   async function save() {
     if (!roster || problem) return;
@@ -59,7 +70,11 @@ export function TeamEditingSettings({ team, roster, onSaved }: Props) {
     try {
       const next: RosterDto = {
         ...roster,
-        editing: { dead_space_seconds: t, dead_space_pad_seconds: p },
+        editing: {
+          dead_space_seconds: t,
+          dead_space_keep_after_seconds: a,
+          dead_space_keep_before_seconds: b,
+        },
       };
       onSaved(await api.putRoster(team, next));
       setInfo("Saved.");
@@ -97,18 +112,32 @@ export function TeamEditingSettings({ team, roster, onSaved }: Props) {
       </p>
 
       <label style={{ marginTop: 12 }}>
-        Footage kept either side of a cut (seconds)
+        Footage kept after the rally (seconds)
         <input
           type="number"
           min={0}
           step={0.5}
-          value={pad}
-          onChange={(e) => setPad(e.target.value)}
+          value={keepAfter}
+          onChange={(e) => setKeepAfter(e.target.value)}
         />
       </label>
       <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-        Keeps the end of the celebration and the run-up to the serve.
-        Default {GAP_CUT_PAD_SECONDS}s.
+        After the event before the gap - usually the score - so the
+        celebration survives. Default {GAP_CUT_KEEP_AFTER_SECONDS}s.
+      </p>
+
+      <label style={{ marginTop: 12 }}>
+        Footage kept before the serve (seconds)
+        <input
+          type="number"
+          min={0}
+          step={0.5}
+          value={keepBefore}
+          onChange={(e) => setKeepBefore(e.target.value)}
+        />
+      </label>
+      <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+        The server's run-up. Default {GAP_CUT_KEEP_BEFORE_SECONDS}s.
       </p>
 
       {problem && <div className="error" style={{ marginTop: 8 }}>{problem}</div>}

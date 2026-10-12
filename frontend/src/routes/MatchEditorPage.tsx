@@ -651,9 +651,14 @@ export function MatchEditorPage() {
   const deadSpace = useMemo<DeadSpaceOptions>(
     () => ({
       thresholdSeconds: data?.editing?.dead_space_seconds,
-      padSeconds: data?.editing?.dead_space_pad_seconds,
+      keepAfterSeconds: data?.editing?.dead_space_keep_after_seconds,
+      keepBeforeSeconds: data?.editing?.dead_space_keep_before_seconds,
     }),
-    [data?.editing?.dead_space_seconds, data?.editing?.dead_space_pad_seconds]
+    [
+      data?.editing?.dead_space_seconds,
+      data?.editing?.dead_space_keep_after_seconds,
+      data?.editing?.dead_space_keep_before_seconds,
+    ]
   );
   const deadSpans = useMemo(
     () =>

@@ -53,8 +53,10 @@ class NamingConfigOut(BaseModel):
 class EditingConfigOut(BaseModel):
     """Per-team editing defaults. See `domain/roster.py::EditingConfig`."""
 
-    dead_space_seconds: float = 12.0
-    dead_space_pad_seconds: float = 3.0
+    dead_space_seconds: float = 15.0
+    # Kept after the event that ends a rally, and before the next serve.
+    dead_space_keep_after_seconds: float = 5.0
+    dead_space_keep_before_seconds: float = 3.0
 
 
 class MediaServerConfigOut(BaseModel):

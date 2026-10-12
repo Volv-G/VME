@@ -21,19 +21,28 @@ class CutStartEvent(MatchEvent):
     type_name: ClassVar[str] = "cut_start"
 
 
+# How a cut joins the footage either side of it, unless it says otherwise:
+# half a second of crossfade at 60 fps. Matches the editor's Cut End
+# button. The default rather than something each caller passes, because
+# the callers that passed nothing - the gap cut and "remove all dead
+# space" - produced a hard jump from one rally straight into the next.
+CUT_FADE_FRAMES = 30
+
+
 @register_event
 @dataclass
 class CutEndEvent(MatchEvent):
     """Marks the end of a cut region; controls how the rejoin is rendered.
 
-    `frame_shift` of `-fade_frames` produces a crossfade.
+    `frame_shift` of `-fade_frames` produces a crossfade - the default.
     `frame_shift` of 0 with non-zero `fade_frames` produces a fade-to-color hold.
+    Both 0 is a hard cut.
     """
 
     type_name: ClassVar[str] = "cut_end"
 
-    fade_frames: int = 0
-    frame_shift: int = 0
+    fade_frames: int = CUT_FADE_FRAMES
+    frame_shift: int = -CUT_FADE_FRAMES
     blend_color: tuple[int, int, int] = (0, 0, 0)
 
     @property
@@ -45,12 +54,9 @@ class CutEndEvent(MatchEvent):
         )
 
 
-# Matches the editor's Cut End button, so a timeout joins the footage
-# the way a cut the user placed by hand would: half a second of
-# crossfade at 60 fps rather than a hard jump from the huddle to a
-# serve. Frames rather than seconds because that is what every cut end
-# stores; the event form shows both.
-TIMEOUT_FADE_FRAMES = 30
+# A timeout joins the footage the way any cut does: a crossfade rather
+# than a hard jump from the huddle to a serve.
+TIMEOUT_FADE_FRAMES = CUT_FADE_FRAMES
 
 
 @register_event

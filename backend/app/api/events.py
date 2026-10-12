@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..domain.events.timeline import ClipTransitionEvent, CutEndEvent, CutStartEvent
+from ..render.frame_map_builder import cut_regions_global
 from .locks import match_lock_dep
 from .helpers import (
     deserialize_event,
@@ -473,22 +474,28 @@ def insert_cuts(
     opens inside a cut that is already open, re-pairs with it and
     leaves footage in that was meant to go. Such spans are skipped and
     counted rather than inserted.
+
+    "Inside a cut" is judged by the render's own pairing, not by the
+    nearest marker. A lone cut_start closed by the Game Start after it
+    is not open past that point - but by the nearest-marker test it
+    was, and every gap in the set after it was refused.
     """
     m = load_match_or_404(team, tournament, date, match)
 
-    markers: list[tuple[int, bool]] = []  # (global frame, is_start)
+    markers: list[int] = []
     for e in m.events:
         if isinstance(e, (CutStartEvent, CutEndEvent)):
             g = m.to_global_frame(e.clip_id, e.local_frame)
             if g is not None:
-                markers.append((g, isinstance(e, CutStartEvent)))
-    markers.sort()
+                markers.append(g)
+    regions = cut_regions_global(m)
 
     def safe(start: int, end: int) -> bool:
-        if any(start <= g <= end for g, _ in markers):
+        if any(start <= g <= end for g in markers):
             return False
-        before = [is_start for g, is_start in markers if g < start]
-        return not (before and before[-1])  # inside a cut that is open
+        # A pair inside a region would re-pair with that region's
+        # markers; one overlapping it removes nothing new.
+        return not any(r_start <= end and start < r_end for r_start, r_end in regions)
 
     inserted = skipped = 0
     for span in sorted(body.spans, key=lambda s: s.start_frame):
@@ -507,8 +514,8 @@ def insert_cuts(
             })
             ev.at_ms = m.event_time_ms(ev)
             m.add_event(ev)
-        markers.extend([(span.start_frame, True), (span.end_frame, False)])
-        markers.sort()
+        markers.extend([span.start_frame, span.end_frame])
+        regions.append((span.start_frame, span.end_frame))
         inserted += 1
 
     if inserted:

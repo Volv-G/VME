@@ -12,7 +12,8 @@ import { EMPTY_STATE } from "./Controls/state";
 import { analyzeCuts } from "./cutAnalysis";
 import { analyzeFocus } from "./focusAnalysis";
 import {
-  GAP_CUT_PAD_SECONDS,
+  GAP_CUT_KEEP_AFTER_SECONDS,
+  GAP_CUT_KEEP_BEFORE_SECONDS,
   SERVE_GAP_WARN_SECONDS,
   analyzeServeGaps,
   type DeadSpaceOptions,
@@ -158,10 +159,16 @@ export function EventList({
   // usually something wasn't logged. Warning, not error: real breaks
   // exist, so we show the gap and let the user judge.
   const threshold = deadSpace?.thresholdSeconds ?? SERVE_GAP_WARN_SECONDS;
-  const pad = deadSpace?.padSeconds ?? GAP_CUT_PAD_SECONDS;
+  const keepAfter = deadSpace?.keepAfterSeconds ?? GAP_CUT_KEEP_AFTER_SECONDS;
+  const keepBefore = deadSpace?.keepBeforeSeconds ?? GAP_CUT_KEEP_BEFORE_SECONDS;
   const serveGaps = useMemo(
-    () => analyzeServeGaps(events, fps, { thresholdSeconds: threshold, padSeconds: pad }),
-    [events, fps, threshold, pad]
+    () =>
+      analyzeServeGaps(events, fps, {
+        thresholdSeconds: threshold,
+        keepAfterSeconds: keepAfter,
+        keepBeforeSeconds: keepBefore,
+      }),
+    [events, fps, threshold, keepAfter, keepBefore]
   );
 
   // Everything the one-click badges could cut, for doing them all at
@@ -184,7 +191,8 @@ export function EventList({
       `Cut ${deadSpans.length} stretch${deadSpans.length === 1 ? "" : "es"} of dead space ` +
         `(${dur} of footage)?\n\n` +
         `Each is a serve more than ${threshold}s after the previous event. ` +
-        `${pad}s is kept either side. Every cut can be deleted like any other.`
+        `${keepAfter}s is kept after the previous event and ${keepBefore}s ` +
+        `before the serve. Every cut can be deleted like any other.`
     );
     if (!ok) return;
     setCuttingAll(true);
@@ -466,7 +474,7 @@ export function EventList({
             title={
               `Remove all dead space: ${deadSpans.length} serve${deadSpans.length === 1 ? "" : "s"} ` +
               `more than ${threshold}s after the previous event, ` +
-              `${Math.round(deadFrames / fps)}s in total. Keeps ${pad}s either side.`
+              `${Math.round(deadFrames / fps)}s in total. Keeps ${keepAfter}s after and ${keepBefore}s before.`
             }
           >
             {cuttingAll ? "✂ …" : `✂ ${deadSpans.length}`}
@@ -511,7 +519,7 @@ export function EventList({
             ? ""
             : `${gap.seconds.toFixed(1)}s since the previous event - check for a missing event before this serve` +
               (canCut
-                ? `\nClick to cut from ${pad}s after the previous event to ${pad}s before this serve`
+                ? `\nClick to cut from ${keepAfter}s after the previous event to ${keepBefore}s before this serve`
                 : gap.cut === null
                   ? "\n(can't auto-cut: the gap already contains cut markers)"
                   : "");

@@ -127,12 +127,25 @@ class NamingConfig:
 
 # Dead space: a serve that comes this long after the previous event is
 # the gap between rallies nobody wants to watch - the walk back, the
-# huddle, the ball being fetched. 12s was chosen by measurement; see
-# `frontend/src/components/serveGaps.ts` for the numbers.
-DEFAULT_DEAD_SPACE_SECONDS = 12.0
-# Footage kept either side when dead space is cut, so the celebration
-# that ends one rally and the run-up to the next serve both survive.
-DEFAULT_DEAD_SPACE_PAD_SECONDS = 3.0
+# huddle, the ball being fetched. 15s by request, up from a measured 12;
+# see `frontend/src/components/serveGaps.ts` for the numbers.
+DEFAULT_DEAD_SPACE_SECONDS = 15.0
+# Footage kept when dead space is cut: after the event that ends one
+# rally, so the celebration survives, and before the next serve, for its
+# run-up. Uneven by request - the end of a rally is the part worth
+# watching, the walk to the service line is not.
+DEFAULT_DEAD_SPACE_KEEP_AFTER_SECONDS = 5.0
+DEFAULT_DEAD_SPACE_KEEP_BEFORE_SECONDS = 3.0
+
+# Rosters saved before the split: one `dead_space_pad_seconds` for both
+# ends, and the old defaults. Every save wrote the whole block, so a
+# value equal to its old default says nothing was chosen, and takes
+# today's default instead; anything else was chosen and is kept (the one
+# padding on both ends). Applied only to such rosters - one that has the
+# split keys was saved since, and a 12 in it means 12.
+_LEGACY_PAD_KEY = "dead_space_pad_seconds"
+_LEGACY_PAD_DEFAULT = 3.0
+_LEGACY_DEAD_SPACE_DEFAULT = 12.0
 
 
 @dataclass
@@ -145,18 +158,20 @@ class EditingConfig:
     between matches - and nobody should have to set it again for every
     match.
 
-    The editor does the analysis (`serveGaps.ts`); these are its two
-    knobs. Clamped on load so a stray value cannot ask for a cut that
-    swallows the serve it was meant to lead into.
+    The editor does the analysis (`serveGaps.ts`); these are its knobs.
+    Clamped on load so a stray value cannot ask for a cut that swallows
+    the serve it was meant to lead into.
     """
 
     dead_space_seconds: float = DEFAULT_DEAD_SPACE_SECONDS
-    dead_space_pad_seconds: float = DEFAULT_DEAD_SPACE_PAD_SECONDS
+    dead_space_keep_after_seconds: float = DEFAULT_DEAD_SPACE_KEEP_AFTER_SECONDS
+    dead_space_keep_before_seconds: float = DEFAULT_DEAD_SPACE_KEEP_BEFORE_SECONDS
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "dead_space_seconds": self.dead_space_seconds,
-            "dead_space_pad_seconds": self.dead_space_pad_seconds,
+            "dead_space_keep_after_seconds": self.dead_space_keep_after_seconds,
+            "dead_space_keep_before_seconds": self.dead_space_keep_before_seconds,
         }
 
     @classmethod
@@ -171,11 +186,25 @@ class EditingConfig:
                 return default
             return min(hi, max(lo, v))
 
+        threshold = num("dead_space_seconds", DEFAULT_DEAD_SPACE_SECONDS, 2.0, 600.0)
+        keep_after = num(
+            "dead_space_keep_after_seconds",
+            DEFAULT_DEAD_SPACE_KEEP_AFTER_SECONDS, 0.0, 30.0,
+        )
+        keep_before = num(
+            "dead_space_keep_before_seconds",
+            DEFAULT_DEAD_SPACE_KEEP_BEFORE_SECONDS, 0.0, 30.0,
+        )
+        if "dead_space_keep_after_seconds" not in data:
+            if threshold == _LEGACY_DEAD_SPACE_DEFAULT:
+                threshold = DEFAULT_DEAD_SPACE_SECONDS
+            pad = num(_LEGACY_PAD_KEY, _LEGACY_PAD_DEFAULT, 0.0, 30.0)
+            if pad != _LEGACY_PAD_DEFAULT:
+                keep_after = keep_before = pad
         return cls(
-            dead_space_seconds=num("dead_space_seconds", DEFAULT_DEAD_SPACE_SECONDS, 2.0, 600.0),
-            dead_space_pad_seconds=num(
-                "dead_space_pad_seconds", DEFAULT_DEAD_SPACE_PAD_SECONDS, 0.0, 30.0
-            ),
+            dead_space_seconds=threshold,
+            dead_space_keep_after_seconds=keep_after,
+            dead_space_keep_before_seconds=keep_before,
         )
 
 

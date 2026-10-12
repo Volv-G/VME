@@ -44,8 +44,10 @@ export interface NamingConfigDto {
 export interface EditingConfigDto {
   /** A serve this many seconds after the previous event is dead space. */
   dead_space_seconds: number;
-  /** Footage kept either side when dead space is cut. */
-  dead_space_pad_seconds: number;
+  /** Footage kept after the event before a dead-space cut. */
+  dead_space_keep_after_seconds: number;
+  /** Footage kept before the serve that ends it. */
+  dead_space_keep_before_seconds: number;
 }
 
 export interface MediaServerConfigDto {
