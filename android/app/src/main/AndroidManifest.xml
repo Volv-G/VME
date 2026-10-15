@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <!-- Only to show the "VME is live" notification. Denying it costs
          the notification, not the broadcast. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -94,7 +95,7 @@
         <service
             android:name=".StreamService"
             android:exported="false"
-            android:foregroundServiceType="microphone|connectedDevice" />
+            android:foregroundServiceType="microphone|connectedDevice|camera" />
 
         <!-- Grants read access on match.json when the operator taps
              "Export" and picks another app (Drive, Files, mail). File

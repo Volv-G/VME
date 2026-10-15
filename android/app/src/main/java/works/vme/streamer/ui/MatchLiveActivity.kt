@@ -22,6 +22,8 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.OrientationEventListener
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -43,7 +45,11 @@ import androidx.core.content.ContextCompat
 import com.pedro.common.ConnectChecker
 import com.pedro.common.VideoCodec
 import com.pedro.encoder.input.sources.audio.MicrophoneSource
+import com.pedro.encoder.input.sources.OrientationConfig
+import com.pedro.encoder.input.sources.OrientationForced
 import com.pedro.encoder.input.sources.video.BitmapSource
+import com.pedro.encoder.input.sources.video.Camera2Source
+import com.pedro.encoder.input.sources.video.VideoSource
 import com.pedro.library.generic.GenericStream
 import works.vme.streamer.BuildConfig
 import works.vme.streamer.StreamService
@@ -65,6 +71,7 @@ import works.vme.streamer.data.Side
 import works.vme.streamer.data.StreamConfig
 import works.vme.streamer.data.StreamQuality
 import works.vme.streamer.data.TeamStore
+import works.vme.streamer.data.VideoInput
 import works.vme.streamer.data.VmeClient
 import works.vme.streamer.logic.GameStateEngine
 import works.vme.streamer.overlay.BlackoutOverlay
@@ -123,8 +130,15 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     // helper has been released cannot be restarted, so recovery means
     // a new one rather than a reset of this one.
     private var uvcSource = UvcVideoSource(target, ::log)
+    /** The phone's own camera while [input] is [VideoInput.PhoneCamera]. */
+    private var phoneCamera: Camera2Source? = null
     private val micSource by lazy { MicrophoneSource() }
-    private val stream by lazy { GenericStream(this, this, uvcSource, micSource) }
+    private val stream by lazy {
+        val first: VideoSource =
+            if (input == VideoInput.PhoneCamera) Camera2Source(this).also { phoneCamera = it }
+            else uvcSource
+        GenericStream(this, this, first, micSource)
+    }
     private var overlay: ScoreboardOverlay? = null
     private var blackout: BlackoutOverlay? = null
     private var court: CourtOverlay? = null
@@ -141,6 +155,55 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * new link, while the match carries on without it.
      */
     private var cameraLost = false
+
+    /**
+     * HDMI adapter or the phone's camera. Loaded from [Settings] in
+     * `onCreate`, changed from the camera chip in the header - on or
+     * off the air, since the moment a DSLR's battery dies is the
+     * moment the phone has to take over without a new broadcast.
+     */
+    private var input = VideoInput.DEFAULT
+
+    /**
+     * The adapter is the chosen input and it is not there. Everything
+     * that covers for a missing camera (black frame, court view) keys
+     * on this rather than on [cameraLost]: with the phone's camera
+     * filming, the adapter coming and going is nobody's business.
+     */
+    private val hdmiMissing get() = input == VideoInput.Hdmi && cameraLost
+
+    /**
+     * How GL turns the phone camera's picture, in RootEncoder's terms:
+     * 270 with the phone's top to the left, 90 with it to the right.
+     * Landscape only - the stream is 16:9 and the phone is on a tripod
+     * - so the last landscape reading holds while it is picked up.
+     */
+    private var phoneLandscape = 270
+
+    /**
+     * Follows which way round the phone is mounted.
+     *
+     * The activity is locked to portrait, so the display never rotates
+     * and RootEncoder's own handling - which reads the display - would
+     * film the court on its side. The accelerometer is what knows.
+     */
+    private val orientationWatcher by lazy {
+        object : OrientationEventListener(this) {
+            override fun onOrientationChanged(degrees: Int) {
+                val next = when (degrees) {
+                    in 225..315 -> 270
+                    in 45..135 -> 90
+                    else -> return
+                }
+                if (next == phoneLandscape) return
+                phoneLandscape = next
+                applyPhoneOrientation()
+            }
+        }
+    }
+
+    /** Asked the first time the phone camera is picked. */
+    private lateinit var cameraPermission: ActivityResultLauncher<String>
 
     /**
      * How much bandwidth the stream may use. Loaded from [Settings] in
@@ -182,6 +245,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private lateinit var undoButton: Button
     private lateinit var gameStartButton: Button
     private lateinit var healthLabel: TextView
+    private lateinit var inputChip: TextView
     private lateinit var liberoBtn: Button
     private lateinit var timeoutButton: Button
     private lateinit var killButton: Button
@@ -289,6 +353,23 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             }
         }
 
+        cameraPermission = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted) applyInput(VideoInput.PhoneCamera)
+            else {
+                log("camera: permission refused - staying on HDMI")
+                toast("No camera permission")
+            }
+        }
+
+        input = Settings.videoInput(this)
+        if (input == VideoInput.PhoneCamera && !hasCameraPermission()) {
+            // Revoked in system settings since it was chosen.
+            log("camera: no camera permission - back to HDMI")
+            input = VideoInput.Hdmi
+        }
+
         consentLauncher = registerForActivityResult(
             ActivityResultContracts.StartIntentSenderForResult()
         ) { result ->
@@ -327,11 +408,13 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
         }
         window.decorView.postDelayed(fpsTicker, 1000)
+        if (orientationWatcher.canDetectOrientation()) orientationWatcher.enable()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         window.decorView.removeCallbacks(fpsTicker)
+        orientationWatcher.disable()
         // Whatever route got us here, the broadcast is over -- do not
         // leave a foreground notification behind for a stream that no
         // longer exists.
@@ -433,6 +516,23 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // "Start" is a dead control taking prime header space, while
         // the one number that matters -- is the upload actually
         // moving -- had no home at all and was buried in the log.
+        // Which camera, as a chip of its own: switching it is the
+        // first thing to reach for when the DSLR dies mid-match, and
+        // the label says at a glance which one is on air.
+        inputChip = TextView(this).apply {
+            setTextColor(Color.parseColor("#888888"))
+            textSize = 11f
+            isSingleLine = true
+            gravity = Gravity.CENTER
+            setPadding(14, 6, 14, 6)
+            setBackgroundColor(Color.parseColor("#1C1C1C"))
+            text = input.chip
+            setOnClickListener { chooseInput() }
+        }
+        bar.addView(inputChip, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { marginEnd = 8 })
+
         quality = Settings.streamQuality(this)
         healthLabel = TextView(this).apply {
             setTextColor(Color.parseColor("#888888"))
@@ -531,6 +631,16 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                 if (stream.isStreaming) log("preview surface gone - stream continues")
             }
         })
+        // Pinch to zoom the phone's camera: framing the court from
+        // wherever the tripod could go. The adapter's picture is
+        // framed on the DSLR, so there the preview stays inert.
+        surfaceView.setOnTouchListener { _, e ->
+            val cam = phoneCamera ?: return@setOnTouchListener false
+            if (e.pointerCount > 1 && e.actionMasked == MotionEvent.ACTION_MOVE) {
+                runCatching { cam.setZoom(e) }
+            }
+            true
+        }
         col.addView(surfaceView, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0,
         ).apply { weight = 3f })
@@ -2723,7 +2833,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private fun onStartStreaming() {
         if (stream.isStreaming) { log("already streaming"); return }
         if (!ensurePrepared()) return
-        routeAudioToUsbIfPresent()
+        routeAudio()
         stream.getStreamClient().setReTries(10)
 
         // Blackout goes on FIRST: filters composite in the order they
@@ -2746,7 +2856,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         court = co
         stream.getGlInterface().addFilter(co.filter)
         co.attach()
-        co.setShown(quality.court || cameraLost)
+        co.setShown(quality.court || hdmiMissing)
         pushCourt()
 
         // Going live with the adapter already unplugged: the same
@@ -2754,7 +2864,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // frame rather than after. Without this the UVC source would
         // sit there producing nothing and the broadcast would come up
         // and immediately stall.
-        if (cameraLost) {
+        if (hdmiMissing) {
             log("camera: unplugged at Start - streaming the court view")
             runCatching { stream.changeVideoSource(blackVideoSource()) }
                 .onFailure { log("camera: could not swap the video source: $it") }
@@ -2898,7 +3008,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // bottleneck. The format is negotiated when the source opens, so
         // a different capture means a new source.
         val want = cameraTarget(quality)
-        if (!cameraLost && uvcSource.target != want) {
+        if (input == VideoInput.Hdmi && !cameraLost && uvcSource.target != want) {
             log("camera: capture ${want.width}x${want.height}@${want.fps} for ${quality.label}")
             uvcSource = UvcVideoSource(want, ::log)
             runCatching { stream.changeVideoSource(uvcSource) }
@@ -2937,11 +3047,18 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             return false
         }
         prepared = true
+        // `prepareVideo` re-applies the source's own orientation.
+        applyPhoneOrientation()
         if (wasPreviewing) attachPreview()
         log("encoder ready ${quality.width}x${quality.height} @${quality.fps}fps, " +
             "gop ${quality.gop}s, ${if (Settings.useHevc(this)) "H.265" else "H.264"}, " +
             "${quality.label}")
-        setStatus("ready")
+        if (input == VideoInput.Hdmi && !hdmiAttached()) {
+            log("camera: no HDMI adapter - tap HDMI in the header for the phone camera")
+            setStatus("no HDMI adapter")
+        } else {
+            setStatus("ready")
+        }
         return true
     }
 
@@ -3300,6 +3417,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         if (cameraLost) return
         cameraLost = true
         log("camera: adapter unplugged")
+        if (input != VideoInput.Hdmi) return
         if (!stream.isStreaming) {
             setStatus("camera unplugged")
             return
@@ -3326,6 +3444,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         if (!cameraLost) return
         cameraLost = false
         log("camera: adapter reconnected")
+        if (input != VideoInput.Hdmi) return
         if (!stream.isStreaming) {
             setStatus("camera reconnected")
             return
@@ -3494,7 +3613,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         blackout?.setShown(!next.video)
         // A preset change never takes the court view away while the
         // camera is missing: there would be nothing behind it.
-        court?.setShown(next.court || cameraLost)
+        court?.setShown(next.court || hdmiMissing)
         if (prepared && stream.isStreaming) {
             // Only the bitrate can move under a running encoder. The
             // frame size, rate and keyframe interval are baked in at
@@ -3657,6 +3776,107 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             width = if (small) 1280 else 1920,
             height = if (small) 720 else 1080,
         )
+    }
+
+    // ---- camera input -----------------------------------------------
+
+    /** The camera menu, opened from the chip in the header. */
+    private fun chooseInput() {
+        val options = VideoInput.values()
+        val labels = options.map {
+            when (it) {
+                VideoInput.Hdmi ->
+                    it.label + if (hdmiAttached()) "" else " - not connected"
+                VideoInput.PhoneCamera ->
+                    "${it.label} - back, phone in landscape"
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Camera")
+            .setSingleChoiceItems(labels.toTypedArray(), options.indexOf(input)) { d, which ->
+                d.dismiss()
+                applyInput(options[which])
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /**
+     * Switch cameras, live if we are live.
+     *
+     * `changeVideoSource` carries the encoder settings over to the new
+     * source and starts it if the old one was running, so a broadcast
+     * survives the switch the same way it survives a lost adapter.
+     * The sound follows the picture: the adapter carries the DSLR's,
+     * the phone camera gets the phone's microphone.
+     */
+    private fun applyInput(next: VideoInput) {
+        if (next == input) return
+        if (next == VideoInput.PhoneCamera && !hasCameraPermission()) {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+            return
+        }
+        input = next
+        Settings.setVideoInput(this, next)
+        val source: VideoSource = when (next) {
+            VideoInput.PhoneCamera -> Camera2Source(this).also { phoneCamera = it }
+            VideoInput.Hdmi -> {
+                phoneCamera = null
+                // Live with the adapter out: the black frame, as when it
+                // is lost mid-match. Otherwise a fresh source, sized for
+                // the preset (see [cameraTarget]).
+                if (cameraLost && stream.isStreaming) blackVideoSource()
+                else UvcVideoSource(cameraTarget(quality), ::log).also { uvcSource = it }
+            }
+        }
+        runCatching { stream.changeVideoSource(source) }
+            .onSuccess { log("camera: input -> ${next.label}") }
+            .onFailure { log("camera: could not switch to ${next.label}: $it") }
+        applyPhoneOrientation()
+        court?.setShown(quality.court || hdmiMissing)
+        if (stream.isStreaming) {
+            routeAudio()
+            // Re-declare the foreground service, now with the camera
+            // grant behind it, so a locked screen does not cut the
+            // phone camera off.
+            StreamService.start(this, match.slug, "${teamName(Side.Home)} vs ${teamName(Side.Away)}")
+        }
+        inputChip.text = next.chip
+        toast(next.label)
+    }
+
+    /**
+     * Turn the phone camera's picture upright for a landscape mount.
+     * Has to follow every `changeVideoSource` and `prepareVideo`: both
+     * re-apply the source's own orientation, which for the phone camera
+     * reads the portrait-locked display.
+     */
+    private fun applyPhoneOrientation() {
+        if (input != VideoInput.PhoneCamera) return
+        runCatching {
+            stream.getGlInterface().setOrientationConfig(
+                OrientationConfig(
+                    cameraOrientation = phoneLandscape,
+                    isPortrait = false,
+                    forced = OrientationForced.NONE,
+                )
+            )
+        }.onFailure { log("camera: orientation not applied: $it") }
+    }
+
+    /** The sound to go with the chosen camera. */
+    private fun routeAudio() {
+        if (input == VideoInput.Hdmi) routeAudioToUsbIfPresent() else audioToPhoneMic()
+    }
+
+    private fun hasCameraPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /** Is a capture adapter plugged in right now? */
+    private fun hdmiAttached(): Boolean {
+        val usb = getSystemService(Context.USB_SERVICE) as UsbManager
+        return usb.deviceList.values.any(::isCaptureDevice)
     }
 
     // ---- log --------------------------------------------------------

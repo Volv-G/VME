@@ -43,6 +43,7 @@ object Settings {
     // operator changes it.
     private const val KEY_QUALITY = "stream.quality"
     private const val KEY_HEVC = "stream.hevc"
+    private const val KEY_INPUT = "stream.input"
 
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -89,6 +90,14 @@ object Settings {
 
     fun setUseHevc(ctx: Context, on: Boolean) {
         prefs(ctx).edit().putBoolean(KEY_HEVC, on).apply()
+    }
+
+    /** HDMI adapter or the phone's own camera. See [VideoInput]. */
+    fun videoInput(ctx: Context): VideoInput =
+        VideoInput.fromKey(prefs(ctx).getString(KEY_INPUT, null))
+
+    fun setVideoInput(ctx: Context, input: VideoInput) {
+        prefs(ctx).edit().putString(KEY_INPUT, input.key).apply()
     }
 
     /** True once there is at least a URL to talk to. */

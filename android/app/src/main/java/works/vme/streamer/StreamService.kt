@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -78,11 +79,21 @@ class StreamService : Service() {
     private fun startAsForeground(n: Notification) {
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // The camera type only with the grant in hand: asking
+                // for it without one throws, and the fallback below
+                // would then drop the microphone type too. It is what
+                // keeps the phone's own camera running with the screen
+                // locked; the HDMI adapter needs only connectedDevice.
+                val camera =
+                    if (checkSelfPermission(android.Manifest.permission.CAMERA) ==
+                        PackageManager.PERMISSION_GRANTED
+                    ) FOREGROUND_SERVICE_TYPE_CAMERA_COMPAT else 0
                 startForeground(
                     NOTIFICATION_ID,
                     n,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
-                        FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE_COMPAT,
+                        FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE_COMPAT or
+                        camera,
                 )
             } else {
                 startForeground(NOTIFICATION_ID, n)
@@ -173,6 +184,8 @@ class StreamService : Service() {
          *  referenced. Harmless below 30 because the typed overload
          *  is only called from 29 up and unknown bits are ignored. */
         private const val FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE_COMPAT = 16
+        /** `FOREGROUND_SERVICE_TYPE_CAMERA`, API 30+, inlined likewise. */
+        private const val FOREGROUND_SERVICE_TYPE_CAMERA_COMPAT = 64
 
         /** Start holding the process up. Safe to call twice. */
         fun start(context: Context, slug: String, title: String) {
