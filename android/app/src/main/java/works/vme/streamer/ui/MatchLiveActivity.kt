@@ -453,56 +453,24 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             ViewGroup.LayoutParams.MATCH_PARENT, 0,
         ).apply { weight = 1f })
 
-        layoutPanes()
+        showTab(Tab.Events)
         return root
     }
 
     /**
-     * Turning the phone re-lays the panes rather than recreating the
-     * activity: the manifest claims the rotation config changes,
-     * because a recreated activity would take the encoder, the camera
-     * and the broadcast down with it.
+     * Turning the phone re-arranges the scoring controls rather than
+     * recreating the activity: the manifest claims the rotation config
+     * changes, because a recreated activity would take the encoder,
+     * the camera and the broadcast down with it.
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        layoutPanes()
+        arrangeEvents(isLandscape)
     }
 
     private val isLandscape: Boolean
         get() = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-    /**
-     * Portrait: one pane at a time, swapped by the header toggle.
-     * Landscape - the phone on its tripod filming with its own camera -
-     * side by side: the preview on the left, and on the right the
-     * scoring pane at the width it has in portrait (capped at a little
-     * over half the screen), so its rows lay out exactly as they do
-     * held upright. The toggle has nothing left to do and goes.
-     *
-     * Same FrameLayout either way, with only the panes' sizes
-     * changing: re-parenting the SurfaceView would cost the preview
-     * its surface on every turn of the phone.
-     */
-    private fun layoutPanes() {
-        val wide = isLandscape
-        val eventsWidth = if (wide) {
-            val dm = resources.displayMetrics
-            minOf(
-                resources.configuration.smallestScreenWidthDp * dm.density,
-                dm.widthPixels * 0.55f,
-            ).toInt()
-        } else {
-            ViewGroup.LayoutParams.MATCH_PARENT
-        }
-        eventsPane.layoutParams = FrameLayout.LayoutParams(
-            eventsWidth, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END,
-        )
-        previewPane.layoutParams = FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
-        ).apply { if (wide) marginEnd = eventsWidth }
-        tabToggleBtn.visibility = if (wide) View.GONE else View.VISIBLE
-        showTab(currentTab)
-    }
 
     private enum class Tab { Events, Preview }
 
@@ -515,9 +483,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // pass; only paint changes. Bonus: the SurfaceView surface
         // stays alive across tab switches, so the camera preview
         // does not restart every time.
-        val both = isLandscape
-        eventsPane.visibility = if (both || t == Tab.Events) View.VISIBLE else View.INVISIBLE
-        previewPane.visibility = if (both || t == Tab.Preview) View.VISIBLE else View.INVISIBLE
+        eventsPane.visibility = if (t == Tab.Events) View.VISIBLE else View.INVISIBLE
+        previewPane.visibility = if (t == Tab.Preview) View.VISIBLE else View.INVISIBLE
         currentTab = t
         // One button, not two. It is labelled with where it *goes*,
         // not where you are -- there are only two panes, so the
@@ -710,19 +677,145 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
 
     private fun buildEventsPane(): View {
         val scroll = ScrollView(this).apply { setBackgroundColor(Color.BLACK) }
-        val col = LinearLayout(this).apply {
+        eventsColumn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(12, 12, 12, 24)
         }
-        col.addView(buildScoreHeader())
-        col.addView(spacer(8))
-        col.addView(buildHomeCard())
-        col.addView(spacer(8))
-        col.addView(buildAwayCard())
-        col.addView(spacer(8))
-        col.addView(buildMatchSection())
-        scroll.addView(col)
+        scoreHeaderView = buildScoreHeader()
+        homeCardView = buildHomeCard()
+        awayCardView = buildAwayCard()
+        buildMatchControls()
+        arrangeEvents(isLandscape)
+        scroll.addView(eventsColumn)
         return scroll
+    }
+
+    private lateinit var eventsColumn: LinearLayout
+    private lateinit var scoreHeaderView: View
+    private lateinit var homeCardView: LinearLayout
+    private lateinit var awayCardView: View
+    private lateinit var homeHeaderRow: View
+    private lateinit var homeGrid: View
+    /** Kill, Ace, Dig, Dive, Block, Highlight - in reading order. */
+    private lateinit var homeActionButtons: List<Button>
+    private lateinit var matchHeader: View
+    private lateinit var replayButton: Button
+    private lateinit var gameEndButton: Button
+    private lateinit var endSetButton: Button
+    /** The orientation the controls are arranged for; null before the first. */
+    private var eventsWide: Boolean? = null
+    /** Stock button text size, to put back after landscape's smaller one. */
+    private var buttonTextPx = 0f
+
+    /**
+     * Put the scoring controls in place for the orientation.
+     *
+     * The controls are built once and only moved: they carry state -
+     * armed mode, gating, the Kill button wearing the Assist label -
+     * that a rebuild would lose mid-rally. Only the containers between
+     * them are new each time.
+     *
+     * Portrait is one column, as it always was. Landscape is two,
+     * filling the width so as little as possible scrolls:
+     *
+     *  - left: the home card, its slots and its player actions side by
+     *    side instead of stacked, then the once-a-set controls (Game
+     *    Start / Game End / End Set / Liberos) in one row;
+     *  - right: the score, the opponent's card, Ball Served, and
+     *    Replay / Timeout.
+     *
+     * Ball Served lands bottom right, under the thumb that holds the
+     * phone, and the teams sit on the sides the scoreboard puts them.
+     * Button text drops a size in landscape, where the buttons are
+     * narrower, so labels stay on one line.
+     */
+    private fun arrangeEvents(wide: Boolean) {
+        if (eventsWide == wide) return
+        eventsWide = wide
+        val parts = listOf(
+            scoreHeaderView, homeCardView, awayCardView, homeHeaderRow, homeGrid,
+            cancelActionButton, matchHeader, ballServedButton, replayButton,
+            timeoutButton, gameStartButton, gameEndButton, endSetButton, liberoBtn,
+        ) + homeActionButtons
+        for (v in parts) (v.parent as? ViewGroup)?.removeView(v)
+        eventsColumn.removeAllViews()
+        homeCardView.removeAllViews()
+
+        val small = homeActionButtons + listOf(
+            replayButton, timeoutButton, gameStartButton, gameEndButton, endSetButton, liberoBtn,
+        )
+        if (buttonTextPx == 0f) buttonTextPx = replayButton.textSize
+        for (b in small) {
+            if (wide) b.textSize = 13f
+            else b.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, buttonTextPx)
+        }
+
+        fun full() = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+        fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        // Home card: name row, then the slots and the player actions.
+        homeCardView.addView(homeHeaderRow, full())
+        homeCardView.addView(spacer(10))
+        val actions = column().apply {
+            homeActionButtons.chunked(2).forEach { addView(rowOf(*it.toTypedArray())) }
+            addView(cancelActionButton, full().apply { topMargin = if (wide) 0 else 10 })
+        }
+        if (wide) {
+            homeCardView.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(homeGrid, LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.1f,
+                ).apply { marginEnd = gapPx * 2 })
+                addView(actions, LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                ))
+            }, full())
+        } else {
+            homeCardView.addView(homeGrid, full())
+            homeCardView.addView(spacer(10))
+            homeCardView.addView(actions, full())
+        }
+
+        val ballServedParams = full().apply { bottomMargin = gapPx }
+        if (wide) {
+            val left = column().apply {
+                addView(homeCardView, full())
+                addView(spacer(8))
+                addView(rowOf(gameStartButton, gameEndButton, endSetButton, liberoBtn))
+            }
+            val right = column().apply {
+                addView(scoreHeaderView, full())
+                addView(spacer(8))
+                addView(awayCardView, full())
+                addView(spacer(8))
+                addView(ballServedButton, ballServedParams)
+                addView(rowOf(replayButton, timeoutButton))
+            }
+            eventsColumn.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(left, LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.55f,
+                ).apply { marginEnd = gapPx * 2 })
+                addView(right, LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                ))
+            }, full())
+        } else {
+            eventsColumn.addView(scoreHeaderView, full())
+            eventsColumn.addView(spacer(8))
+            eventsColumn.addView(homeCardView, full())
+            eventsColumn.addView(spacer(8))
+            eventsColumn.addView(awayCardView, full())
+            eventsColumn.addView(spacer(8))
+            eventsColumn.addView(matchHeader, full())
+            eventsColumn.addView(ballServedButton, ballServedParams)
+            eventsColumn.addView(rowOf(replayButton, timeoutButton))
+            eventsColumn.addView(rowOf(gameStartButton, gameEndButton, endSetButton))
+            eventsColumn.addView(spacer(16))
+            eventsColumn.addView(liberoBtn, full())
+        }
     }
 
     /**
@@ -876,41 +969,32 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * Home team card: coloured border, name row with Sub/-1/+1, the
      * 6-slot rotation grid, and every player-attributed tag.
      */
-    private fun buildHomeCard(): View {
+    private fun buildHomeCard(): LinearLayout {
         val card = cardContainer(match.homeRoster.teamColor, DEFAULT_HOME_COLOR)
         teamChrome.getValue(Side.Home).card = card
-        card.addView(buildTeamHeaderRow(
+        homeHeaderRow = buildTeamHeaderRow(
             name = match.homeRoster.teamName.ifBlank { match.team },
             colorHex = match.homeRoster.teamColor ?: DEFAULT_HOME_COLOR,
             side = Side.Home,
             isHomeCard = true,
-        ))
-        card.addView(spacer(10))
-        card.addView(buildPositionGrid())
-        card.addView(spacer(10))
-        // Player actions: home only, per the reference layout. Two
-        // columns matching the screenshot.
+        )
+        homeGrid = buildPositionGrid()
+        // Player actions: home only, per the reference layout, two to a
+        // row. [arrangeEvents] puts them under the slots or beside them.
         // Emoji first, word second. At courtside speed the glyph is
         // what the eye lands on; the word is there for the tap after,
         // when the operator is checking rather than reaching. Colour
         // groups them: attack, defence, everything else.
-        card.addView(rowOf(
+        homeActionButtons = listOf(
             playerActionButton(LBL_KILL, EventType.Kill, BG_ATTACK)
                 .also { killButton = it },
             playerActionButton("\uD83C\uDFAF Ace", EventType.Ace, BG_ATTACK),
-        ))
-        card.addView(rowOf(
             playerActionButton("\uD83E\uDD32 Dig", EventType.Dig, BG_DEFENCE),
             playerActionButton("\uD83E\uDD3F Dive", EventType.Dive, BG_DEFENCE),
-        ))
-        card.addView(rowOf(
             playerActionButton("\uD83E\uDDF1 Block", EventType.Block, BG_DEFENCE),
             playerActionButton("\u2B50 Highlight", EventType.Highlight, BG_EXTRA),
-        ))
-        card.addView(buildCancelActionButton(), LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-        ).apply { topMargin = 10 })
+        )
+        buildCancelActionButton()
         return card
     }
 
@@ -1399,9 +1483,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * on team cards; the others were never used courtside per the
      * reference layout.
      */
-    private fun buildMatchSection(): View {
-        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        col.addView(sectionHeader("MATCH"))
+    private fun buildMatchControls() {
+        // Portrait only: in landscape the section is a column of its
+        // own and the header is a line of height it cannot spare.
+        matchHeader = sectionHeader("MATCH")
 
         // Ball Served is the most-pressed button in the app -- once
         // per rally, under time pressure, while the operator is
@@ -1418,10 +1503,6 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             minimumHeight = (BALL_SERVED_DP * d).toInt()
             minHeight = (BALL_SERVED_DP * d).toInt()
         }
-        col.addView(ballServedButton, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-        ).apply { bottomMargin = gapPx })
 
         // Tapping Timeout while one is running ends it rather than
         // starting a second: the card is up, the operator can see it,
@@ -1430,27 +1511,20 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         timeoutButton = gated(simpleButton(LBL_TIMEOUT, BG_NEUTRAL) {
             record(if (timeoutShown) EventType.TimeoutEnd else EventType.TimeoutStart)
         })
-        col.addView(rowOf(
-            gated(simpleButton("\uD83D\uDD04 Replay", BG_NEUTRAL) {
-                record(EventType.Replay)
-            }),
-            timeoutButton,
-        ))
+        replayButton = gated(simpleButton("\uD83D\uDD04 Replay", BG_NEUTRAL) {
+            record(EventType.Replay)
+        })
 
         // Game Start is the one control that must stay live before
         // the game begins -- it is what opens the gate.
         gameStartButton = simpleButton("\u25B6\uFE0F Game Start", BG_LIFECYCLE) {
             record(EventType.GameStart)
         }
-        col.addView(rowOf(
-            gameStartButton,
-            gated(simpleButton("\u23F9\uFE0F Game End", BG_LIFECYCLE) { confirmGameEnd() }),
-            gated(simpleButton("\uD83C\uDFC1 End Set", BG_LIFECYCLE) { confirmSetEnd() }),
-        ))
-
-        col.addView(spacer(16))
-        col.addView(liberoButton())
-        return col
+        gameEndButton =
+            gated(simpleButton("\u23F9\uFE0F Game End", BG_LIFECYCLE) { confirmGameEnd() })
+        endSetButton =
+            gated(simpleButton("\uD83C\uDFC1 End Set", BG_LIFECYCLE) { confirmSetEnd() })
+        liberoButton()
     }
 
     private fun rowOf(vararg views: View): LinearLayout {
