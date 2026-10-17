@@ -155,7 +155,12 @@ def patch_match(
 def delete_match(
     team: str, tournament: str, date: str, match: str
 ) -> dict[str, bool]:
-    scanner.delete_match(team, tournament, date, match)
+    if not paths.match_dir(team, tournament, date, match).exists():
+        raise HTTPException(404, "Match not found")
+    try:
+        scanner.delete_match(team, tournament, date, match)
+    except scanner.MatchHasClips as exc:
+        raise HTTPException(409, f"Only a match with no clips can be deleted: {exc}")
     return {"deleted": True}
 
 

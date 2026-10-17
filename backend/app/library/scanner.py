@@ -909,10 +909,52 @@ def create_match(
     return folder_name, m
 
 
+class MatchHasClips(ValueError):
+    """Raised when deleting a match that still holds video."""
+
+
+def match_video(folder: Path) -> list[str]:
+    """The video a match folder holds: its clips, and any upload or
+    import still arriving (their `.part` files land in the folder)."""
+    return sorted(
+        p.name
+        for p in folder.iterdir()
+        if p.is_file()
+        and (p.suffix.lower() in VIDEO_EXTENSIONS or p.name.endswith(".part"))
+    )
+
+
 def delete_match(team: str, tournament: str, date: str, match: str) -> None:
+    """Remove a match that has no video.
+
+    Only an empty one - a match created by mistake, or for a game that
+    was never played. A match with clips carries hours of footage and
+    its renders, and deleting that is a file-manager job, not a button.
+    Clips recorded in match.json count as well as files on disk, so a
+    clip whose file has gone missing still holds the match.
+
+    The date folder goes too once it is empty, so the tournament does
+    not keep a date with nothing on it.
+    """
     folder = paths.match_dir(team, tournament, date, match)
     if not folder.exists():
         return
+    video = match_video(folder)
+    if not video:
+        match_json = folder / "match.json"
+        if match_json.exists():
+            recorded = Match.read_json(match_json).get("clips") or []
+            video = [str(c.get("filename", "?")) for c in recorded]
+    if video:
+        raise MatchHasClips(
+            f"{len(video)} clip{'s' if len(video) != 1 else ''} in the match "
+            f"({', '.join(video[:3])}{', ...' if len(video) > 3 else ''})"
+        )
     import shutil
 
     shutil.rmtree(folder)
+    date_folder = folder.parent
+    try:
+        date_folder.rmdir()  # only if empty
+    except OSError:
+        pass

@@ -161,6 +161,19 @@ export function TournamentDashboardPage() {
     }
   }
 
+  /** Only a match with no clips: one created by mistake, or for a game
+   *  that was never played. The server refuses anything else. */
+  async function deleteMatch(m: MatchSummary) {
+    const label = `${m.match_index ? `Match ${m.match_index} – ` : ""}vs ${m.opponent} on ${m.date}`;
+    if (!window.confirm(`Delete ${label}?\n\nIts events, line-ups and settings go with it.`)) return;
+    try {
+      await api.deleteMatch(team, tournament, m.date, m.name);
+      await load();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   return (
     <div className="page">
       <div className="card">
@@ -230,15 +243,21 @@ export function TournamentDashboardPage() {
 
         <div className="list">
           {matches.map((m) => (
+            <div key={`${m.date}/${m.name}`} className="list-row" style={{ padding: 0 }}>
             <Link
-              key={`${m.date}/${m.name}`}
               to={
                 `/teams/${encodeURIComponent(team)}` +
                 `/tournaments/${encodeURIComponent(tournament)}` +
                 `/dates/${encodeURIComponent(m.date)}` +
                 `/matches/${encodeURIComponent(m.name)}`
               }
-              className="list-row"
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "10px 12px",
+              }}
             >
               <div>
                 <div>
@@ -255,6 +274,17 @@ export function TournamentDashboardPage() {
               </div>
               <span className="muted">→</span>
             </Link>
+            {m.clip_count === 0 && (
+              <button
+                className="danger"
+                style={{ marginRight: 10 }}
+                onClick={() => void deleteMatch(m)}
+                title="Delete this match - only a match with no clips can be deleted"
+              >
+                Delete
+              </button>
+            )}
+            </div>
           ))}
         </div>
       </div>
