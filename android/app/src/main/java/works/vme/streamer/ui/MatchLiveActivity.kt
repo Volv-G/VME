@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
@@ -452,8 +453,55 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             ViewGroup.LayoutParams.MATCH_PARENT, 0,
         ).apply { weight = 1f })
 
-        showTab(Tab.Events)
+        layoutPanes()
         return root
+    }
+
+    /**
+     * Turning the phone re-lays the panes rather than recreating the
+     * activity: the manifest claims the rotation config changes,
+     * because a recreated activity would take the encoder, the camera
+     * and the broadcast down with it.
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        layoutPanes()
+    }
+
+    private val isLandscape: Boolean
+        get() = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    /**
+     * Portrait: one pane at a time, swapped by the header toggle.
+     * Landscape - the phone on its tripod filming with its own camera -
+     * side by side: the preview on the left, and on the right the
+     * scoring pane at the width it has in portrait (capped at a little
+     * over half the screen), so its rows lay out exactly as they do
+     * held upright. The toggle has nothing left to do and goes.
+     *
+     * Same FrameLayout either way, with only the panes' sizes
+     * changing: re-parenting the SurfaceView would cost the preview
+     * its surface on every turn of the phone.
+     */
+    private fun layoutPanes() {
+        val wide = isLandscape
+        val eventsWidth = if (wide) {
+            val dm = resources.displayMetrics
+            minOf(
+                resources.configuration.smallestScreenWidthDp * dm.density,
+                dm.widthPixels * 0.55f,
+            ).toInt()
+        } else {
+            ViewGroup.LayoutParams.MATCH_PARENT
+        }
+        eventsPane.layoutParams = FrameLayout.LayoutParams(
+            eventsWidth, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END,
+        )
+        previewPane.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+        ).apply { if (wide) marginEnd = eventsWidth }
+        tabToggleBtn.visibility = if (wide) View.GONE else View.VISIBLE
+        showTab(currentTab)
     }
 
     private enum class Tab { Events, Preview }
@@ -467,8 +515,9 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // pass; only paint changes. Bonus: the SurfaceView surface
         // stays alive across tab switches, so the camera preview
         // does not restart every time.
-        eventsPane.visibility = if (t == Tab.Events) View.VISIBLE else View.INVISIBLE
-        previewPane.visibility = if (t == Tab.Preview) View.VISIBLE else View.INVISIBLE
+        val both = isLandscape
+        eventsPane.visibility = if (both || t == Tab.Events) View.VISIBLE else View.INVISIBLE
+        previewPane.visibility = if (both || t == Tab.Preview) View.VISIBLE else View.INVISIBLE
         currentTab = t
         // One button, not two. It is labelled with where it *goes*,
         // not where you are -- there are only two panes, so the
