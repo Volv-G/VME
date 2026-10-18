@@ -561,7 +561,7 @@ class ImportEventsIn(BaseModel):
     """
 
     events: list[dict[str, Any]] = Field(default_factory=list)
-    # Home jerseys designated libero for the match, if the capture knew.
+    # Sent by the phone and ignored: see `import_events`.
     liberos: Optional[list[int]] = None
     # Replace the existing event log rather than adding to it. Clip
     # transitions are structural and survive either way.

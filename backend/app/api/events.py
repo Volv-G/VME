@@ -282,12 +282,11 @@ def import_events(
 
     if body.replace:
         m.events = [e for e in m.events if isinstance(e, ClipTransitionEvent)]
-    # The phone's designation, which it has always sent and this used to
-    # drop: liberos named on the phone came over as plain players. It is
-    # the match's starting list; `liberos` events change it from there.
-    if body.liberos is not None:
-        m.liberos = list(dict.fromkeys(int(n) for n in body.liberos))
-        m._recompute_states()
+    # `body.liberos` is deliberately not used. The phone's list is its
+    # working setting for the libero rotation rule - whoever it was last
+    # set to - with no record of which set it applied to, so taking it
+    # would name the last set's liberos for the whole match. Liberos are
+    # designated in the editor, as `liberos` events.
 
     imported = 0
     snapped = 0
