@@ -48,6 +48,32 @@ interface Props {
 
 type Span = { start: number; end: number };
 
+/**
+ * The size the editor plays clips at: 0 for the original, else a frame
+ * height. A browser setting, not a match one - it is about the
+ * connection this browser is on - and it changes nothing in renders,
+ * which always read the originals.
+ */
+const QUALITY_KEY = "vme.editor.videoQuality";
+const QUALITIES = [0, 720, 540, 360];
+
+function loadQuality(): number {
+  try {
+    const n = parseInt(window.localStorage.getItem(QUALITY_KEY) ?? "", 10);
+    return QUALITIES.includes(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveQuality(q: number) {
+  try {
+    window.localStorage.setItem(QUALITY_KEY, String(q));
+  } catch {
+    /* private window: the choice lasts this visit */
+  }
+}
+
 /** The span containing `frame`, if any. */
 function spanAt(spans: Span[], frame: number): Span | null {
   for (const s of spans) {
@@ -97,6 +123,85 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   const playbackRateRef = useRef(1);
 
   const activeClip = clips[activeClipIdx];
+
+  // Editing size. `servedQ` is what each clip's src actually asks for:
+  // it moves to the chosen size only once that copy exists, so picking
+  // 360p never leaves the player with nothing - it plays the original
+  // meanwhile and changes over, on the same frame, when the copy is in.
+  const [quality, setQuality] = useState(loadQuality);
+  const [servedQ, setServedQ] = useState<Record<string, number>>({});
+  const servedRef = useRef(servedQ);
+  servedRef.current = servedQ;
+  const [qualityNote, setQualityNote] = useState<Record<string, number>>({});
+  const activeIdRef = useRef<string | undefined>(undefined);
+  activeIdRef.current = activeClip?.id;
+  const activeFpsRef = useRef(fps);
+  activeFpsRef.current = activeClip?.fps || fps;
+
+  /** Serve clip `id` at `q` from now on. For the clip on screen, the
+   *  reload keeps the frame and whether it was playing. */
+  function serveAt(id: string, q: number) {
+    if ((servedRef.current[id] ?? 0) === q) return;
+    if (id === activeIdRef.current) {
+      const v = videoRef.current;
+      if (v && v.readyState >= 1) {
+        pendingSeekRef.current =
+          targetFrameRef.current ?? frameFromTime(v.currentTime, activeFpsRef.current);
+        playOnLoadRef.current = !v.paused;
+        setSwitching(true);
+      }
+    }
+    servedRef.current = { ...servedRef.current, [id]: q };
+    setServedQ(servedRef.current);
+  }
+
+  // Ask for the chosen size for every clip - the one on screen first -
+  // which starts the builds, and keep asking while any is building.
+  useEffect(() => {
+    let stop = false;
+    let timer = 0;
+    if (quality === 0) {
+      for (const c of clips) serveAt(c.id, 0);
+      setQualityNote({});
+      return;
+    }
+    const first = clips.find((c) => c.id === activeIdRef.current);
+    const order = first ? [first, ...clips.filter((c) => c !== first)] : clips;
+    async function round() {
+      let building = false;
+      const notes: Record<string, number> = {};
+      for (const c of order) {
+        if (stop) return;
+        if (c.height && c.height <= quality) {
+          serveAt(c.id, 0);
+          continue;
+        }
+        if ((servedRef.current[c.id] ?? 0) === quality) continue;
+        try {
+          const s = await api.clipPreviewStatus(team, tournament, date, match, c.id, quality);
+          if (stop) return;
+          if (s.state === "ready") serveAt(c.id, quality);
+          else if (s.state === "native") serveAt(c.id, 0);
+          else if (s.state === "building") {
+            building = true;
+            notes[c.id] = s.progress;
+          }
+        } catch {
+          building = true;
+        }
+      }
+      if (stop) return;
+      setQualityNote(notes);
+      if (building) timer = window.setTimeout(round, 4000);
+    }
+    void round();
+    return () => {
+      stop = true;
+      window.clearTimeout(timer);
+    };
+    // serveAt reads refs only; clips identity changes on every match refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quality, clips.map((c) => c.id).join(","), team, tournament, date, match]);
 
   // A clip the browser cannot decode (an editing codec like DNxHR) is
   // served from a proxy the server builds in the background - see
@@ -546,10 +651,12 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           >
             <video
               ref={videoRef}
-              src={
-                api.clipStreamUrl(team, tournament, date, match, activeClip.id) +
-                (srcBust ? `?v=${srcBust}` : "")
-              }
+              src={(() => {
+                const url = api.clipStreamUrl(
+                  team, tournament, date, match, activeClip.id, servedQ[activeClip.id] ?? 0
+                );
+                return srcBust ? `${url}${url.includes("?") ? "&" : "?"}v=${srcBust}` : url;
+              })()}
               controls={false}
               onPlay={() => {
                 targetFrameRef.current = null;
@@ -639,6 +746,34 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
             </option>
           ))}
         </select>
+        <select
+          value={quality}
+          onChange={(e) => {
+            const q = parseInt(e.target.value, 10);
+            saveQuality(q);
+            setQuality(q);
+          }}
+          title={
+            "Video size in the editor, remembered by this browser. Smaller " +
+            "loads and seeks faster on a slow connection; renders always " +
+            "use the original footage."
+          }
+        >
+          {QUALITIES.map((q) => (
+            <option key={q} value={q}>
+              {q === 0 ? "Original" : `${q}p`}
+            </option>
+          ))}
+        </select>
+        {quality !== 0 && qualityNote[activeClip.id] !== undefined && (
+          <span
+            className="muted"
+            style={{ fontSize: 11, whiteSpace: "nowrap" }}
+            title="Playing the original until the smaller copy is ready"
+          >
+            {quality}p {Math.round(qualityNote[activeClip.id] * 100)}%
+          </span>
+        )}
       </div>
     </div>
   );

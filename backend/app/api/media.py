@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -28,7 +28,11 @@ def stream_clip(
     match: str,
     clip_id: str,
     request: Request,
+    q: Optional[int] = None,
 ):
+    """The clip for the player. `q` (720 / 540 / 360) asks for the
+    reduced editing copy; until it is built - `/preview?q=` starts it -
+    the clip is served as it would be without."""
     m = load_match_or_404(team, tournament, date, match)
     clip = m.get_clip(clip_id)
     if clip is None:
@@ -36,6 +40,12 @@ def stream_clip(
     file_path = paths.match_dir(team, tournament, date, match) / clip.filename
     if not file_path.is_file():
         raise HTTPException(404, "Clip file missing on disk")
+
+    height = preview_proxy.edit_height(q, clip.height)
+    if height is not None:
+        small = preview_proxy.proxy_path(file_path, height)
+        if small.is_file():
+            return _range_response(small, request)
 
     # A clip the browser cannot decode is played from its proxy (see
     # `library/preview_proxy`). Until that exists, say so with a 503 -
@@ -62,12 +72,16 @@ def clip_preview_status(
     date: str,
     match: str,
     clip_id: str,
+    q: Optional[int] = None,
 ) -> dict:
     """Whether the player can have this clip yet.
 
     `native` (plays as is), `ready` (its proxy is built), `building` with
     `progress` 0..1, or `failed` with `error`. Asking starts the build
     for a clip that needs one and has none.
+
+    With `q`, the same about the reduced editing copy at that height:
+    `native` then means the clip is no bigger than that already.
     """
     m = load_match_or_404(team, tournament, date, match)
     clip = m.get_clip(clip_id)
@@ -76,6 +90,11 @@ def clip_preview_status(
     file_path = paths.match_dir(team, tournament, date, match) / clip.filename
     if not file_path.is_file():
         raise HTTPException(404, "Clip file missing on disk")
+    if q is not None:
+        height = preview_proxy.edit_height(q, clip.height)
+        if height is None:
+            return {"state": "native", "progress": 1.0}
+        return preview_proxy.ensure(file_path, clip.duration, height)
     return preview_proxy.ensure(file_path, clip.duration)
 
 

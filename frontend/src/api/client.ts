@@ -1013,9 +1013,12 @@ export const api = {
     tournament: string,
     date: string,
     match: string,
-    clipId: string
+    clipId: string,
+    /** Editing size (720 / 540 / 360); 0 or absent for the original. */
+    q = 0
   ): string {
-    return `${BASE}${matchBase(team, tournament, date, match)}/media/clips/${clipId}/stream`;
+    const base = `${BASE}${matchBase(team, tournament, date, match)}/media/clips/${clipId}/stream`;
+    return q ? `${base}?q=${q}` : base;
   },
   /** Whether a clip can be played yet: `native`, `ready` (proxy built),
    *  `building` with progress 0..1, or `failed`. Asking starts the
@@ -1025,10 +1028,14 @@ export const api = {
     tournament: string,
     date: string,
     match: string,
-    clipId: string
+    clipId: string,
+    /** With an editing size: the state of that reduced copy instead,
+     *  `native` meaning the clip is no bigger already. Starts its build. */
+    q = 0
   ): Promise<{ state: string; progress: number; error?: string | null }> {
     return fetchJson(
-      `${matchBase(team, tournament, date, match)}/media/clips/${clipId}/preview`
+      `${matchBase(team, tournament, date, match)}/media/clips/${clipId}/preview` +
+        (q ? `?q=${q}` : "")
     );
   },
 };
