@@ -49,6 +49,26 @@ interface Props {
 type Span = { start: number; end: number };
 
 /**
+ * How long a playing video may sit on one position before the player
+ * steps in (see the stall watchdog in the rAF loop).
+ */
+const STALL_MS = 1500;
+/** Seconds of video that must already be buffered past the playhead for
+ *  a stall to count as the browser's, not the network's. */
+const STALL_BUFFERED_S = 0.5;
+
+/** Seconds buffered contiguously ahead of the current position. */
+function bufferedAhead(v: HTMLVideoElement): number {
+  const t = v.currentTime;
+  for (let i = 0; i < v.buffered.length; i++) {
+    if (v.buffered.start(i) <= t + 1e-3 && v.buffered.end(i) > t) {
+      return v.buffered.end(i) - t;
+    }
+  }
+  return 0;
+}
+
+/**
  * The size the editor plays clips at: 0 for the original, else a frame
  * height. A browser setting, not a match one - it is about the
  * connection this browser is on - and it changes nothing in renders,
@@ -402,6 +422,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     return () => window.clearTimeout(t);
   }, [isSwitching]);
 
+  // Where a playing video last moved, for the stall watchdog below.
+  const stallRef = useRef<{ t: number; at: number } | null>(null);
+
   // RAF loop reporting current frame. Suppressed while we're mid-clip-switch
   // so we don't report stale frame-0-of-new-clip positions to the parent
   // (which would briefly snap the timeline playhead).
@@ -417,6 +440,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           // switches for the same boundary.
           endedGuardRef.current = true;
           handleEnded();
+        }
+        if (unstall(v)) {
+          raf = requestAnimationFrame(tick);
+          return;
         }
         const localFrame =
           targetFrameRef.current ??
@@ -434,6 +461,56 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     raf = requestAnimationFrame(tick);
     return () => { stop = true; cancelAnimationFrame(raf); };
   }, [activeClipIdx, activeClip, clips, fps]);
+
+  // Stall watchdog: a video that is playing - not paused, not seeking -
+  // but has not moved for STALL_MS. Firefox does this, mostly at 2x and
+  // mostly around a clip boundary: it sits on a frame with the data in
+  // hand and never advances, until a seek wakes it, which is what the
+  // operator ended up doing by hand. Two cases:
+  //
+  //  - On the clip's last frame: it is not going to say `ended`. The
+  //    camera files' audio stops a few milliseconds before their video,
+  //    and a browser timing playback off the audio can stall in that
+  //    gap. Move to the next clip as `ended` would have.
+  //  - Elsewhere, with STALL_BUFFERED_S already buffered past the
+  //    playhead: the browser's own stall, not the network's. Re-seek to
+  //    the frame on screen - the nudge, done for the operator.
+  //
+  // Waiting on the network (nothing buffered ahead) is left alone: that
+  // resolves itself, and a seek would only throw the buffer away.
+  // Returns true when it acted.
+  function unstall(v: HTMLVideoElement): boolean {
+    if (v.paused || v.seeking || !activeClip) {
+      stallRef.current = null;
+      return false;
+    }
+    const now = performance.now();
+    const s = stallRef.current;
+    if (!s || Math.abs(v.currentTime - s.t) > 1e-4) {
+      stallRef.current = { t: v.currentTime, at: now };
+      return false;
+    }
+    if (now - s.at < STALL_MS) return false;
+    stallRef.current = { t: v.currentTime, at: now };
+    const clipFps = activeClip.fps || fps;
+    const frame = frameFromTime(v.currentTime, clipFps);
+    if (frame >= activeClip.frame_count - 2) {
+      console.warn("VideoPlayer: stalled on the last frame of", activeClip.filename, "- moving on");
+      if (!endedGuardRef.current) {
+        endedGuardRef.current = true;
+        handleEnded();
+      }
+      return true;
+    }
+    if (bufferedAhead(v) >= STALL_BUFFERED_S) {
+      console.warn("VideoPlayer: playback stalled at", v.currentTime.toFixed(3), "with data buffered - nudging");
+      let t = timeForFrame(frame, clipFps);
+      if (Math.abs(t - v.currentTime) < 1e-4) t += 1e-3;
+      v.currentTime = t;
+      return true;
+    }
+    return false;
+  }
 
   // Playing into a cut jumps to where the footage resumes, the way the
   // render will. Returns true when it jumped.
