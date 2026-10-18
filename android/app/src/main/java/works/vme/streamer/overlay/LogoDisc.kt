@@ -39,9 +39,11 @@ import kotlin.math.sqrt
  * three quarters of the disc, and any transparent margin in the file -
  * most club PNGs have one, and every zoomed-out crop is one - shrank it
  * further, so badges sat small in the middle of a white plate. Instead
- * the visible pixels are found, centred, and scaled until the farthest
- * of them reaches [CONTENT_FILL] of the radius: a round crest fills the
- * disc, a square one still keeps its corners, and nothing is cut off.
+ * the visible pixels are found, centred, and scaled until all but the
+ * outermost 1% of them sit within [CONTENT_FILL] of the radius: a round
+ * crest fills the disc, and a wide one is not held small for the sake
+ * of an ear tip, which may just meet the rim. VME's renderer fits the
+ * same way (`_fit_crest`), so a badge is one size on stream and render.
  */
 object LogoDisc {
 
@@ -50,9 +52,12 @@ object LogoDisc {
     private const val ALPHA_FRACTION = 0.02f
 
     /** How far out a crest reaches on the plate, as a fraction of the
-     *  radius: its farthest visible pixel, so a thin rim of the plate
-     *  stays all the way round. */
-    private const val CONTENT_FILL = 0.92f
+     *  radius, measured at [REACH_PERCENTILE] of its visible pixels. */
+    private const val CONTENT_FILL = 0.96f
+
+    /** The share of a crest's visible pixels that must sit within
+     *  [CONTENT_FILL]; the rest - tips, whiskers - may reach the rim. */
+    private const val REACH_PERCENTILE = 0.99f
 
     /** Alpha at which a pixel counts as part of the crest. Low, so a
      *  soft edge counts, but above the faint haze some exports leave
@@ -92,7 +97,7 @@ object LogoDisc {
 
     /**
      * Where to draw [src] so its visible pixels are centred on the disc
-     * of radius [r] and reach [CONTENT_FILL] of it at their farthest.
+     * of radius [r], [REACH_PERCENTILE] of them within [CONTENT_FILL].
      *
      * Every pixel is read: the badge arrives decoded at overlay size
      * (a few hundred pixels a side), and this runs when the overlays
@@ -127,19 +132,22 @@ object LogoDisc {
         }
         val cx = (minX + maxX + 1) / 2f
         val cy = (minY + maxY + 1) / 2f
-        // Farthest corner of any visible pixel from that centre.
-        var far2 = 0f
+        // How far the crest reaches from that centre, by each visible
+        // pixel's farthest corner, ignoring the outermost few tips.
+        val dist = FloatArray(w * h)
+        var n = 0
         for (y in minY..maxY) {
             val row = y * w
             val dy = max(abs(y - cy), abs(y + 1 - cy))
             for (x in minX..maxX) {
                 if (!solid(row + x)) continue
                 val dx = max(abs(x - cx), abs(x + 1 - cx))
-                val d2 = dx * dx + dy * dy
-                if (d2 > far2) far2 = d2
+                dist[n++] = sqrt(dx * dx + dy * dy)
             }
         }
-        val scale = r * CONTENT_FILL / sqrt(far2).coerceAtLeast(1f)
+        java.util.Arrays.sort(dist, 0, n)
+        val far = dist[((n - 1) * REACH_PERCENTILE).toInt()]
+        val scale = r * CONTENT_FILL / far.coerceAtLeast(1f)
         return Matrix().apply {
             postTranslate(-cx, -cy)
             postScale(scale, scale)

@@ -29,7 +29,7 @@ from typing import Optional
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from .overlays.scoreboard import _fit_contain, _fit_cover, _has_transparency
+from .overlays.scoreboard import _fit_contain, _fit_cover, _fit_crest, _has_transparency
 
 logger = logging.getLogger(__name__)
 
@@ -504,7 +504,8 @@ def _logo_disc(
     Bigger than the scoreboard version, so it's worth being smarter about
     fit. Three cases:
 
-    * transparent logo -> fit whole, backing stays white;
+    * transparent logo -> the crest fitted to the circle by its visible
+      pixels (`_fit_crest`), backing stays white;
     * opaque logo with a UNIFORM background (the common "logo on white"
       export) -> fit whole and paint the backing in that same color, so
       nothing is cropped and the join is invisible;
@@ -525,8 +526,8 @@ def _logo_disc(
             # Faces sit in the upper third of a standing-player photo.
             fitted = _fit_cover(src, diameter, y_bias=PHOTO_CROP_BIAS)
         elif _has_transparency(src):
-            inner = diameter - 16
-            fitted = _fit_contain(src, inner)
+            # The crest itself fitted to the circle (see `_fit_crest`).
+            fitted = _fit_crest(src, diameter)
         else:
             uniform = _uniform_background(src)
             if uniform is not None:

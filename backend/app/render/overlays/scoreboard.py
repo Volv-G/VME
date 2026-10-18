@@ -49,6 +49,15 @@ LOGO_MASK_SUPERSAMPLE = 4
 # rather than cover-cropped) when this fraction of its pixels are at
 # least partly transparent.
 LOGO_ALPHA_FRACTION = 0.02
+# A logo with transparency is fitted by its visible pixels, not by its
+# image box (see `_fit_crest`): all but the outermost
+# (100 - CREST_REACH_PERCENTILE)% of the pixels with at least
+# CREST_SOLID_ALPHA land within CREST_FILL of the disc's radius. The
+# percentile lets an ear tip or a whisker meet the rim rather than
+# holding a whole wide crest small to keep it clear.
+CREST_FILL = 0.96
+CREST_REACH_PERCENTILE = 99.0
+CREST_SOLID_ALPHA = 24
 # Divider slant, as a fraction of the bar height: the half-offset each
 # boundary moves, so the total lean across the bar is 2x this.
 SKEW_SCALE = 0.34
@@ -505,9 +514,9 @@ class ScoreboardOverlay:
         * **Opaque logo** (a JPEG, or a PNG with a filled background):
           scaled to *cover* the circle and center-cropped, so the disc is
           completely filled and the square background never shows.
-        * **Transparent logo**: scaled to *fit* inside the circle, so a
-          wide or tall mark keeps all of its detail - the circle mask is
-          then a no-op on the already-transparent margins.
+        * **Transparent logo**: its visible pixels centred and scaled to
+          reach just inside the circle (`_fit_crest`), so a round crest
+          fills the disc and a square one keeps its corners.
 
         Failures (missing file, corrupt image, unreadable format) are
         logged once and degrade to no logo rather than killing a render
@@ -525,7 +534,7 @@ class ScoreboardOverlay:
             src.load()
             src = src.convert("RGBA")
             if _has_transparency(src):
-                fitted = _fit_contain(src, diameter)
+                fitted = _fit_crest(src, diameter)
             else:
                 fitted = _fit_cover(src, diameter)
             disc = Image.new("RGBA", (diameter, diameter), (0, 0, 0, 0))
@@ -632,6 +641,42 @@ def _fit_contain(img: Image.Image, box: int) -> Image.Image:
     scale = min(box / img.width, box / img.height)
     size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
     return img.resize(size, Image.LANCZOS)
+
+
+def _fit_crest(img: Image.Image, diameter: int) -> Image.Image:
+    """A crest on transparency, centred in a `diameter`-square so it
+    fills the circle inscribed in it without leaving it.
+
+    Fitting the image box instead - into the square, then masking to the
+    circle - cut a square crest's corners off, and any transparent
+    margin in the file (most club PNGs have one, and so does every
+    zoomed-out crop from the phone) shrank the crest with it. Here the
+    visible pixels are found, centred, and scaled until all but their
+    outermost 1% sit within `CREST_FILL` of the radius - the extremities
+    may just touch the rim. The phone's `LogoDisc` does the same, so a
+    badge is one size on the stream and in the render.
+    """
+    alpha = np.asarray(img.getchannel("A"))
+    ys, xs = np.nonzero(alpha >= CREST_SOLID_ALPHA)
+    out = Image.new("RGBA", (diameter, diameter), (0, 0, 0, 0))
+    if xs.size == 0:
+        fitted = _fit_contain(img, max(1, round(diameter * CREST_FILL)))
+        out.paste(fitted, ((diameter - fitted.width) // 2, (diameter - fitted.height) // 2))
+        return out
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    # How far the crest reaches from its centre, by each visible pixel's
+    # farthest corner, ignoring the outermost few tips.
+    dx = np.maximum(np.abs(xs - cx), np.abs(xs + 1 - cx))
+    dy = np.maximum(np.abs(ys - cy), np.abs(ys + 1 - cy))
+    far = max(1.0, float(np.percentile(np.sqrt(dx * dx + dy * dy), CREST_REACH_PERCENTILE)))
+    scale = (diameter / 2.0) * CREST_FILL / far
+    crop = img.crop((x0, y0, x1, y1))
+    size = (max(1, round(crop.width * scale)), max(1, round(crop.height * scale)))
+    fitted = crop.resize(size, Image.LANCZOS)
+    out.paste(fitted, ((diameter - fitted.width) // 2, (diameter - fitted.height) // 2))
+    return out
 
 
 def _fit_cover(img: Image.Image, box: int, y_bias: float = 0.5) -> Image.Image:
