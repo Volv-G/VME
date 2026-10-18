@@ -6,8 +6,11 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.RectF
+import android.graphics.Path
 import android.graphics.Shader
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.sqrt
 
 /**
  * A team badge as a circle: what every overlay draws in place of the
@@ -30,6 +33,15 @@ import android.graphics.Shader
  *   look like a disc at all -- the circle has to be visible to be one.
  *   White because most crests are designed against it, and it is what
  *   the stream thumbnail already used.
+ *
+ * The fit is to the crest itself, not to its image. Fitting the image
+ * box into the circle's inscribed square left a round crest at under
+ * three quarters of the disc, and any transparent margin in the file -
+ * most club PNGs have one, and every zoomed-out crop is one - shrank it
+ * further, so badges sat small in the middle of a white plate. Instead
+ * the visible pixels are found, centred, and scaled until the farthest
+ * of them reaches [CONTENT_FILL] of the radius: a round crest fills the
+ * disc, a square one still keeps its corners, and nothing is cut off.
  */
 object LogoDisc {
 
@@ -37,10 +49,15 @@ object LogoDisc {
      *  count as transparent. Matches VME's `LOGO_ALPHA_FRACTION`. */
     private const val ALPHA_FRACTION = 0.02f
 
-    /** A crest on the plate is fitted into this fraction of the
-     *  diameter: inside the circle's inscribed square, so a square
-     *  crest keeps its corners. */
-    private const val CONTAIN_FRAC = 0.74f
+    /** How far out a crest reaches on the plate, as a fraction of the
+     *  radius: its farthest visible pixel, so a thin rim of the plate
+     *  stays all the way round. */
+    private const val CONTENT_FILL = 0.92f
+
+    /** Alpha at which a pixel counts as part of the crest. Low, so a
+     *  soft edge counts, but above the faint haze some exports leave
+     *  across the whole transparent field. */
+    private const val SOLID_ALPHA = 24
 
     fun of(src: Bitmap, diameter: Int): Bitmap {
         val d = diameter.coerceAtLeast(8)
@@ -52,11 +69,12 @@ object LogoDisc {
         if (hasTransparency(src)) {
             paint.color = Color.WHITE
             c.drawCircle(r, r, r, paint)
-            val box = d * CONTAIN_FRAC
-            val scale = minOf(box / src.width, box / src.height)
-            val w = src.width * scale
-            val h = src.height * scale
-            c.drawBitmap(src, null, RectF(r - w / 2f, r - h / 2f, r + w / 2f, r + h / 2f), paint)
+            // Clipped to the plate, so a glow or shadow fainter than
+            // SOLID_ALPHA cannot spill past its edge.
+            c.save()
+            c.clipPath(Path().apply { addCircle(r, r, r, Path.Direction.CW) })
+            c.drawBitmap(src, fitToCircle(src, r), paint)
+            c.restore()
         } else {
             // A shader-filled circle rather than draw-then-mask: one
             // pass, and the edge is anti-aliased by the circle itself.
@@ -70,6 +88,63 @@ object LogoDisc {
             c.drawCircle(r, r, r, paint)
         }
         return out
+    }
+
+    /**
+     * Where to draw [src] so its visible pixels are centred on the disc
+     * of radius [r] and reach [CONTENT_FILL] of it at their farthest.
+     *
+     * Every pixel is read: the badge arrives decoded at overlay size
+     * (a few hundred pixels a side), and this runs when the overlays
+     * are built, not per frame.
+     */
+    private fun fitToCircle(src: Bitmap, r: Float): Matrix {
+        val w = src.width
+        val h = src.height
+        val px = IntArray(w * h)
+        src.getPixels(px, 0, w, 0, 0, w, h)
+        fun solid(i: Int) = (px[i] ushr 24) >= SOLID_ALPHA
+
+        var minX = w; var minY = h; var maxX = -1; var maxY = -1
+        for (y in 0 until h) {
+            val row = y * w
+            for (x in 0 until w) {
+                if (!solid(row + x)) continue
+                if (x < minX) minX = x
+                if (x > maxX) maxX = x
+                if (y < minY) minY = y
+                if (y > maxY) maxY = y
+            }
+        }
+        if (maxX < 0) {
+            // Nothing visible at all: just fit the image box.
+            val scale = 2f * r * CONTENT_FILL / max(w, h)
+            return Matrix().apply {
+                postTranslate(-w / 2f, -h / 2f)
+                postScale(scale, scale)
+                postTranslate(r, r)
+            }
+        }
+        val cx = (minX + maxX + 1) / 2f
+        val cy = (minY + maxY + 1) / 2f
+        // Farthest corner of any visible pixel from that centre.
+        var far2 = 0f
+        for (y in minY..maxY) {
+            val row = y * w
+            val dy = max(abs(y - cy), abs(y + 1 - cy))
+            for (x in minX..maxX) {
+                if (!solid(row + x)) continue
+                val dx = max(abs(x - cx), abs(x + 1 - cx))
+                val d2 = dx * dx + dy * dy
+                if (d2 > far2) far2 = d2
+            }
+        }
+        val scale = r * CONTENT_FILL / sqrt(far2).coerceAtLeast(1f)
+        return Matrix().apply {
+            postTranslate(-cx, -cy)
+            postScale(scale, scale)
+            postTranslate(r, r)
+        }
     }
 
     /** Sampled rather than scanned: a 256px badge is 65k pixels and
