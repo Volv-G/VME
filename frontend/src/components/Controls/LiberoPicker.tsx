@@ -3,7 +3,7 @@ import type { RosterDto } from "../../types/api";
 
 interface Props {
   roster: RosterDto;
-  /** Jerseys currently designated for this match. */
+  /** Jerseys that are liberos at the playhead. */
   value: readonly number[];
   onSave: (liberos: number[]) => Promise<void>;
   onClose: () => void;
@@ -11,9 +11,10 @@ interface Props {
 
 /**
  * Inline multi-select that replaces the lineup grid while choosing the
- * liberos for this match. Same shape as `RosterPicker` so the card does
- * not jump, but it toggles rather than picks: a match has one or two,
- * set once before first serve and then left alone.
+ * liberos. Same shape as `RosterPicker` so the card does not jump, but
+ * it toggles rather than picks: a team has one or two. Saving records
+ * a `liberos` event at the playhead, so they can change between sets -
+ * set them before the first serve, and again at a set where they change.
  */
 export function LiberoPicker({ roster, value, onSave, onClose }: Props) {
   const [draft, setDraft] = useState<number[]>([...value]);
@@ -50,7 +51,7 @@ export function LiberoPicker({ roster, value, onSave, onClose }: Props) {
   return (
     <div className="roster-picker">
       <div className="roster-picker-header">
-        <strong>Liberos for this match</strong>
+        <strong title="Recorded as an event at the playhead">Liberos from here on</strong>
         <span>
           <button onClick={onClose} disabled={saving}>
             Cancel

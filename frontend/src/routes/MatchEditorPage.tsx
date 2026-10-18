@@ -637,12 +637,6 @@ export function MatchEditorPage() {
     }
   }
 
-  async function setLiberos(liberos: number[]) {
-    if (!data) return;
-    setData(await api.patchMatch(team, tournament, date, match, { liberos }));
-    setError(null);
-  }
-
   async function runAutoCuts(opts: { hasIntroClip?: boolean } = {}) {
     const r = await api.autoCuts(team, tournament, date, match, opts);
     setData(r.match);
@@ -797,7 +791,6 @@ export function MatchEditorPage() {
             onCreate={createEvent}
             onAutoCuts={runAutoCuts}
             onTeamColorChange={setTeamColor}
-            onLiberosChange={setLiberos}
             onSwapSides={swapSides}
             onPlaybackLock={setPlaybackLock}
             liberoCheckFrame={liberoCheckFrame}

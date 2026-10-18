@@ -446,9 +446,14 @@ class Match:
             and self.to_global_frame(e.clip_id, e.local_frame) == global_frame
         ]
 
+    def initial_state(self) -> GameState:
+        """The state before the first event: nothing scored, nobody on
+        court, and the liberos the match was set up with."""
+        return GameState(liberos=list(self.liberos))
+
     def state_at_global_frame(self, global_frame: int) -> GameState:
         """Return the state after the last event at or before `global_frame`."""
-        state = GameState()
+        state = self.initial_state()
         for e in self.events:
             if isinstance(e, ClipTransitionEvent):
                 continue
@@ -462,7 +467,7 @@ class Match:
     def validate(self) -> list[ValidationError]:
         """Re-run validation across all events and return a flat list."""
         errors: list[ValidationError] = []
-        state = GameState()
+        state = self.initial_state()
         for e in self.events:
             if isinstance(e, ClipTransitionEvent):
                 continue
@@ -498,7 +503,7 @@ class Match:
         self.events.sort(key=key)
 
     def _recompute_states(self) -> None:
-        state = GameState()
+        state = self.initial_state()
         for e in self.events:
             if isinstance(e, ClipTransitionEvent):
                 # Transitions don't affect state.

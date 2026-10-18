@@ -44,8 +44,6 @@ interface Props {
   onStepPoint?: (dir: 1 | -1) => void;
   /** Called once the rule has been applied or dismissed. */
   onLiberoChecked?: () => void;
-  /** Persist the libero designation for this match (PATCH liberos). */
-  onLiberosChange?: (liberos: number[]) => Promise<void>;
   /** Flip the match's scoreboard (away team on the left). Optional:
    *  without it the toggle on the score display is not rendered. */
   onSwapSides?: () => Promise<void>;
@@ -170,7 +168,6 @@ export function ControlsPanel({
   liberoCheckFrame,
   onStepPoint,
   onLiberoChecked,
-  onLiberosChange,
   onSwapSides,
   onPlaybackLock,
   onRosterChanged,
@@ -183,11 +180,11 @@ export function ControlsPanel({
   // version busts the browser cache for the fixed logo filename.
   const [logoVersion, setLogoVersion] = useState<number>(() => Date.now());
   const live = stateAtPlayhead(data.events, currentFrame);
-  // A backend that has not been restarted since the liberos field was
-  // added answers without it. Defaulted once, here, rather than at
-  // each use: a stale server should cost the libero button, not the
-  // whole editor.
-  const liberos = data.liberos ?? [];
+  // The liberos at the playhead: the match's own list until a `liberos`
+  // event changes it, so a team can name different ones for each set.
+  // Falls back to the match's list on a backend whose states lack the
+  // field, and to none on one older still.
+  const liberos = live.liberos ?? data.liberos ?? [];
   const homeName = data.home_roster.team_name || data.team;
   const opponentName = data.opponent_roster.team_name || data.opponent || "Away";
 
@@ -244,16 +241,17 @@ export function ControlsPanel({
     const frame = liberoCheckFrame;
     onLiberoChecked?.();
     const after = stateAtPlayhead(data.events, frame);
-    const hit = frontRowLibero(after.home_positions, liberos);
+    const libs = after.liberos ?? data.liberos ?? [];
+    const hit = frontRowLibero(after.home_positions, libs);
     if (!hit) return;
-    const pairs = liberoPairs(data.events, liberos, frame);
+    const pairs = liberoPairs(data.events, data.liberos ?? [], frame);
     // This set's pairing first; failing that, whoever this libero last
     // came on for earlier in the match. The fallback is what stops the
     // first rotation of every set asking a question the set before
     // already answered - see `LiberoPairs.last`.
     const back = pairs.current[hit.jersey] ?? pairs.last[hit.jersey];
     const onCourt = Object.values(after.home_positions);
-    if (back != null && !liberos.includes(back) && !onCourt.includes(back)) {
+    if (back != null && !libs.includes(back) && !onCourt.includes(back)) {
       void commit("substitution", {
         team: "home",
         position: hit.position,
@@ -497,13 +495,12 @@ export function ControlsPanel({
               setSubReason(null);
               setLiberoPickerOpen((o) => !o);
             }}
-            disabled={busy || !onLiberosChange}
+            disabled={busy}
             title={
-              liberos.length
-                ? `Liberos: ${liberos
-                    .map((n) => `#${n}`)
-                    .join(", ")} - click to change`
-                : "Designate liberos for this match"
+              (liberos.length
+                ? `Liberos here: ${liberos.map((n) => `#${n}`).join(", ")}`
+                : "No liberos here") +
+              " - click to change them from the playhead on (e.g. at a new set)"
             }
             aria-label="Designate liberos"
           >
@@ -518,14 +515,10 @@ export function ControlsPanel({
           <LiberoPicker
             roster={data.home_roster}
             value={liberos}
-            onSave={async (liberos) => {
-              setErr(null);
-              try {
-                await onLiberosChange?.(liberos);
-                setLiberoPickerOpen(false);
-              } catch (e) {
-                setErr(String(e));
-              }
+            onSave={async (numbers) => {
+              // An event at the playhead, not a match setting: liberos
+              // can change between sets, and from here on these are they.
+              if (await commit("liberos", { numbers })) setLiberoPickerOpen(false);
             }}
             onClose={() => setLiberoPickerOpen(false)}
           />

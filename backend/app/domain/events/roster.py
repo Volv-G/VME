@@ -1,9 +1,10 @@
-"""Roster events: substitutions, and the libero's 3-way rotation."""
+"""Roster events: substitutions, the libero's 3-way rotation, and who
+the liberos are."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, Optional
+from typing import ClassVar, Optional, Tuple
 
 from ..effects import (
     OverlayEffect,
@@ -67,6 +68,33 @@ class SubstitutionEvent(MatchEvent):
             player_out_number=out_number,
             team=self.team,
         )
+
+
+@register_event
+@dataclass
+class LiberosEvent(MatchEvent):
+    """From here on, these home jerseys are the liberos.
+
+    A team may name different liberos for each set - the second libero
+    starting the next one, a player swapping into the libero shirt - so
+    the designation is an event, placed where it changes (typically
+    between a set end and the next first serve), rather than one list
+    for the match. Before the first of these, the match's own list
+    (`Match.liberos`) applies, so matches set up with one keep it.
+
+    Changes nothing on court and puts nothing on the video: it changes
+    who the libero rules - back row only, replacement at the rotation -
+    apply to. An empty `numbers` means no liberos from here.
+    """
+
+    type_name: ClassVar[str] = "liberos"
+
+    numbers: Tuple[int, ...] = ()
+
+    def apply(self, state: GameState, all_events):
+        new_state = super().apply(state, all_events)
+        new_state.liberos = list(dict.fromkeys(int(n) for n in self.numbers))
+        return new_state
 
 
 @register_event

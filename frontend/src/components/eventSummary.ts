@@ -59,6 +59,15 @@ export function summarizeEvent(
       return `Sub: ${inLabel} for ${outLabel} at P${pos}${teamStr}`;
     }
 
+    case "liberos": {
+      // Written without `numbers` when it is empty: the backend omits a
+      // field equal to its default.
+      const numbers = ((p.numbers as number[] | undefined) ?? []).map(Number);
+      return numbers.length
+        ? `Liberos: ${numbers.map((n) => playerLabel(ctx.homeRoster, n)).join(", ")}`
+        : "No liberos";
+    }
+
     case "libero_rotation": {
       const team = String(p.team || "home");
       const libero = Number(p.libero_number);

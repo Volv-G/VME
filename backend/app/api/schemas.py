@@ -247,6 +247,8 @@ class GameStateOut(BaseModel):
     home_sets: int
     away_sets: int
     serving_team: Optional[str] = None  # "home" | "away" | None
+    # Home jerseys that are liberos at this point (see `LiberosEvent`).
+    liberos: list[int] = Field(default_factory=list)
     home_positions: dict[int, Optional[int]] = Field(default_factory=dict)
     away_positions: dict[int, Optional[int]] = Field(default_factory=dict)
     game_started: bool = False

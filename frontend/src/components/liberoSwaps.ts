@@ -77,8 +77,11 @@ export function analyzeLiberoSwaps(
   fps: number
 ): Map<number, LiberoSwap> {
   const out = new Map<number, LiberoSwap>();
-  if (!liberos.length || fps <= 0) return out;
-  const isLibero = (n: number | null) => n != null && liberos.includes(n);
+  if (fps <= 0) return out;
+  // Against the designation in force at each event - it can change
+  // between sets - falling back to the match's list on an older backend.
+  let current: readonly number[] = liberos;
+  const isLibero = (n: number | null) => n != null && current.includes(n);
 
   // The most recent exit for each libero, within the current gap. Keyed
   // by jersey so a team with two liberos cannot cross them over.
@@ -86,6 +89,7 @@ export function analyzeLiberoSwaps(
 
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
+    current = events[i - 1]?.state?.liberos ?? liberos;
     if (RALLY_BOUNDARY.has(ev.type)) {
       pendingExit = new Map();
       continue;

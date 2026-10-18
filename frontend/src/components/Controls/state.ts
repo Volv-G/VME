@@ -125,8 +125,11 @@ export function liberoPairs(
   liberos: readonly number[],
   uptoFrame: number
 ): LiberoPairs {
+  // Who is a libero changes with `liberos` events, so each event is read
+  // against the designation in force just before it; `liberos` is the
+  // match's own list, for an older backend whose states lack one.
   const isLibero = (j: number | null): j is number =>
-    j != null && liberos.includes(j);
+    j != null && (prev.liberos ?? liberos).includes(j);
   const current: Record<number, number> = {};
   const last: Record<number, number> = {};
   let prev: GameStateDto = EMPTY_STATE;

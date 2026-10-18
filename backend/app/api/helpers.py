@@ -35,6 +35,7 @@ def _serialize_state(state: GameState | None) -> GameStateOut | None:
         away_sets=state.away_sets,
         # Team is a str-Enum; .value yields "home" / "away".
         serving_team=state.serving_team.value if state.serving_team is not None else None,
+        liberos=list(state.liberos),
         home_positions=dict(state.home_positions),
         away_positions=dict(state.away_positions),
         game_started=state.game_started,

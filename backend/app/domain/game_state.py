@@ -37,6 +37,13 @@ class GameState:
 
     serving_team: Optional[Team] = None
 
+    # Home jerseys designated libero at this point. Seeded from the
+    # match's own list (`Match.liberos`, the designation it started
+    # with) and replaced by each `liberos` event, so a team can name
+    # different liberos from one set to the next. Not touched by a set
+    # end: a designation holds until it is changed.
+    liberos: list[int] = field(default_factory=list)
+
     home_positions: dict[int, Optional[int]] = field(
         default_factory=lambda: dict.fromkeys(range(1, 7), None)
     )
@@ -66,6 +73,7 @@ class GameState:
             away_sets=self.away_sets,
             set_scores=list(self.set_scores),
             serving_team=self.serving_team,
+            liberos=list(self.liberos),
             home_positions=self.home_positions.copy(),
             away_positions=self.away_positions.copy(),
             game_started=self.game_started,

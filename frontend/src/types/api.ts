@@ -145,6 +145,9 @@ export interface GameStateDto {
   home_sets: number;
   away_sets: number;
   serving_team: "home" | "away" | null;
+  /** Home jerseys that are liberos at this point: the match's own list
+   *  until a `liberos` event changes it. Absent from an older backend. */
+  liberos?: number[];
   /** Position number (1-6) -> player jersey number, or null when empty. */
   home_positions: Record<number, number | null>;
   away_positions: Record<number, number | null>;
@@ -437,6 +440,7 @@ export const EVENT_TYPES = [
   "highlight",
   "substitution",
   "libero_rotation",
+  "liberos",
   "replay",
   "cut_start",
   "cut_end",

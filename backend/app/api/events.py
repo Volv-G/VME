@@ -282,6 +282,12 @@ def import_events(
 
     if body.replace:
         m.events = [e for e in m.events if isinstance(e, ClipTransitionEvent)]
+    # The phone's designation, which it has always sent and this used to
+    # drop: liberos named on the phone came over as plain players. It is
+    # the match's starting list; `liberos` events change it from there.
+    if body.liberos is not None:
+        m.liberos = list(dict.fromkeys(int(n) for n in body.liberos))
+        m._recompute_states()
 
     imported = 0
     snapped = 0
