@@ -506,6 +506,26 @@ export function ControlsPanel({
           >
             L{liberos.length ? `×${liberos.length}` : ""}
           </button>
+          {/* Forced rotation: the line-up a slot out (a missed point, a
+              referee's call). Small - a correction, not a scoring action. */}
+          <button
+            className="rotate-btn"
+            onClick={() => commit("rotation", { team: "home", steps: -1 })}
+            disabled={busy}
+            title={`Rotate ${homeName} back one slot (correction)`}
+            aria-label={`Rotate ${homeName} back`}
+          >
+            ↺
+          </button>
+          <button
+            className="rotate-btn"
+            onClick={() => commit("rotation", { team: "home", steps: 1 })}
+            disabled={busy}
+            title={`Rotate ${homeName} forward one slot (correction)`}
+            aria-label={`Rotate ${homeName} forward`}
+          >
+            ↻
+          </button>
           <button className="primary" onClick={() => commit("score", { team: "home" })} disabled={busy}>
             +1
           </button>

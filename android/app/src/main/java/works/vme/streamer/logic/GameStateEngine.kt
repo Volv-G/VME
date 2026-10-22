@@ -92,6 +92,7 @@ object GameStateEngine {
         EventType.Ace -> onScore(state, teamOf(e) ?: return state, tracksServes)
         EventType.ScoreCorrection -> onCorrection(state, e)
         EventType.Substitution -> onSubstitution(state, e, liberos)
+        EventType.Rotation -> onRotation(state, e)
         else -> state   // stat-only or timeline-only events
     }
 
@@ -231,6 +232,20 @@ object GameStateEngine {
             liberoReplacements = pairs,
             liberoLastPartners = lastPartners,
         )
+    }
+
+    /**
+     * A forced rotation of the home line-up, `steps` slots (+1 forward,
+     * -1 back). Only the home team has a line-up here. Libero pairings
+     * follow jerseys, not slots, so they are untouched.
+     */
+    private fun onRotation(state: GameState, e: MatchEvent): GameState {
+        if (teamOf(e) == Side.Away) return state
+        val steps = (e.payload["steps"] as? Number)?.toInt() ?: 1
+        var positions = state.homePositions
+        // -1 is five turns forward: six turns is the same line-up.
+        repeat(Math.floorMod(steps, 6)) { positions = rotate(positions) }
+        return state.copy(homePositions = positions)
     }
 
     /** Clockwise rotation used after a side-out: 2->1, 3->2, ..., 1->6. */

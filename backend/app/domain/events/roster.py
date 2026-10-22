@@ -72,6 +72,32 @@ class SubstitutionEvent(MatchEvent):
 
 @register_event
 @dataclass
+class RotationEvent(MatchEvent):
+    """A rotation the rules did not make: the scorer correcting the line-up.
+
+    The rotation normally comes from the score - a side-out turns the
+    team that won it - so a missed point, a rally scored to the wrong
+    side or a referee's rotation call leaves the line-up a slot out with
+    no event to fix it but six substitutions. This turns it `steps`
+    slots: +1 forward (clockwise, as on a side-out), -1 back. Puts
+    nothing on the video.
+    """
+
+    type_name: ClassVar[str] = "rotation"
+
+    team: Team = Team.HOME
+    steps: int = 1
+
+    def apply(self, state: GameState, all_events):
+        new_state = super().apply(state, all_events)
+        # -1 is five turns forward: six turns is the same line-up.
+        for _ in range(self.steps % 6):
+            new_state.rotate_team(self.team)
+        return new_state
+
+
+@register_event
+@dataclass
 class LiberosEvent(MatchEvent):
     """From here on, these home jerseys are the liberos.
 

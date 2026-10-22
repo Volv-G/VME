@@ -441,6 +441,7 @@ export const EVENT_TYPES = [
   "substitution",
   "libero_rotation",
   "liberos",
+  "rotation",
   "replay",
   "cut_start",
   "cut_end",

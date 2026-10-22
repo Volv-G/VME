@@ -1336,6 +1336,24 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         if (isHomeCard) homeServeDot = dot else awayServeDot = dot
         row.addView(dot, LinearLayout.LayoutParams(18, 18).apply { marginEnd = 8 })
 
+        // Forced rotation, back and forward, on the home card only -
+        // the one line-up the phone keeps. A correction for a line-up a
+        // slot out, used a few times a season, so small and plain.
+        if (isHomeCard) {
+            for ((label, steps) in listOf("\u21BA" to -1, "\u21BB" to 1)) {
+                row.addView(gated(compactButton(label) {
+                    record(EventType.Rotation, mapOf("team" to side.wire, "steps" to steps))
+                    log("rotation: ${if (steps < 0) "back" else "forward"}")
+                }).apply {
+                    textSize = 13f
+                    setPadding(18, 8, 18, 8)
+                    alpha = 0.8f
+                }, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginEnd = gapPx / 2 })
+            }
+        }
         // The "Sub" button was removed: tapping a position slot in
         // the rotation grid opens the same jersey picker directly.
         // The volleyball emoji is a first-serve pick; kept small
@@ -2173,9 +2191,12 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * thing that cannot go into a front-row slot is another libero.
      */
     private fun enforceLiberoRule(after: EventType) {
+        // A forced rotation moves the line-up the same way a side-out
+        // does, so it can carry a libero forward too.
         val scoring = after == EventType.Score ||
             after == EventType.Kill ||
-            after == EventType.Ace
+            after == EventType.Ace ||
+            after == EventType.Rotation
         // A prompt held back from a Kill (see below) fires on the next
         // event, whatever it turns out to be.
         if (!scoring && !liberoPromptDeferred) return

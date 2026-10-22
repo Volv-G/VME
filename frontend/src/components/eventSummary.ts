@@ -59,6 +59,12 @@ export function summarizeEvent(
       return `Sub: ${inLabel} for ${outLabel} at P${pos}${teamStr}`;
     }
 
+    case "rotation": {
+      // `steps` and `team` are omitted at their defaults (1, home).
+      const steps = Number(p.steps ?? 1);
+      return `Rotation ${steps < 0 ? "back ↺" : "forward ↻"}${teamSuffix(String(p.team || "home"))}`;
+    }
+
     case "liberos": {
       // Written without `numbers` when it is empty: the backend omits a
       // field equal to its default.

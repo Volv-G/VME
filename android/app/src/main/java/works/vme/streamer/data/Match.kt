@@ -56,6 +56,10 @@ enum class EventType(val wire: String) {
 
     // Roster.
     Substitution("substitution"),
+    /** A forced rotation: `steps` +1 forward (clockwise, as on a
+     *  side-out) or -1 back, for `team`. The scorer's correction when
+     *  the line-up is a slot out; VME's `rotation`. */
+    Rotation("rotation"),
 
     // Timeline markers (rarely used courtside but kept for schema parity).
     CutStart("cut_start"),

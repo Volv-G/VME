@@ -439,9 +439,15 @@ export function MatchEditorPage() {
     const updated = await createWithRetry(body, prevIds);
     if (!updated) return;
     setData(updated);
-    // Only scoring events rotate, so only they can carry a libero into
-    // the front row. Checked once `data` reflects the new event.
-    if (body.type === "score" || body.type === "kill" || body.type === "ace") {
+    // Only scoring events and forced rotations rotate, so only they can
+    // carry a libero into the front row. Checked once `data` reflects
+    // the new event.
+    if (
+      body.type === "score" ||
+      body.type === "kill" ||
+      body.type === "ace" ||
+      body.type === "rotation"
+    ) {
       setLiberoCheckFrame(currentFrame);
     }
     const created = updated.events.find((e) => !prevIds.has(e.id));
