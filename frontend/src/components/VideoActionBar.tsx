@@ -98,7 +98,7 @@ export function VideoActionBar({
         className="va-step va-next"
         onClick={onNextEvent}
         disabled={!hasNextEvent}
-        title="Jump to the next event"
+        title="Jump to the next event (E)"
         aria-label="Next event"
       >
         <span className="va-full">Event ▶</span>

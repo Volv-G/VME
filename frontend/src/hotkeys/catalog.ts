@@ -42,6 +42,17 @@ export const ACTION_CATALOG: readonly ActionDef[] = [
     category: "Playback",
   },
   {
+    id: "playback.nextEvent",
+    label: "Jump to the next event",
+    category: "Playback",
+    description: "Move the playhead to the next event after it, as the Event ▶ button does.",
+  },
+  {
+    id: "playback.prevEvent",
+    label: "Jump to the previous event",
+    category: "Playback",
+  },
+  {
     id: "events.ballServed",
     label: "Ball Served",
     category: "Events",
@@ -57,6 +68,8 @@ export const DEFAULT_BINDINGS: Bindings = {
   "playback.play4x": [],
   "playback.back1s": ["A"],
   "playback.fwd1s": ["D"],
+  "playback.nextEvent": ["E"],
+  "playback.prevEvent": [],
   "events.ballServed": ["Q"],
 };
 

@@ -15,6 +15,7 @@ import { CurrentEventBadge } from "../components/CurrentEventBadge";
 import { VideoActionBar } from "../components/VideoActionBar";
 import { VideoPlayer, type VideoPlayerHandle } from "../components/VideoPlayer";
 import { displayName } from "../util/names";
+import { useHotkeyAction } from "../hotkeys";
 
 const TOP_H_KEY = "vme.topRowH";
 const TOP_MIN = 220;
@@ -381,6 +382,9 @@ export function MatchEditorPage() {
     seek(target.global_frame as number);
     setSelectedEventId(target.id);
   }
+  // The Event ◀ / ▶ buttons, from the keyboard (E by default).
+  useHotkeyAction("playback.nextEvent", () => stepToEvent(1));
+  useHotkeyAction("playback.prevEvent", () => stepToEvent(-1));
 
   /**
    * Post an event, and make sure it actually landed.
