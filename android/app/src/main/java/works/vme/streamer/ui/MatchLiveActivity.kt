@@ -130,7 +130,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     // Rebuilt when the adapter is replugged: a source whose camera
     // helper has been released cannot be restarted, so recovery means
     // a new one rather than a reset of this one.
-    private var uvcSource = UvcVideoSource(target, ::log)
+    private var uvcSource = UvcVideoSource(this, target, ::log)
     /** The phone's own camera while [input] is [VideoInput.PhoneCamera]. */
     private var phoneCamera: Camera2Source? = null
     private val micSource by lazy { MicrophoneSource() }
@@ -3154,7 +3154,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         val want = cameraTarget(quality)
         if (input == VideoInput.Hdmi && !cameraLost && uvcSource.target != want) {
             log("camera: capture ${want.width}x${want.height}@${want.fps} for ${quality.label}")
-            uvcSource = UvcVideoSource(want, ::log)
+            uvcSource = UvcVideoSource(this, want, ::log)
             runCatching { stream.changeVideoSource(uvcSource) }
                 .onFailure { log("camera: could not switch the video source: $it") }
         }
@@ -3593,7 +3593,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             setStatus("camera reconnected")
             return
         }
-        uvcSource = UvcVideoSource(cameraTarget(quality), ::log)
+        uvcSource = UvcVideoSource(this, cameraTarget(quality), ::log)
         runCatching { stream.changeVideoSource(uvcSource) }
             .onFailure { log("camera: could not restore the video source: $it") }
         court?.setShown(quality.court)
@@ -3970,7 +3970,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                 // is lost mid-match. Otherwise a fresh source, sized for
                 // the preset (see [cameraTarget]).
                 if (cameraLost && stream.isStreaming) blackVideoSource()
-                else UvcVideoSource(cameraTarget(quality), ::log).also { uvcSource = it }
+                else UvcVideoSource(this, cameraTarget(quality), ::log).also { uvcSource = it }
             }
         }
         runCatching { stream.changeVideoSource(source) }

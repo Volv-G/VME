@@ -1,8 +1,14 @@
 package works.vme.streamer
 
+import android.content.Context
 import android.graphics.SurfaceTexture
+import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
+import android.os.SystemClock
 import android.view.Surface
 import com.herohan.uvcapp.CameraHelper
 import com.herohan.uvcapp.ICameraHelper
@@ -66,6 +72,10 @@ import java.io.File
  * second route exists to avoid needing it.
  */
 class UvcVideoSource(
+    /** For the USB manager, used to reset the adapter's stream; read
+     *  only once the device is open, so an Activity not yet attached
+     *  is fine here. */
+    private val context: Context,
     val target: Target,
     private val log: (String) -> Unit,
 ) : VideoSource() {
@@ -102,6 +112,9 @@ class UvcVideoSource(
     private var cameraHelper: ICameraHelper? = null
     private var surface: Surface? = null
     private var running = false
+    /** This source's helper has the adapter open (device open, not yet
+     *  reported closed). */
+    private var deviceOpen = false
 
     /**
      * The format chosen on a previous open, reused on the next one.
@@ -129,16 +142,54 @@ class UvcVideoSource(
         this.surfaceTexture = surfaceTexture
         if (isRunning()) return
         surface = Surface(surfaceTexture)
-        cameraHelper = CameraHelper().apply { setStateCallback(stateCallback) }
         running = true
+        openWhenFree(SystemClock.uptimeMillis())
+    }
+
+    /**
+     * Create the camera helper - once no earlier one still has the
+     * adapter open.
+     *
+     * A source is swapped for a new one on a preset change, and stopped
+     * and restarted whenever the preview surface goes and comes back, so
+     * a new helper routinely starts while the last one is still closing.
+     * On a USB 3 adapter that left the new one opening a device that was
+     * still being torn down, and it got no frames at all - nor did any
+     * open after it - until the cable was pulled. So the new helper
+     * waits for the old one's `onDeviceClose`, up to [CLOSE_WAIT_MS].
+     */
+    private fun openWhenFree(since: Long) {
+        if (!running || cameraHelper != null) return
+        val waited = SystemClock.uptimeMillis() - since
+        if (closing && waited < CLOSE_WAIT_MS) {
+            main.postDelayed({ openWhenFree(since) }, 50)
+            return
+        }
+        if (closing) log("previous camera still closing after $waited ms - opening anyway")
+        else if (waited > 0) log("previous camera closed after $waited ms - opening")
+        closing = false
+        cameraHelper = CameraHelper().apply { setStateCallback(stateCallback) }
         log("UVC source started, waiting for device attach...")
     }
 
     override fun stop() {
-        surface?.let { cameraHelper?.removeSurface(it) }
+        val helper = cameraHelper
+        if (helper != null) {
+            surface?.let { s -> runCatching { helper.removeSurface(s) } }
+            // In order, each posted to the helper's own thread: stop the
+            // stream, close the camera, then let the connection go.
+            // `release()` alone dropped the connection with the adapter
+            // still streaming, which a USB 3 adapter does not recover from
+            // without being unplugged (see [openWhenFree]).
+            if (deviceOpen) {
+                closing = true
+                runCatching { helper.stopPreview() }
+                runCatching { helper.closeCamera() }
+            }
+            helper.release()
+        }
         surface?.release()
         surface = null
-        cameraHelper?.release()
         cameraHelper = null
         running = false
         negotiated = "(not open)"
@@ -162,8 +213,10 @@ class UvcVideoSource(
         }
 
         override fun onDeviceOpen(device: UsbDevice, isFirstOpen: Boolean) {
+            deviceOpen = true
             val helper = cameraHelper ?: return
             log("device open (first=$isFirstOpen)")
+            stopStream(device)
 
             // The size list is NOT readable yet - it comes off the open
             // camera. But if a previous open already told us what this
@@ -246,7 +299,13 @@ class UvcVideoSource(
         }
 
         override fun onCameraClose(device: UsbDevice) = Unit
-        override fun onDeviceClose(device: UsbDevice) = log("device closed")
+        override fun onDeviceClose(device: UsbDevice) {
+            if (deviceOpen) {
+                deviceOpen = false
+                closing = false
+            }
+            log("device closed")
+        }
         override fun onDetach(device: UsbDevice) = log("detached")
         override fun onCancel(device: UsbDevice) =
             log("permission cancelled - the app cannot open the adapter")
@@ -354,6 +413,14 @@ class UvcVideoSource(
                 // Ticks are 1/100 s, so a delta over one second reads as
                 // a percentage of one core.
                 val (tid, pct) = busiest
+                if (pct < 5) {
+                    // Nothing is decoding, so nothing is arriving: the
+                    // adapter is open and silent. Said plainly, because
+                    // the preview just looks frozen or black.
+                    log("NO FRAMES from the adapter (busiest thread at $pct%) - " +
+                        "unplug and replug it if the preview is frozen")
+                    return@Thread
+                }
                 if (tid == Process.myPid().toLong() || pct < 20) {
                     log("decode thread not found (busiest $tid at $pct%) - priority unchanged")
                     return@Thread
@@ -382,10 +449,74 @@ class UvcVideoSource(
         return out
     }
 
+    /**
+     * Tell the adapter to stop streaming, before the camera is opened.
+     *
+     * A USB 3 capture adapter sends video over a bulk endpoint, and for
+     * a bulk stream UVC has exactly one "stop": CLEAR_FEATURE
+     * (ENDPOINT_HALT) on that endpoint (UVC 1.5, 2.4.3.2.3). The camera
+     * library never sends it, so an adapter whose last session ended
+     * without it - the source swapped on a preset change, the preview
+     * restarted, the app killed or crashed - kept streaming to nobody
+     * and ignored every later open: an open camera, a black or frozen
+     * preview, until the cable was pulled. Sending the stop first makes
+     * every open start from an idle adapter.
+     *
+     * On its own connection, with the streaming interface claimed just
+     * for this; the library claims it again when its stream starts. A
+     * USB 2 adapter streams isochronously, has no bulk endpoint, and is
+     * left alone. Best effort: failure is logged and the open goes ahead.
+     */
+    private fun stopStream(device: UsbDevice) {
+        val usb = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return
+        val conn = runCatching { usb.openDevice(device) }.getOrNull()
+        if (conn == null) {
+            log("stream reset: could not open the device")
+            return
+        }
+        try {
+            for (i in 0 until device.interfaceCount) {
+                val intf = device.getInterface(i)
+                if (intf.interfaceClass != UsbConstants.USB_CLASS_VIDEO || intf.interfaceSubclass != 2) continue
+                for (e in 0 until intf.endpointCount) {
+                    val ep = intf.getEndpoint(e)
+                    if (ep.type != UsbConstants.USB_ENDPOINT_XFER_BULK ||
+                        ep.direction != UsbConstants.USB_DIR_IN
+                    ) continue
+                    if (!conn.claimInterface(intf, true)) {
+                        log("stream reset: streaming interface ${intf.id} is busy")
+                        continue
+                    }
+                    // bmRequestType 0x02: host-to-device, standard, endpoint.
+                    val r = conn.controlTransfer(0x02, CLEAR_FEATURE, ENDPOINT_HALT, ep.address, null, 0, 500)
+                    log("stream reset: CLEAR_FEATURE(ENDPOINT_HALT) on endpoint " +
+                        "${String.format("0x%02x", ep.address)} -> ${if (r >= 0) "ok" else "failed ($r)"}")
+                    conn.releaseInterface(intf)
+                }
+            }
+        } catch (e: Exception) {
+            log("stream reset failed: $e")
+        } finally {
+            conn.close()
+        }
+    }
+
     /** Size has no useful equals(), and identity is never right here. */
     private fun sameFormat(a: Size, b: Size?): Boolean =
         b != null && a.type == b.type && a.width == b.width &&
             a.height == b.height && a.fps == b.fps
 
     private fun hex(v: Int) = String.format("%04x", v)
+
+    companion object {
+        /** A stopped source's helper still has the adapter open. Shared,
+         *  since every source opens the same device. */
+        @Volatile
+        private var closing = false
+        private val main = Handler(Looper.getMainLooper())
+        /** Longest a new helper waits for the last one to close. */
+        private const val CLOSE_WAIT_MS = 2500L
+        private const val CLEAR_FEATURE = 0x01
+        private const val ENDPOINT_HALT = 0x00
+    }
 }
