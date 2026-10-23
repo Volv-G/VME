@@ -36,6 +36,24 @@
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:networkSecurityConfig="@xml/network_security_config">
 
+        <!-- Claims USB video devices, so the capture adapter can be
+             handed straight to this app on every replug ("Always" in
+             the chooser) instead of the chooser covering the match.
+             See UsbAttachActivity. Translucent and gone at once. -->
+        <activity
+            android:name=".ui.UsbAttachActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:noHistory="true"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_video_filter" />
+        </activity>
+
         <!-- HomeActivity is the launcher: the app is no longer a
              single-screen spike. -->
         <activity

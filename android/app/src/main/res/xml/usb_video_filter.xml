@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What UsbAttachActivity claims: any USB video device (UVC, class 14),
+     which is what every HDMI capture adapter so far has presented. The
+     filter matches the device class or any of its interfaces' classes,
+     so the adapter's "miscellaneous" device class (239) does not hide
+     the video interface behind it. -->
+<resources>
+    <usb-device class="14" />
+</resources>
