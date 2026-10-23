@@ -45,6 +45,7 @@ object Settings {
     private const val KEY_HEVC = "stream.hevc"
     private const val KEY_INPUT = "stream.input"
     private const val KEY_AUTO_BITRATE = "stream.auto_bitrate"
+    private const val KEY_AUTO_DEFAULTED = "stream.auto_defaulted"
 
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -71,9 +72,24 @@ object Settings {
                else VmeClient.Credentials(u, p)
     }
 
-    /** How much bandwidth the stream may use. See [StreamQuality]. */
-    fun streamQuality(ctx: Context): StreamQuality =
-        StreamQuality.fromKey(prefs(ctx).getString(KEY_QUALITY, null))
+    /**
+     * How much bandwidth the stream may use. See [StreamQuality].
+     *
+     * Auto became the default after phones already had a preset saved,
+     * so a saved choice is moved to Auto once; anything picked after
+     * that is kept as before.
+     */
+    fun streamQuality(ctx: Context): StreamQuality {
+        val p = prefs(ctx)
+        if (!p.getBoolean(KEY_AUTO_DEFAULTED, false)) {
+            p.edit()
+                .putString(KEY_QUALITY, StreamQuality.Auto.key)
+                .putBoolean(KEY_AUTO_DEFAULTED, true)
+                .apply()
+            return StreamQuality.Auto
+        }
+        return StreamQuality.fromKey(p.getString(KEY_QUALITY, null))
+    }
 
     fun setStreamQuality(ctx: Context, quality: StreamQuality) {
         prefs(ctx).edit().putString(KEY_QUALITY, quality.key).apply()

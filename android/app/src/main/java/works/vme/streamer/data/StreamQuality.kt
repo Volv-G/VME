@@ -106,7 +106,7 @@ enum class StreamQuality(
         }
 
     companion object {
-        val DEFAULT = Full
+        val DEFAULT = Auto
 
         fun fromKey(key: String?): StreamQuality =
             values().firstOrNull { it.key == key } ?: DEFAULT
