@@ -44,6 +44,7 @@ object Settings {
     private const val KEY_QUALITY = "stream.quality"
     private const val KEY_HEVC = "stream.hevc"
     private const val KEY_INPUT = "stream.input"
+    private const val KEY_AUTO_BITRATE = "stream.auto_bitrate"
 
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -90,6 +91,19 @@ object Settings {
 
     fun setUseHevc(ctx: Context, on: Boolean) {
         prefs(ctx).edit().putBoolean(KEY_HEVC, on).apply()
+    }
+
+    /**
+     * Where Auto last settled, in bits per second, or null. The next
+     * stream starts from it rather than from scratch: the same hall
+     * usually has the same link, and climbing from a guess costs the
+     * first minute of the match.
+     */
+    fun autoBitrate(ctx: Context): Int? =
+        prefs(ctx).getInt(KEY_AUTO_BITRATE, 0).takeIf { it > 0 }
+
+    fun setAutoBitrate(ctx: Context, bps: Int) {
+        prefs(ctx).edit().putInt(KEY_AUTO_BITRATE, bps).apply()
     }
 
     /** HDMI adapter or the phone's own camera. See [VideoInput]. */

@@ -69,6 +69,11 @@ enum class StreamQuality(
     /** True when the frame is the rotation diagram instead. */
     val court: Boolean = false,
 ) {
+    // Prepared as Full (1080p30), then the bitrate follows the link: see
+    // works.vme.streamer.logic.AutoBitrate. `bitrate` here is only where
+    // a first stream starts; later ones start where the last one settled.
+    Auto("auto", "Auto – 0.5 to 6 Mbps, 1080p, follows the connection",
+        3_000_000, 1920, 1080, 30, 2),
     Full("full", "Full – 6 Mbps, 1080p", 6_000_000, 1920, 1080, 30, 2),
     Medium("medium", "Reduced – 3 Mbps, 720p", 3_000_000, 1280, 720, 30, 2),
     Low("low", "Low – 1.5 Mbps, 720p", 1_500_000, 1280, 720, 30, 3),
@@ -87,9 +92,13 @@ enum class StreamQuality(
         video = false,
     );
 
+    /** True for [Auto]: the bitrate is the controller's, not fixed. */
+    val auto: Boolean get() = this == Auto
+
     /** Compact form for the header chip. */
     val shortLabel: String
         get() = when {
+            auto -> "Auto"
             court -> "court only"
             !video -> "no video"
             bitrate >= 1_000_000 -> "%.1f Mbps".format(bitrate / 1_000_000f)

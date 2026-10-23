@@ -74,6 +74,7 @@ import works.vme.streamer.data.StreamQuality
 import works.vme.streamer.data.TeamStore
 import works.vme.streamer.data.VideoInput
 import works.vme.streamer.data.VmeClient
+import works.vme.streamer.logic.AutoBitrate
 import works.vme.streamer.logic.GameStateEngine
 import works.vme.streamer.overlay.BlackoutOverlay
 import works.vme.streamer.overlay.CardOverlay
@@ -312,6 +313,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private var currentTab: Tab = Tab.Events
     /** Rolling upload rate, refreshed by [onNewBitrate]. */
     private var lastBitrateKbps: Long = 0
+    /** The Auto controller while live on Auto, else null. */
+    private var autoRate: AutoBitrate? = null
+    /** Frame height the encoder was prepared with, 0 before. */
+    private var preparedHeight = 0
     private var popup: PopupOverlay? = null
     private var card: CardOverlay? = null
     /** True once prepareVideo/prepareAudio has been called this
@@ -2979,6 +2984,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         if (!ensurePrepared()) return
         routeAudio()
         stream.getStreamClient().setReTries(10)
+        if (quality.auto) startAuto()
 
         // Blackout goes on FIRST: filters composite in the order they
         // were added, so everything below draws over it and the
@@ -3191,6 +3197,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             return false
         }
         prepared = true
+        preparedHeight = quality.height
         // `prepareVideo` re-applies the source's own orientation.
         applyPhoneOrientation()
         if (wasPreviewing) attachPreview()
@@ -3460,6 +3467,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     }
 
     private fun onStopStreaming() {
+        autoRate?.let { Settings.setAutoBitrate(this, it.bitrate) }
+        autoRate = null
         streamFps = 0
         backlogSec = 0f
         lastDropAt = 0L
@@ -3763,8 +3772,13 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             // frame size, rate and keyframe interval are baked in at
             // prepare, so they wait for the next Start rather than
             // risking a rebuild of a broadcast that is already up.
-            runCatching { stream.setVideoBitrateOnFly(next.bitrate) }
-                .onFailure { log("bitrate change failed: $it") }
+            if (next.auto) {
+                startAuto()
+            } else {
+                autoRate = null
+                runCatching { stream.setVideoBitrateOnFly(next.bitrate) }
+                    .onFailure { log("bitrate change failed: $it") }
+            }
             log("bandwidth -> ${next.label} (bitrate live, " +
                 "${next.width}x${next.height}@${next.fps} at the next Start)")
         } else {
@@ -3827,7 +3841,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         }
         // The marker says the picture is deliberately black, so a
         // modest number on a blank stream is not a mystery.
-        healthLabel.text = (if (quality.video) rate else "$rate ■") + lagText + fpsSuffix()
+        healthLabel.text = (if (autoRate != null) "Auto " else "") +
+            (if (quality.video) rate else "$rate ■") + lagText + fpsSuffix()
         healthLabel.setTextColor(
             when {
                 kbps <= 0 -> Color.parseColor("#FF5252")
@@ -3837,6 +3852,42 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             }
         )
     }
+
+    /**
+     * Hand the bitrate to the Auto controller for this stream.
+     *
+     * Its ceiling follows the frame size the encoder was prepared with -
+     * Auto chosen mid-stream keeps the size of the preset it replaced - and
+     * it starts where the last Auto stream settled, if there was one, but
+     * never under 1 Mbps: a crisis at the last venue is no reason to open
+     * this match on mush.
+     */
+    private fun startAuto() {
+        val ceiling = when {
+            preparedHeight >= 1080 -> 6_000_000
+            preparedHeight >= 720 -> 4_000_000
+            else -> 1_500_000
+        }
+        val start = (Settings.autoBitrate(this) ?: StreamQuality.Auto.bitrate)
+            .coerceIn(minOf(AUTO_FLOOR_START, ceiling), ceiling)
+        val ctl = AutoBitrate(floor = AUTO_FLOOR, ceiling = ceiling, start = start)
+        autoRate = ctl
+        runCatching { stream.setVideoBitrateOnFly(ctl.bitrate) }
+            .onFailure { log("auto: bitrate change failed: $it") }
+        log("auto: starting at ${mbps(ctl.bitrate)}, range ${mbps(AUTO_FLOOR)}-${mbps(ceiling)}")
+    }
+
+    /** One second of Auto: feed the controller, apply what it decides. */
+    private fun steerAuto(droppedNew: Boolean) {
+        val ctl = autoRate ?: return
+        if (!prepared || !stream.isStreaming) return
+        val next = ctl.sample(backlogSec, droppedNew, streamFps) ?: return
+        runCatching { stream.setVideoBitrateOnFly(next) }
+            .onFailure { log("auto: bitrate change failed: $it") }
+        log("auto: -> ${mbps(next)} (${ctl.reason})")
+    }
+
+    private fun mbps(bps: Int) = "%.1f Mbps".format(bps / 1_000_000f)
 
     /** Seconds of encoded media waiting in the send queue. */
     @Volatile private var backlogSec = 0f
@@ -3889,7 +3940,9 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      *  log now and then, so a choppy stream leaves a trail. */
     private val fpsTicker = object : Runnable {
         override fun run() {
+            val droppedBefore = droppedSoFar
             sampleNetwork()
+            steerAuto(droppedSoFar > droppedBefore)
             updateHealth()
             val now = android.os.SystemClock.elapsedRealtime()
             // `prepared` first, so this never brings the lazy stream
@@ -4083,6 +4136,9 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         private const val USB_AUDIO_SETTLE_MS = 2500L
         private const val FPS_LOG_EVERY_MS = 30_000L
         /** Upload health thresholds, in seconds of media still queued. */
+        /** Auto never goes under this, and never starts under [AUTO_FLOOR_START]. */
+        private const val AUTO_FLOOR = 500_000
+        private const val AUTO_FLOOR_START = 1_000_000
         private const val LAG_AMBER_S = 0.5f
         private const val LAG_RED_S = 2.0f
         /** How long a dropped frame keeps the chip red. */
