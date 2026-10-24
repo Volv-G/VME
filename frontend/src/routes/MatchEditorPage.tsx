@@ -724,7 +724,18 @@ export function MatchEditorPage() {
         >
           {mobilePane === "video" ? "▤ Panels" : "▶ Video"}
         </button>
-        <Link to={tournamentHref} className="muted">← {displayName(tournament)}</Link>
+        {/* Both levels up, so the team is one click from a match rather
+            than a detour through the tournament (or the team list). */}
+        <span className="muted editor-crumbs">
+          ←{" "}
+          <Link to={`/teams/${encodeURIComponent(team)}`} className="muted">
+            {displayName(team)}
+          </Link>
+          {" / "}
+          <Link to={tournamentHref} className="muted">
+            {displayName(tournament)}
+          </Link>
+        </span>
         <strong>
           {/* 0 means "unnumbered": there is only one match that day. */}
           {data.match_index ? `Match ${data.match_index} – ` : ""}
