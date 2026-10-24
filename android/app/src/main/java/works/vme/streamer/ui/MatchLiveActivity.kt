@@ -81,6 +81,7 @@ import works.vme.streamer.overlay.CardOverlay
 import works.vme.streamer.overlay.CourtOverlay
 import works.vme.streamer.overlay.LogoDisc
 import works.vme.streamer.overlay.PopupOverlay
+import works.vme.streamer.overlay.PopupStack
 import works.vme.streamer.overlay.ScoreboardOverlay
 import works.vme.streamer.overlay.StreamThumbnail
 import java.text.SimpleDateFormat
@@ -317,9 +318,9 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private var autoRate: AutoBitrate? = null
     /** Frame height the encoder was prepared with, 0 before. */
     private var preparedHeight = 0
-    private var popup: PopupOverlay? = null
-    /** The rally clock's own pop-up, stacked over [popup]. */
-    private var rallyClock: PopupOverlay? = null
+    /** The pop-ups on the stream, stacked as VME stacks them; the rally
+     *  clock is the bottom one. Null while not streaming. */
+    private var popups: PopupStack? = null
     /** When the current rally's serve went in, while one is running. */
     private var rallyServeAt: Long? = null
     /** Seconds the clock last showed; -1 while it is not up. */
@@ -2352,7 +2353,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         payload: Map<String, Any?>,
         before: GameState,
     ) {
-        val p = popup
+        val p = popups
         if (p == null) {
             // Not an error -- pop-ups only exist while streaming.
             // Logged anyway so "no pop-up appeared" can be traced to
@@ -2796,7 +2797,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // with it; the next serve starts a fresh one.
         rallyServeAt = null
         rallyClockSecs = -1
-        rallyClock?.hide()
+        popups?.hideClock()
         match = match.copy(events = match.events.dropLast(1))
         store.save(match)
         refreshAllViews()
@@ -3056,26 +3057,18 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // and toggle visibility via setAlpha (see PopupOverlay KDoc).
         // Attaching lazily on first show() did not work on the S24
         // -- addFilter after startStream silently dropped the popup.
-        val pu = PopupOverlay(
+        // A stack of them, so a Kill and its Assist - or a long rally's
+        // clock and the point that ends it - are both on screen, as in
+        // VME. Every filter is added now, for the reason above.
+        val ps = PopupStack(
             videoWidth = target.width,
             videoHeight = target.height,
             // Sit clear of the scoreboard bar rather than on top of it.
             scoreboardHeightPx = ov.barH,
         )
-        popup = pu
-        stream.getGlInterface().addFilter(pu.filter)
-        pu.attach()
-        // The rally clock stacks above the event pop-ups, so a long rally
-        // ending in a kill shows both: the time it took, and who won it.
-        val rc = PopupOverlay(
-            videoWidth = target.width,
-            videoHeight = target.height,
-            scoreboardHeightPx = ov.barH,
-            liftPx = pu.heightPx,
-        )
-        rallyClock = rc
-        stream.getGlInterface().addFilter(rc.filter)
-        rc.attach()
+        popups = ps
+        for (f in ps.filters) stream.getGlInterface().addFilter(f)
+        ps.attach()
         // Diagnostic: fire an immediate popup on Start so the
         // operator sees whether the popup pipeline is working at
         // all -- if this does not show up on the phone screen or
@@ -3506,10 +3499,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             .onFailure { log("stopStream threw: $it") }
         runCatching { if (stream.isOnPreview) stream.stopPreview() }
         overlay = null
-        popup?.hide()
-        popup = null
-        rallyClock?.hide()
-        rallyClock = null
+        popups?.hideAll()
+        popups = null
         rallyServeAt = null
         rallyClockSecs = -1
         card = null
@@ -3985,11 +3976,11 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             EventType.Score, EventType.Kill, EventType.Ace -> {
                 val serve = rallyServeAt ?: return
                 rallyServeAt = null
-                val clock = rallyClock ?: return
+                val stack = popups ?: return
                 if (rallyClockSecs < 0) return
                 val secs = ((at - serve) / 1000).toInt()
-                clock.showPinned(rallyText(secs))
-                clock.releasePinned(RALLY_CLOCK_HOLD_MS)
+                stack.showClock(rallyText(secs))
+                stack.releaseClock(RALLY_CLOCK_HOLD_MS)
                 rallyClockSecs = -1
                 log("rally clock: stopped at ${secs}s")
             }
@@ -4002,7 +3993,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
 
     private fun endRallyClock() {
         rallyServeAt = null
-        if (rallyClockSecs >= 0) rallyClock?.hide()
+        if (rallyClockSecs >= 0) popups?.hideClock()
         rallyClockSecs = -1
     }
 
@@ -4012,13 +4003,13 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private val rallyTicker = object : Runnable {
         override fun run() {
             val serve = rallyServeAt
-            val clock = rallyClock
-            if (serve != null && clock != null) {
+            val stack = popups
+            if (serve != null && stack != null) {
                 val secs = ((System.currentTimeMillis() - serve) / 1000).toInt()
                 if (secs >= RALLY_CLOCK_THRESHOLD_S && secs != rallyClockSecs) {
                     if (rallyClockSecs < 0) log("rally clock: up at ${secs}s")
                     rallyClockSecs = secs
-                    clock.showPinned(rallyText(secs))
+                    stack.showClock(rallyText(secs))
                 }
             }
             window.decorView.postDelayed(this, 250)

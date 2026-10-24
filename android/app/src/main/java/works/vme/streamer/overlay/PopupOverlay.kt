@@ -120,8 +120,8 @@ class PopupOverlay(
      *  clear of it. Pass 0 if there is no scoreboard. */
     scoreboardHeightPx: Int = 0,
     /** Extra lift above where a pop-up normally rests, to stack this one
-     *  over another (the rally clock over the event pop-ups). */
-    liftPx: Int = 0,
+     *  over others (see [PopupStack], which moves it with [setLift]). */
+    private var liftPx: Int = 0,
 ) {
     private val handler = Handler(Looper.getMainLooper())
     val filter: ImageObjectFilterRender = ImageObjectFilterRender()
@@ -202,7 +202,7 @@ class PopupOverlay(
     // margin=20 / bottom_margin=80 at 1080p.
     private val marginPx = (videoWidth * 0.0104f).toInt()
     private val bottomMarginPx =
-        (videoHeight * 0.074f).toInt().coerceAtLeast(scoreboardHeightPx + padPx) + liftPx
+        (videoHeight * 0.074f).toInt().coerceAtLeast(scoreboardHeightPx + padPx)
 
     /** The canvas height, for stacking another pop-up above this one. */
     val heightPx: Int get() = canvasH
@@ -210,6 +210,35 @@ class PopupOverlay(
     /** Pinned (see [showPinned]): slides in once, then stays put. */
     private var pinnedMode = false
     private var pinnedUp = false
+
+    /** On screen: shown and not yet hidden. */
+    var isUp = false
+        private set
+    /** Height of the box last drawn, for stacking the next one above. */
+    var boxHeightPx = 0
+        private set
+    /** Called whenever the pop-up goes, so a stack can close the gap. */
+    var onHidden: (() -> Unit)? = null
+
+    /** The horizontal position last set, so a lift can keep it. */
+    private var curXPct = 0f
+    private var syPct = 0f
+
+    private fun place(xPct: Float) {
+        curXPct = xPct
+        filter.setPosition(xPct, yPct)
+    }
+
+    /**
+     * Raise the pop-up [px] above where it normally rests, keeping its
+     * horizontal position - mid-slide or at rest.
+     */
+    fun setLift(px: Int) {
+        if (px == liftPx) return
+        liftPx = px
+        yPct = 100f - syPct - (100f * (bottomMarginPx + liftPx) / videoHeight)
+        runCatching { filter.setPosition(curXPct, yPct) }
+    }
 
     // ---- animation state -------------------------------------------
     // Written on the main thread by show()/tick(), read by tick().
@@ -230,10 +259,10 @@ class PopupOverlay(
                            else (elapsed.toFloat() / animDurationMs)
             if (pinnedMode && progress >= SLIDE_IN_FRAC) {
                 // Arrived: a pinned pop-up rests here until released.
-                filter.setPosition(restXPct, yPct)
+                place(restXPct)
                 return
             }
-            filter.setPosition(restXPct + xOffsetPct(progress), yPct)
+            place(restXPct + xOffsetPct(progress))
             // Keep ticking while there is movement left. Between the
             // two ramps the position is constant, but we keep the
             // timer running rather than stopping and restarting it --
@@ -286,14 +315,14 @@ class PopupOverlay(
      */
     fun attach() {
         val sxPct = 100f * canvasW / videoWidth
-        val syPct = 100f * canvasH / videoHeight
+        syPct = 100f * canvasH / videoHeight
         restXPct = 100f - sxPct - (100f * marginPx / videoWidth)
-        yPct = 100f - syPct - (100f * bottomMarginPx / videoHeight)
+        yPct = 100f - syPct - (100f * (bottomMarginPx + liftPx) / videoHeight)
         // Slide far enough right that the whole card, plus its
         // margin, is off the frame at full offset.
         slideSpanPct = sxPct + (100f * marginPx / videoWidth)
         filter.setScale(sxPct, syPct)
-        filter.setPosition(restXPct + slideSpanPct, yPct)
+        place(restXPct + slideSpanPct)
         Log.i(TAG, "attached canvas=${canvasW}x$canvasH " +
             "scale=${"%.1f".format(sxPct)}x${"%.1f".format(syPct)} " +
             "rest=${"%.1f".format(restXPct)},${"%.1f".format(yPct)}")
@@ -319,6 +348,7 @@ class PopupOverlay(
         pinnedMode = false
         pinnedUp = false
         val faces = render(title, subtitle, teamColor, avatars)
+        isUp = true
 
         if (holdMs > 0) {
             // Animated: slide in, hold, slide out, then go dark.
@@ -331,7 +361,7 @@ class PopupOverlay(
             // and park it at rest, so there is no slide-out to sit
             // through and no timer to fight with.
             animDurationMs = 0L
-            filter.setPosition(restXPct, yPct)
+            place(restXPct)
         }
         Log.i(TAG, "show \"$title\" / \"${subtitle ?: ""}\" " +
             "faces=${faces} hold=${holdMs}ms")
@@ -347,6 +377,7 @@ class PopupOverlay(
         handler.removeCallbacks(hideRunnable)
         handler.removeCallbacks(slideOutRunnable)
         render(title, subtitle, teamColor, emptyList())
+        isUp = true
         if (pinnedUp) return
         pinnedUp = true
         pinnedMode = true
@@ -408,6 +439,7 @@ class PopupOverlay(
 
         val boxW = (contentW + padPx * 2 + accentPx).coerceAtMost(canvasW.toFloat())
         val boxH = (contentH + padPx * 2).coerceAtMost(canvasH.toFloat())
+        boxHeightPx = boxH.toInt()
         // Hug the bitmap's bottom-right corner, so after the filter
         // places the canvas the visible box lands bottom-right of the
         // frame regardless of how short this particular label is.
@@ -549,9 +581,12 @@ class PopupOverlay(
             filter.setAlpha(0f)
             // Park off-frame so the next show() starts its slide from
             // the right edge even if attach() ran long ago.
-            filter.setPosition(restXPct + slideSpanPct, yPct)
+            place(restXPct + slideSpanPct)
         }
         Log.i(TAG, "hide")
+        val wasUp = isUp
+        isUp = false
+        if (wasUp) onHidden?.invoke()
     }
 
     /**
