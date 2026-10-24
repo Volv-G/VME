@@ -26,8 +26,6 @@ const VIDEO_EXTENSIONS = [".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm"];
 type QueueKind =
   | "full"
   | "condensed"
-  | "highlights"
-  | "focused_highlights"
   | "player_reels";
 
 /** The queue-able kinds, in the order they're offered.
@@ -60,27 +58,12 @@ const QUEUE_KINDS: {
       "just over half the length of the full match.",
   },
   {
-    kind: "highlights",
-    label: "Highlights (one clip per play)",
-    jobLabel: "highlights",
-    blurb:
-      "One rally clip per tagged action, filed by player and action. " +
-      "Dozens of files - they stay on this page, not the team dashboard.",
-  },
-  {
-    kind: "focused_highlights",
-    label: "Focused spans (one clip per focus)",
-    jobLabel: "focused",
-    blurb: "One clip per FocusIn/FocusOut span, filed by player.",
-  },
-  {
     kind: "player_reels",
     label: "Player reels (one video per player)",
     jobLabel: "reels",
     blurb:
       "One video per player with all of their plays and a clickable " +
-      "timestamp per play, ready to upload. Separate from highlights - " +
-      "both can be run.",
+      "timestamp per play, ready to upload.",
   },
 ];
 
