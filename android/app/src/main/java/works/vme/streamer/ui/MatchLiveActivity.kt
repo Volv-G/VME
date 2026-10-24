@@ -318,6 +318,12 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     /** Frame height the encoder was prepared with, 0 before. */
     private var preparedHeight = 0
     private var popup: PopupOverlay? = null
+    /** The rally clock's own pop-up, stacked over [popup]. */
+    private var rallyClock: PopupOverlay? = null
+    /** When the current rally's serve went in, while one is running. */
+    private var rallyServeAt: Long? = null
+    /** Seconds the clock last showed; -1 while it is not up. */
+    private var rallyClockSecs = -1
     private var card: CardOverlay? = null
     /** True once prepareVideo/prepareAudio has been called this
      *  activity lifetime. Guards against double-prepare when we do
@@ -414,12 +420,14 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
         }
         window.decorView.postDelayed(fpsTicker, 1000)
+        window.decorView.postDelayed(rallyTicker, 250)
         if (orientationWatcher.canDetectOrientation()) orientationWatcher.enable()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         window.decorView.removeCallbacks(fpsTicker)
+        window.decorView.removeCallbacks(rallyTicker)
         orientationWatcher.disable()
         // Whatever route got us here, the broadcast is over -- do not
         // leave a foreground notification behind for a stream that no
@@ -2165,6 +2173,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         refreshAllViews()
         pushOverlay()
         firePopup(type, payload, before)
+        onRallyEvent(type, at)
         log("event: ${type.wire}${if (payload.isNotEmpty()) " $payload" else ""}")
         enforceLiberoRule(type)
     }
@@ -2783,6 +2792,11 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      */
     private fun onUndo() {
         val last = match.events.lastOrNull() ?: return
+        // Whatever was undone, the clock's idea of the rally may be gone
+        // with it; the next serve starts a fresh one.
+        rallyServeAt = null
+        rallyClockSecs = -1
+        rallyClock?.hide()
         match = match.copy(events = match.events.dropLast(1))
         store.save(match)
         refreshAllViews()
@@ -3051,6 +3065,17 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         popup = pu
         stream.getGlInterface().addFilter(pu.filter)
         pu.attach()
+        // The rally clock stacks above the event pop-ups, so a long rally
+        // ending in a kill shows both: the time it took, and who won it.
+        val rc = PopupOverlay(
+            videoWidth = target.width,
+            videoHeight = target.height,
+            scoreboardHeightPx = ov.barH,
+            liftPx = pu.heightPx,
+        )
+        rallyClock = rc
+        stream.getGlInterface().addFilter(rc.filter)
+        rc.attach()
         // Diagnostic: fire an immediate popup on Start so the
         // operator sees whether the popup pipeline is working at
         // all -- if this does not show up on the phone screen or
@@ -3483,6 +3508,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         overlay = null
         popup?.hide()
         popup = null
+        rallyClock?.hide()
+        rallyClock = null
+        rallyServeAt = null
+        rallyClockSecs = -1
         card = null
         blackout = null
         court = null
@@ -3932,6 +3961,70 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         return if (fps > 0) " · ${fps}fps" else ""
     }
 
+    // ---- rally clock -------------------------------------------------
+
+    /**
+     * VME's "Rally duration" clock, live: once a rally has gone on for
+     * [RALLY_CLOCK_THRESHOLD_S] seconds a pop-up counts it, whole seconds
+     * from the serve, and when the point is called it stops on the final
+     * time and stays [RALLY_CLOCK_HOLD_MS] before leaving. Same threshold,
+     * wording and hold as VME's renders (frame_map_builder), so the
+     * stream and the edited video agree on which rallies were long.
+     *
+     * The rally is a Ball Served up to the point (Score, Kill, Ace), timed
+     * by the events' own stamps - a Kill is stamped when it was first
+     * tapped. Anything that stops play another way ends it with no
+     * result: the clock goes, as VME shows none for such a rally.
+     */
+    private fun onRallyEvent(type: EventType, at: Long) {
+        when (type) {
+            EventType.BallServed -> {
+                endRallyClock()
+                rallyServeAt = at
+            }
+            EventType.Score, EventType.Kill, EventType.Ace -> {
+                val serve = rallyServeAt ?: return
+                rallyServeAt = null
+                val clock = rallyClock ?: return
+                if (rallyClockSecs < 0) return
+                val secs = ((at - serve) / 1000).toInt()
+                clock.showPinned(rallyText(secs))
+                clock.releasePinned(RALLY_CLOCK_HOLD_MS)
+                rallyClockSecs = -1
+                log("rally clock: stopped at ${secs}s")
+            }
+            EventType.FirstServe, EventType.Replay, EventType.CutStart,
+            EventType.TimeoutStart, EventType.SetEnd, EventType.GameStart,
+            EventType.GameEnd -> endRallyClock()
+            else -> Unit
+        }
+    }
+
+    private fun endRallyClock() {
+        rallyServeAt = null
+        if (rallyClockSecs >= 0) rallyClock?.hide()
+        rallyClockSecs = -1
+    }
+
+    private fun rallyText(secs: Int) = "Rally duration: ${secs}s"
+
+    /** Four times a second, so the number turns over close to on time. */
+    private val rallyTicker = object : Runnable {
+        override fun run() {
+            val serve = rallyServeAt
+            val clock = rallyClock
+            if (serve != null && clock != null) {
+                val secs = ((System.currentTimeMillis() - serve) / 1000).toInt()
+                if (secs >= RALLY_CLOCK_THRESHOLD_S && secs != rallyClockSecs) {
+                    if (rallyClockSecs < 0) log("rally clock: up at ${secs}s")
+                    rallyClockSecs = secs
+                    clock.showPinned(rallyText(secs))
+                }
+            }
+            window.decorView.postDelayed(this, 250)
+        }
+    }
+
     /** Frames per second the encoder reported, 0 when not streaming. */
     @Volatile private var streamFps: Int = 0
     private var lastFpsLogAt = 0L
@@ -4136,6 +4229,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         private const val USB_AUDIO_SETTLE_MS = 2500L
         private const val FPS_LOG_EVERY_MS = 30_000L
         /** Upload health thresholds, in seconds of media still queued. */
+        /** VME's rally clock: shown from this many seconds into a rally,
+         *  and held this long once it ends (RALLY_CLOCK_* in VME). */
+        private const val RALLY_CLOCK_THRESHOLD_S = 25
+        private const val RALLY_CLOCK_HOLD_MS = 3000L
         /** Auto never goes under this, and never starts under [AUTO_FLOOR_START]. */
         private const val AUTO_FLOOR = 500_000
         private const val AUTO_FLOOR_START = 1_000_000

@@ -119,6 +119,9 @@ class PopupOverlay(
     /** Height of the scoreboard bar in pixels, so the pop-up can sit
      *  clear of it. Pass 0 if there is no scoreboard. */
     scoreboardHeightPx: Int = 0,
+    /** Extra lift above where a pop-up normally rests, to stack this one
+     *  over another (the rally clock over the event pop-ups). */
+    liftPx: Int = 0,
 ) {
     private val handler = Handler(Looper.getMainLooper())
     val filter: ImageObjectFilterRender = ImageObjectFilterRender()
@@ -199,7 +202,14 @@ class PopupOverlay(
     // margin=20 / bottom_margin=80 at 1080p.
     private val marginPx = (videoWidth * 0.0104f).toInt()
     private val bottomMarginPx =
-        (videoHeight * 0.074f).toInt().coerceAtLeast(scoreboardHeightPx + padPx)
+        (videoHeight * 0.074f).toInt().coerceAtLeast(scoreboardHeightPx + padPx) + liftPx
+
+    /** The canvas height, for stacking another pop-up above this one. */
+    val heightPx: Int get() = canvasH
+
+    /** Pinned (see [showPinned]): slides in once, then stays put. */
+    private var pinnedMode = false
+    private var pinnedUp = false
 
     // ---- animation state -------------------------------------------
     // Written on the main thread by show()/tick(), read by tick().
@@ -218,6 +228,11 @@ class PopupOverlay(
             val elapsed = System.currentTimeMillis() - animStartMs
             val progress = if (animDurationMs <= 0L) 1f
                            else (elapsed.toFloat() / animDurationMs)
+            if (pinnedMode && progress >= SLIDE_IN_FRAC) {
+                // Arrived: a pinned pop-up rests here until released.
+                filter.setPosition(restXPct, yPct)
+                return
+            }
             filter.setPosition(restXPct + xOffsetPct(progress), yPct)
             // Keep ticking while there is movement left. Between the
             // two ramps the position is constant, but we keep the
@@ -300,7 +315,73 @@ class PopupOverlay(
     ) {
         handler.removeCallbacks(hideRunnable)
         handler.removeCallbacks(tickRunnable)
+        handler.removeCallbacks(slideOutRunnable)
+        pinnedMode = false
+        pinnedUp = false
+        val faces = render(title, subtitle, teamColor, avatars)
 
+        if (holdMs > 0) {
+            // Animated: slide in, hold, slide out, then go dark.
+            animStartMs = System.currentTimeMillis()
+            animDurationMs = holdMs
+            handler.post(tickRunnable)
+            handler.postDelayed(hideRunnable, holdMs)
+        } else {
+            // Pinned (the test button): skip the animation entirely
+            // and park it at rest, so there is no slide-out to sit
+            // through and no timer to fight with.
+            animDurationMs = 0L
+            filter.setPosition(restXPct, yPct)
+        }
+        Log.i(TAG, "show \"$title\" / \"${subtitle ?: ""}\" " +
+            "faces=${faces} hold=${holdMs}ms")
+    }
+
+    /**
+     * A pop-up that stays until [releasePinned], with text that can
+     * change while it is up - the rally clock, which ticks once a second.
+     * The first call slides it in as an ordinary pop-up arrives; later
+     * calls only redraw it, so a new number is not a new arrival.
+     */
+    fun showPinned(title: String, subtitle: String? = null, teamColor: Int = DEFAULT_BG) {
+        handler.removeCallbacks(hideRunnable)
+        handler.removeCallbacks(slideOutRunnable)
+        render(title, subtitle, teamColor, emptyList())
+        if (pinnedUp) return
+        pinnedUp = true
+        pinnedMode = true
+        animDurationMs = (SLIDE_MS / SLIDE_IN_FRAC).toLong()
+        animStartMs = System.currentTimeMillis()
+        handler.removeCallbacks(tickRunnable)
+        handler.post(tickRunnable)
+    }
+
+    /** Slide a pinned pop-up out after [holdMs], as an ordinary one leaves. */
+    fun releasePinned(holdMs: Long) {
+        if (!pinnedUp) return
+        handler.removeCallbacks(slideOutRunnable)
+        handler.postDelayed(slideOutRunnable, holdMs)
+    }
+
+    private val slideOutRunnable = Runnable {
+        pinnedMode = false
+        pinnedUp = false
+        // Enter the shared animation at the start of its slide-out ramp.
+        animDurationMs = (SLIDE_MS / SLIDE_OUT_FRAC).toLong()
+        animStartMs = System.currentTimeMillis() -
+            ((1f - SLIDE_OUT_FRAC) * animDurationMs).toLong()
+        handler.removeCallbacks(tickRunnable)
+        handler.post(tickRunnable)
+        handler.postDelayed(hideRunnable, SLIDE_MS)
+    }
+
+    /** Draw the box and hand it to the filter. Returns the face count. */
+    private fun render(
+        title: String,
+        subtitle: String?,
+        teamColor: Int,
+        avatars: List<Avatar>,
+    ): Int {
         val bmp = Bitmap.createBitmap(canvasW, canvasH, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         // Fully transparent canvas; only the box itself is painted, so
@@ -365,22 +446,7 @@ class PopupOverlay(
         OverlayAlpha.apply(c, canvasW, canvasH)
         filter.setImage(bmp)
         filter.setAlpha(1f)
-
-        if (holdMs > 0) {
-            // Animated: slide in, hold, slide out, then go dark.
-            animStartMs = System.currentTimeMillis()
-            animDurationMs = holdMs
-            handler.post(tickRunnable)
-            handler.postDelayed(hideRunnable, holdMs)
-        } else {
-            // Pinned (the test button): skip the animation entirely
-            // and park it at rest, so there is no slide-out to sit
-            // through and no timer to fight with.
-            animDurationMs = 0L
-            filter.setPosition(restXPct, yPct)
-        }
-        Log.i(TAG, "show \"$title\" / \"${subtitle ?: ""}\" " +
-            "faces=${faces.size} hold=${holdMs}ms")
+        return faces.size
     }
 
     /**
@@ -476,6 +542,9 @@ class PopupOverlay(
     fun hide() {
         handler.removeCallbacks(hideRunnable)
         handler.removeCallbacks(tickRunnable)
+        handler.removeCallbacks(slideOutRunnable)
+        pinnedMode = false
+        pinnedUp = false
         runCatching {
             filter.setAlpha(0f)
             // Park off-frame so the next show() starts its slide from
@@ -551,6 +620,9 @@ class PopupOverlay(
         // the pop-up's total duration.
         private const val SLIDE_IN_FRAC = 0.1f
         private const val SLIDE_OUT_FRAC = 0.1f
+        /** How long a slide in or out takes: a tenth of the 3 s an
+         *  ordinary pop-up is up, as above. */
+        private const val SLIDE_MS = 300L
         /** ~30 fps; the encoder runs at 30, so finer is invisible. */
         private const val FRAME_MS = 33L
         /** message.py `BG_COLOR_DEFAULT` */
