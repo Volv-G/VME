@@ -74,7 +74,7 @@ SERVE_TYPES = frozenset({"ball_served", "first_serve"})
 # last point's own score event, so treating them as enders would clip
 # the final rally of every set short.
 POINT_TYPES = frozenset(
-    {"kill", "ace", "score", "score_correction", "replay"}
+    {"kill", "ace", "block_point", "score", "score_correction", "replay"}
 )
 
 # Event type names that mark a set boundary - the only joins that get a

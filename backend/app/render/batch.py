@@ -30,6 +30,7 @@ from ..domain.events.focus import FocusInEvent, FocusOutEvent
 from ..domain.events.lifecycle import GameEndEvent, GameStartEvent, SetEndEvent
 from ..domain.events.player import (
     AceEvent,
+    BlockPointEvent,
     KillEvent,
     PlayerEvent,
 )
@@ -75,6 +76,7 @@ MAX_RALLY_TAIL_SECONDS = 12.0
 _RALLY_END_TYPES = (
     KillEvent,
     AceEvent,
+    BlockPointEvent,
     ScoreEvent,
     ReplayEvent,
     SetEndEvent,

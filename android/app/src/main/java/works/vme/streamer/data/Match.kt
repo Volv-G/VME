@@ -50,6 +50,9 @@ enum class EventType(val wire: String) {
     Ace("ace"),
     Assist("assist"),
     Block("block"),
+    /** A block that won the point ("block+"): scores like a Kill. The
+     *  Block button asks, once the player is picked. */
+    BlockPoint("block_point"),
     Dive("dive"),
     Dig("dig"),
     Highlight("highlight"),

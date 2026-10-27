@@ -246,7 +246,7 @@ export function MatchEditorPage() {
    * points with a player attached. Stepping by "points" has to mean all
    * three or it skips half the match.
    */
-  const POINT_TYPES: ReadonlySet<string> = new Set(["score", "kill", "ace"]);
+  const POINT_TYPES: ReadonlySet<string> = new Set(["score", "kill", "ace", "block_point"]);
 
   /**
    * Open the panels on the event the video is sitting on.
@@ -450,6 +450,7 @@ export function MatchEditorPage() {
       body.type === "score" ||
       body.type === "kill" ||
       body.type === "ace" ||
+      body.type === "block_point" ||
       body.type === "rotation"
     ) {
       setLiberoCheckFrame(currentFrame);

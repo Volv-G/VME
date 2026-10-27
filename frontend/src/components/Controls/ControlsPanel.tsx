@@ -190,6 +190,9 @@ export function ControlsPanel({
 
   const [armed, setArmed] = useState<ActionDef | null>(null);
   const [subPosition, setSubPosition] = useState<number | null>(null);
+  // A block whose player is picked, waiting on "did it win the point?".
+  const [pendingBlock, setPendingBlock] = useState<{ jersey: number; frame: number } | null>(null);
+  const armedFrameRef = useRef<number | null>(null);
   const [liberoPickerOpen, setLiberoPickerOpen] = useState(false);
   const [scoreFixOpen, setScoreFixOpen] = useState(false);
   const [messageOpen, setMessageOpen] = useState(false);
@@ -312,18 +315,19 @@ export function ControlsPanel({
     setScoreFixOpen(false);
     setMessageOpen(false);
     setPendingAssistKiller(null);
+    setPendingBlock(null);
   }
 
   async function commit(
     type: string,
     payload: Record<string, unknown> = {},
-    opts: { keepOverlays?: boolean } = {}
+    opts: { keepOverlays?: boolean; frame?: number } = {}
   ): Promise<boolean> {
     if (data.clips.length === 0) {
       setErr("No clips uploaded yet.");
       return false;
     }
-    const r = resolveClipFromGlobal(data.clips, currentFrame);
+    const r = resolveClipFromGlobal(data.clips, opts.frame ?? currentFrame);
     if (!r) return false;
     setErr(null);
     setBusy(true);
@@ -354,6 +358,9 @@ export function ControlsPanel({
     if (a.needsPlayer) {
       // Toggle armed state: clicking the same one cancels.
       setArmed((cur) => (cur?.type === a.type ? null : a));
+      // The tap that arms is the moment of the play (used by Block,
+      // whose follow-up question can take a while to answer).
+      armedFrameRef.current = currentFrame;
       setSubPosition(null);
       return;
     }
@@ -399,6 +406,13 @@ export function ControlsPanel({
       const jersey = live.home_positions[position];
       if (jersey == null) return; // no player to attribute to
       const armedType = armed.type;
+      if (armedType === "block") {
+        // Did it win the point? Asked before anything is logged; either
+        // answer is stamped at the Block tap, not at the answer.
+        setArmed(null);
+        setPendingBlock({ jersey, frame: armedFrameRef.current ?? currentFrame });
+        return;
+      }
       const armedPayload = armed.payload ?? {};
       // Before the commit, while it still describes the rally.
       const before = live.home_positions;
@@ -574,6 +588,42 @@ export function ControlsPanel({
           <div className="armed-banner">
             <span>Pick a position for <strong>{armed.label}</strong></span>
             <button onClick={() => setArmed(null)}>Cancel</button>
+          </div>
+        )}
+        {pendingBlock && (
+          <div className="armed-banner">
+            <span>
+              Block by <strong>#{pendingBlock.jersey}</strong> - point-winning?
+            </span>
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                void commit(
+                  "block_point",
+                  { team: "home", player_number: pendingBlock.jersey },
+                  { frame: pendingBlock.frame }
+                ).then((ok) => ok && setPendingBlock(null))
+              }
+              title="Block point: the block won the rally, and the score goes up"
+            >
+              Yes, point
+            </button>
+            <button
+              disabled={busy}
+              onClick={() =>
+                void commit(
+                  "block",
+                  { team: "home", player_number: pendingBlock.jersey },
+                  { frame: pendingBlock.frame }
+                ).then((ok) => ok && setPendingBlock(null))
+              }
+            >
+              No, just a block
+            </button>
+            <button onClick={() => setPendingBlock(null)} title="Log nothing">
+              Cancel
+            </button>
           </div>
         )}
         {pendingAssistKiller != null && (

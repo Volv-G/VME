@@ -435,6 +435,7 @@ export const EVENT_TYPES = [
   "ace",
   "assist",
   "block",
+  "block_point",
   "dive",
   "dig",
   "highlight",

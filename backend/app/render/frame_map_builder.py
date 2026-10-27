@@ -630,7 +630,7 @@ RALLY_CLOCK_THRESHOLD_S = 25.0
 RALLY_CLOCK_HOLD_S = 3.0
 # Events that end a rally (the point being logged), and ones that mean we
 # cannot say when it ended - play stopped some other way first.
-_RALLY_END = {"score", "kill", "ace"}
+_RALLY_END = {"score", "kill", "ace", "block_point"}
 _RALLY_BREAK = {
     "ball_served", "first_serve", "replay", "cut_start", "timeout_start",
     "set_end", "game_start", "game_end",

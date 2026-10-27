@@ -1533,8 +1533,37 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // The prompt is answered either way it ends, so the pending
         // killer goes with it.
         if (armed == EventType.Assist) assistForKiller = null
-        record(armed, mapOf("team" to Side.Home.wire, "player_number" to jersey))
-        askForAssist(armed, jersey, before)
+        recordPlayerAction(armed, jersey, before)
+    }
+
+    /**
+     * Log a player action. A Block first asks whether it won the point:
+     * a "block+" scores (see [EventType.BlockPoint]), a plain block is a
+     * stat. Either answer is stamped at the Block tap - [actionStartedAt]
+     * stays set until it is given - and backing out of the question logs
+     * the plain block rather than losing it.
+     */
+    private fun recordPlayerAction(type: EventType, jersey: Int, before: GameState) {
+        val payload = mapOf("team" to Side.Home.wire, "player_number" to jersey)
+        if (type != EventType.Block) {
+            record(type, payload)
+            askForAssist(type, jersey, before)
+            return
+        }
+        var answered = false
+        AlertDialog.Builder(this)
+            .setTitle("Point-winning block?")
+            .setMessage("Block by #$jersey")
+            .setPositiveButton("Yes, point") { _, _ ->
+                answered = true
+                record(EventType.BlockPoint, payload)
+            }
+            .setNegativeButton("No, just a block") { _, _ ->
+                answered = true
+                record(EventType.Block, payload)
+            }
+            .setOnDismissListener { if (!answered) record(EventType.Block, payload) }
+            .show()
     }
 
     /** Long-press: credit a player who is not on the court (armed),
@@ -1545,9 +1574,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         disarm()
         if (armed == EventType.Assist) assistForKiller = null
         pickPlayer(Side.Home, excludeOnCourt = false) { jersey ->
-            val before = gameState
-            record(armed, mapOf("team" to Side.Home.wire, "player_number" to jersey))
-            askForAssist(armed, jersey, before)
+            recordPlayerAction(armed, jersey, gameState)
         }
     }
 
@@ -2271,6 +2298,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // does, so it can carry a libero forward too.
         val scoring = after == EventType.Score ||
             after == EventType.Kill ||
+            after == EventType.BlockPoint ||
             after == EventType.Ace ||
             after == EventType.Rotation
         // A prompt held back from a Kill (see below) fires on the next
@@ -2477,6 +2505,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             EventType.Score -> null
             EventType.Kill -> "Kill"
             EventType.Ace -> "Ace"
+            EventType.BlockPoint -> "Block point"
             else -> return null
         }
         val side = Side.fromWire(payload["team"] as? String) ?: return null
@@ -2621,6 +2650,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             EventType.Ace    -> playerPopup("Ace")
             EventType.Assist -> playerPopup("Assist")
             EventType.Block  -> playerPopup("Block")
+            EventType.BlockPoint -> playerPopup("Block point")
             EventType.Dive   -> playerPopup("Dive")
             EventType.Dig    -> playerPopup("Dig")
 
@@ -4035,7 +4065,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                 endRallyClock()
                 rallyServeAt = at
             }
-            EventType.Score, EventType.Kill, EventType.Ace -> {
+            EventType.Score, EventType.Kill, EventType.Ace, EventType.BlockPoint -> {
                 val serve = rallyServeAt ?: return
                 rallyServeAt = null
                 val stack = popups ?: return

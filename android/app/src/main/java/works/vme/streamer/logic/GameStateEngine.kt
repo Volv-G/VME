@@ -89,6 +89,7 @@ object GameStateEngine {
         EventType.Replay -> state.copy(ballServedSinceLastScore = false)
         EventType.Score -> onScore(state, teamOf(e) ?: return state, tracksServes)
         EventType.Kill -> onScore(state, teamOf(e) ?: return state, tracksServes)
+        EventType.BlockPoint -> onScore(state, teamOf(e) ?: return state, tracksServes)
         EventType.Ace -> onScore(state, teamOf(e) ?: return state, tracksServes)
         EventType.ScoreCorrection -> onCorrection(state, e)
         EventType.Substitution -> onSubstitution(state, e, liberos)

@@ -123,6 +123,7 @@ export function summarizeEvent(
     case "ace":
     case "assist":
     case "block":
+    case "block_point":
     case "dive":
     case "dig":
     case "highlight":
@@ -181,6 +182,7 @@ export function summarizeEvent(
 
 const TYPE_VERB: Record<string, string> = {
   kill: "Kill",
+  block_point: "Block point",
   ace: "Ace",
   assist: "Assist",
   block: "Block",

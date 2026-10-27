@@ -65,6 +65,7 @@ export const EVENT_COLORS: Record<string, string> = {
 
   // --- Player defense (blue) ---
   block: "#1f6feb",
+  block_point: "#1f6feb",
   dig: "#58a6ff",
   dive: "#79c0ff",
 
@@ -103,6 +104,7 @@ export const EVENT_ICONS: Record<string, string> = {
 
   // Player defense
   block: "🧱",
+  block_point: "🧱",
   dig: "🛡️",
   dive: "🤿",
 

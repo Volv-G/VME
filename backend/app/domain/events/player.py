@@ -91,6 +91,20 @@ class BlockEvent(StatPlayerEvent):
 
 @register_event
 @dataclass
+class BlockPointEvent(ScoringPlayerEvent):
+    """A block that won the point ("block+", a stuff): scores for `team`.
+
+    Logged from the Block button, which asks once the player is picked
+    whether the block won the rally; a plain `block` is one that only
+    touched the ball. Ends the rally like a kill.
+    """
+
+    type_name: ClassVar[str] = "block_point"
+    action_label: ClassVar[str] = "Block point"
+
+
+@register_event
+@dataclass
 class DiveEvent(StatPlayerEvent):
     """A dive."""
 

@@ -11,7 +11,7 @@ import type { EventDto } from "../types/api";
  * ordered it served again. Set and game ends are bookkeeping that
  * follow the last point's score, not rally enders.
  */
-const RALLY_END_TYPES = new Set(["kill", "ace", "score", "replay"]);
+const RALLY_END_TYPES = new Set(["kill", "ace", "block_point", "score", "replay"]);
 
 export interface RallyRegion {
   /** Global frame of the serve that opened the rally. */
