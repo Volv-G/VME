@@ -1147,25 +1147,63 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         }
         paint()
 
+        // The badge, as the overlays draw it, with the two things to do
+        // about it. Change and Remove both commit the name and colour
+        // first, so neither is a silent way to lose an edit.
+        var dialog: AlertDialog? = null
+        val density = resources.displayMetrics.density
+        val badge = logoFor(side)
+        val logoRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            if (badge != null) {
+                addView(android.widget.ImageView(this@MatchLiveActivity).apply {
+                    setImageBitmap(badge)
+                }, LinearLayout.LayoutParams((56 * density).toInt(), (56 * density).toInt())
+                    .apply { marginEnd = (12 * density).toInt() })
+            } else {
+                addView(TextView(this@MatchLiveActivity).apply {
+                    text = "No logo"
+                    setTextColor(Color.parseColor("#999999"))
+                }, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginEnd = (12 * density).toInt() })
+            }
+            addView(Button(this@MatchLiveActivity).apply {
+                text = if (badge != null) "Change logo…" else "Add logo…"
+                setOnClickListener {
+                    saveTeam(side, input.text.toString().trim(), picked)
+                    dialog?.dismiss()
+                    logoPicker.launch("image/*")
+                }
+            })
+            if (badge != null) {
+                addView(Button(this@MatchLiveActivity).apply {
+                    text = "Remove logo"
+                    setOnClickListener {
+                        saveTeam(side, input.text.toString().trim(), picked)
+                        dialog?.dismiss()
+                        removeLogo(side)
+                    }
+                })
+            }
+        }
+
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 24, 48, 8)
             addView(input)
             addView(spacer(24))
             addView(swatches)
+            addView(spacer(16))
+            addView(logoRow)
         }
 
-        AlertDialog.Builder(this)
+        dialog = AlertDialog.Builder(this)
             .setTitle(if (side == Side.Home) "Home team" else "Opponent")
             .setView(body)
             .setPositiveButton("Save") { _, _ ->
                 saveTeam(side, input.text.toString().trim(), picked)
-            }
-            // Commits the name and colour on the way out, so opening
-            // the picker is not a silent way to lose them.
-            .setNeutralButton("Logo...") { _, _ ->
-                saveTeam(side, input.text.toString().trim(), picked)
-                logoPicker.launch("image/*")
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -1243,21 +1281,44 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private fun rebuildOverlayChrome() {
         val homeFill = parseColor(match.homeRoster.teamColor, DEFAULT_HOME_COLOR)
         val awayFill = parseColor(match.opponentRoster.teamColor, DEFAULT_AWAY_COLOR)
+        val homeLogo = logoFor(Side.Home)
+        val awayLogo = logoFor(Side.Away)
         card?.setTeams(
             teamName(Side.Home), teamName(Side.Away), homeFill, awayFill,
-            logoFor(Side.Home), logoFor(Side.Away),
+            homeLogo, awayLogo,
         )
         overlay?.let { ov ->
             ov.setTeamColors(homeFill, awayFill)
             if (ov.homeName != teamName(Side.Home) || ov.awayName != teamName(Side.Away)) {
                 log("team: scoreboard name changes at the next stream start")
             }
-            // Same reason as the name: the bar's sections are sized
-            // around the badge in `init`, so a logo added mid-stream
-            // has nowhere to go until the bar is rebuilt.
-            log("team: scoreboard badge changes at the next stream start")
+            // The bar's sections are sized around the badges it started
+            // with, so a badge can be replaced live but not added.
+            if (!ov.setLogos(homeLogo, awayLogo)) {
+                log("team: a new badge reaches the scoreboard at the next stream start")
+            }
+        }
+        if (card != null || overlay != null) {
+            log("team: overlays redrawn - badges home ${if (homeLogo != null) "yes" else "none"}, " +
+                "away ${if (awayLogo != null) "yes" else "none"}")
         }
         pushOverlay()
+    }
+
+    /** Drop a team's badge: from the match, its cached file, and the
+     *  overlays. */
+    private fun removeLogo(side: Side) {
+        val roster = if (side == Side.Home) match.homeRoster else match.opponentRoster
+        val path = roster.localLogoPath ?: return
+        val updated = roster.copy(localLogoPath = null)
+        match = if (side == Side.Home) match.copy(homeRoster = updated)
+                else match.copy(opponentRoster = updated)
+        store.save(match)
+        // The home badge is the team's, shared by every match; only an
+        // opponent's copy belongs to this match alone.
+        if (side == Side.Away) runCatching { java.io.File(path).delete() }
+        log("logo: ${side.wire} badge removed")
+        rebuildOverlayChrome()
     }
 
     /**
@@ -2287,6 +2348,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // the scoreboard rather than sitting alongside it.
         runCatching {
             val c = card ?: return@runCatching
+            c.swapped = match.sidesSwapped
             when {
                 gameState.gameEnded -> c.showFinal(gameState)
                 !gameState.gameStarted -> c.showUpcoming()

@@ -606,9 +606,13 @@ class PopupOverlay(
 
     private fun decodedPhoto(path: String?): Bitmap? {
         if (path.isNullOrBlank()) return null
-        if (photoCache.containsKey(path)) return photoCache[path]
+        // Keyed by the file's modification time too: a new badge is
+        // written over the old one at the same path, and keyed by path
+        // alone the pop-ups went on showing the old one.
+        val key = "$path@${java.io.File(path).lastModified()}"
+        if (photoCache.containsKey(key)) return photoCache[key]
         val bmp = PhotoCache.load(path, avatarPx)
-        photoCache[path] = bmp
+        photoCache[key] = bmp
         return bmp
     }
 

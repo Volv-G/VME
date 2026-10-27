@@ -75,6 +75,14 @@ class CardOverlay(
         homeLogo = homeBadge
         awayLogo = awayBadge
     }
+
+    /**
+     * The away team on the left, as the scoreboard draws it when the
+     * match's sides are swapped. Read at every draw - names, colours,
+     * badges, the live score and each set's score all follow it - so the
+     * card and the bar always agree on who is where.
+     */
+    var swapped: Boolean = false
     val filter: ImageObjectFilterRender = ImageObjectFilterRender()
 
     private val cardW = (videoWidth * CARD_W_FRAC).toInt()
@@ -139,7 +147,8 @@ class CardOverlay(
     fun showTimeout(state: GameState) {
         draw(
             title = "TIMEOUT",
-            centre = "${state.homeScore}  -  ${state.awayScore}",
+            centre = if (swapped) "${state.awayScore}  -  ${state.homeScore}"
+                     else "${state.homeScore}  -  ${state.awayScore}",
             sets = state.setScores,
             // Smaller here than on FINAL: during a timeout the live
             // score in the middle is the headline and the sets
@@ -222,7 +231,7 @@ class CardOverlay(
         // Spaces around the dash: "25 - 21" is a score, "25-21"
         // reads as one number at a glance, which is the whole
         // problem with a row of them.
-        val texts = sets.map { (h, a) -> "$h - $a" }
+        val texts = sets.map { (h, a) -> if (swapped) "$a - $h" else "$h - $a" }
         var size = cardH * FOOT_FRAC * scale
         var gap = size * SET_GAP_EMS
         footPaint.textSize = size
@@ -318,10 +327,16 @@ class CardOverlay(
         c.drawRect(0f, 0f, cardW.toFloat(), cardH.toFloat(), fillPaint)
         // Team-coloured rules top and bottom, so the card is tied to
         // the two clubs rather than floating free.
-        fillPaint.color = homeColor
+        val leftColor = if (swapped) awayColor else homeColor
+        val rightColor = if (swapped) homeColor else awayColor
+        val leftName = if (swapped) awayName else homeName
+        val rightName = if (swapped) homeName else awayName
+        val leftLogo = if (swapped) awayLogo else homeLogo
+        val rightLogo = if (swapped) homeLogo else awayLogo
+        fillPaint.color = leftColor
         c.drawRect(0f, 0f, cardW / 2f, RULE_PX, fillPaint)
         c.drawRect(0f, cardH - RULE_PX, cardW / 2f, cardH.toFloat(), fillPaint)
-        fillPaint.color = awayColor
+        fillPaint.color = rightColor
         c.drawRect(cardW / 2f, 0f, cardW.toFloat(), RULE_PX, fillPaint)
         c.drawRect(cardW / 2f, cardH - RULE_PX, cardW.toFloat(), cardH.toFloat(), fillPaint)
 
@@ -350,17 +365,17 @@ class CardOverlay(
         // with each badge outboard of its name -- the card's margins
         // were empty, and putting the badge there keeps it clear of
         // both the name and the centre figure at every name length.
-        teamPaint.color = homeColor
+        teamPaint.color = leftColor
         teamPaint.textAlign = Paint.Align.RIGHT
-        val homeRight = cx - cardW * 0.14f
-        drawAt(c, homeName, homeRight, midCy, teamPaint)
-        drawLogo(c, homeLogo, homeRight - teamPaint.measureText(homeName), midCy, true)
+        val leftRight = cx - cardW * 0.14f
+        drawAt(c, leftName, leftRight, midCy, teamPaint)
+        drawLogo(c, leftLogo, leftRight - teamPaint.measureText(leftName), midCy, true)
 
-        teamPaint.color = awayColor
+        teamPaint.color = rightColor
         teamPaint.textAlign = Paint.Align.LEFT
-        val awayLeft = cx + cardW * 0.14f
-        drawAt(c, awayName, awayLeft, midCy, teamPaint)
-        drawLogo(c, awayLogo, awayLeft + teamPaint.measureText(awayName), midCy, false)
+        val rightLeft = cx + cardW * 0.14f
+        drawAt(c, rightName, rightLeft, midCy, teamPaint)
+        drawLogo(c, rightLogo, rightLeft + teamPaint.measureText(rightName), midCy, false)
 
         if (hasSets) {
             drawSets(c, sets, cx, cardH * (0.5f + ROW_GAP_FRAC), setScale)

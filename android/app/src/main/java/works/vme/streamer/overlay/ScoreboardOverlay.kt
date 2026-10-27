@@ -132,6 +132,26 @@ class ScoreboardOverlay(
         homeColor = home
         awayColor = away
     }
+
+    // Badges drawn now. Each side's ROOM for one is fixed at `init`
+    // (see [homeLogoSlot]), so a badge can be swapped for another while
+    // live, but one cannot appear where there was none.
+    private var curHomeLogo = homeLogo
+    private var curAwayLogo = awayLogo
+    private val homeLogoSlot = homeLogo != null
+    private val awayLogoSlot = awayLogo != null
+
+    /**
+     * New badges, for the sides that have room for one. Returns false
+     * when a side without room was given a badge: that reaches the bar
+     * at the next stream start, for the reason renames do (see
+     * [setTeamColors]). A side whose badge was removed keeps its gap.
+     */
+    fun setLogos(home: android.graphics.Bitmap?, away: android.graphics.Bitmap?): Boolean {
+        curHomeLogo = if (homeLogoSlot) home else null
+        curAwayLogo = if (awayLogoSlot) away else null
+        return (home == null || homeLogoSlot) && (away == null || awayLogoSlot)
+    }
     // ---- geometry: computed ONCE ----------------------------------
 
     // Bar height math ported from Python: main_h = video_height * 0.025 / 0.5.
@@ -317,8 +337,10 @@ class ScoreboardOverlay(
         val swapped = match.sidesSwapped
         val leftName = if (swapped) awayName else homeName
         val rightName = if (swapped) homeName else awayName
-        val leftLogo = if (swapped) awayLogo else homeLogo
-        val rightLogo = if (swapped) homeLogo else awayLogo
+        val leftLogo = if (swapped) curAwayLogo else curHomeLogo
+        val rightLogo = if (swapped) curHomeLogo else curAwayLogo
+        val leftSlot = if (swapped) awayLogoSlot else homeLogoSlot
+        val rightSlot = if (swapped) homeLogoSlot else awayLogoSlot
         val leftSide = if (swapped) Side.Away else Side.Home
         val rightSide = if (swapped) Side.Home else Side.Away
         val leftSets = if (swapped) state.awaySets else state.homeSets
@@ -340,7 +362,7 @@ class ScoreboardOverlay(
         // was reserved for it.
         val leftX = padPx.toFloat()
         drawLogo(c, leftLogo, leftX, textCy)
-        val leftNameX = leftX + logoSlotW(leftLogo)
+        val leftNameX = leftX + slotW(leftSlot)
         drawTextLeft(c, leftName, leftNameX, textCy)
         // Both dots sit on the inner edge of their block, flanking the
         // score, so the pair reads as one indicator with two states.
@@ -357,7 +379,7 @@ class ScoreboardOverlay(
             drawServeDot(c, rightX + serveDotPx / 2, textCy)
         }
         drawLogo(c, rightLogo, rightX + serveSlotW, textCy)
-        drawTextLeft(c, rightName, rightX + serveSlotW + logoSlotW(rightLogo), textCy)
+        drawTextLeft(c, rightName, rightX + serveSlotW + slotW(rightSlot), textCy)
 
         textPaint.textSize = setsFontPx
         drawTextCentre(c, leftSets.toString(),
@@ -399,8 +421,9 @@ class ScoreboardOverlay(
     /** Horizontal room a badge needs, including the gap after it.
      *  Zero when there is no badge, so a team without one is laid
      *  out exactly as before. */
-    private fun logoSlotW(logo: android.graphics.Bitmap?): Float =
-        if (logo == null) 0f else logoPx + logoGapPx
+    private fun logoSlotW(logo: android.graphics.Bitmap?): Float = slotW(logo != null)
+
+    private fun slotW(hasSlot: Boolean): Float = if (hasSlot) logoPx + logoGapPx else 0f
 
     /**
      * Draw [logo] square, vertically centred on [cy], its left edge
