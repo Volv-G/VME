@@ -106,13 +106,19 @@ to click "Go live" before each match.
 
 ## Build
 
+The toolchain, the Gradle wrapper, `build.cmd`/`deploy.cmd` and the
+pinned versions come from [android-kit](https://github.com/Volv-G/android-kit),
+which is shared with Volv-G's other Android apps and sits at
+`android\kit` as a submodule. Clone with `--recursive`, or after a plain
+clone run `git submodule update --init`.
+
 Once, to install a self-contained toolchain (JDK 17, Android SDK 36,
-build-tools, platform-tools, Gradle). **No admin rights needed** — it all
-lands in `%LOCALAPPDATA%\vme-android` and touches neither PATH nor the
-registry:
+build-tools, platform-tools, Gradle). **No admin rights needed**: it all
+lands in one folder under `%LOCALAPPDATA%` and touches neither PATH nor
+the registry:
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File android\scripts\bootstrap.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File android\kit\bootstrap.ps1
 ```
 
 Then:
@@ -123,23 +129,23 @@ android\build.cmd clean
 android\deploy.cmd           REM build + install + launch + tail logcat
 ```
 
-Android Studio also works — *File → Open* the `android/` folder — but it
-is not required, and the command line above is what has actually been
-exercised, including once from scratch into an empty directory to prove
-the clean-machine path. To undo everything: `Remove-Item -Recurse -Force
-$env:LOCALAPPDATA\vme-android`.
+`deploy.cmd` installs `appId` and follows the logcat tags in
+`android\kit.properties`. The kit's README covers the toolchain folder,
+its override variable, and taking a newer kit
+(`git submodule update --remote android/kit`).
 
-Set `VME_ANDROID_TOOLCHAIN` (and `bootstrap.ps1 -ToolchainDir`) to put
-the toolchain somewhere else — both scripts honour it.
+Android Studio is not required, and since the move to the kit it has not
+been tried. `android/` no longer holds a Gradle wrapper of its own (the
+kit's builds every app), so Studio would need Gradle 8.13 set by hand
+under *Settings → Build Tools → Gradle*.
 
 The bootstrap is re-runnable and skips what it already has. It is also
-the thing to run after pulling a change to the SDK or Gradle version;
-the Gradle version is read from `gradle-wrapper.properties` so there is
-only one place to edit it.
+the thing to run after a kit update raises the SDK or Gradle version.
 
 ### Versions are not negotiable
 
-AGP 8.13.2 / Gradle 8.13 / Kotlin **2.3.21** / compileSdk **36**. Two
+AGP 8.13.2 / Gradle 8.13 / Kotlin **2.3.21** / compileSdk **36**, pinned
+in `kit/versions.toml` for every app on the kit because of this one. Two
 independent constraints force this, both discovered by the compiler
 rather than by reading:
 
@@ -222,8 +228,9 @@ has a build signed with a different debug key:
 ## Reading the output
 
 The on-screen pane and logcat carry the same lines. `deploy.cmd log`
-tails the tags worth seeing — the harness's own `VMESpike` plus the
-native UVC tags, since the interesting failures happen down in
+tails the tags worth seeing (`logTags` in `kit.properties`): the app's
+own `VMEMatch`, `VMEService`, `VMECard`, `VMEPopup` and the overlays',
+plus the native UVC tags, since the interesting failures happen down in
 `libuvc` and never surface as Kotlin exceptions.
 
 ## Why it does not use `CameraUvcSource`

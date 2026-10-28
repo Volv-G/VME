@@ -1,0 +1,4 @@
+# cmd.exe misparses batch files with LF endings (labels, goto, call), so
+# these keep CRLF whatever core.autocrlf says.
+*.cmd text eol=crlf
+*.bat text eol=crlf

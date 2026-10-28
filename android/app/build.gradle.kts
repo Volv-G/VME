@@ -21,8 +21,8 @@ val streamUrl: String = Properties().apply {
 
 android {
     namespace = "works.vme.streamer"
-    // 36 is forced by RootEncoder 2.7.5; see the root build file.
-    compileSdk = 36
+    // 36 is forced by RootEncoder 2.7.5; see kit/versions.toml.
+    compileSdk = kit.versions.compileSdk.get().toInt()
 
     defaultConfig {
         applicationId = "works.vme.streamer"
@@ -30,7 +30,7 @@ android {
         // floor for the audio-device routing this harness uses, and no
         // phone that can run a 1080p encoder is below it anyway.
         minSdk = 24
-        targetSdk = 36
+        targetSdk = kit.versions.targetSdk.get().toInt()
         versionCode = 1
         versionName = "0.1-spike"
 
@@ -51,8 +51,8 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.toVersion(kit.versions.java.get())
+        targetCompatibility = JavaVersion.toVersion(kit.versions.java.get())
     }
 
 
@@ -68,7 +68,7 @@ android {
 // kotlinOptions.jvmTarget is a hard error in Kotlin 2.3, not a warning.
 kotlin {
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
+        jvmTarget.set(JvmTarget.fromTarget(kit.versions.java.get()))
     }
 }
 
@@ -82,8 +82,8 @@ dependencies {
     // property the spike doc demands: nothing long-lived to ship or leak.
     implementation("com.google.android.gms:play-services-auth:21.3.0")
 
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.activity:activity:1.9.3")
+    implementation(kit.androidx.core)
+    implementation(kit.androidx.activity)
 
     // The UVC stack. This is the thing being tested; see UvcVideoSource.
     implementation("com.herohan:UVCAndroid:1.0.13")

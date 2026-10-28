@@ -1,0 +1,3 @@
+[submodule "android/kit"]
+	path = android/kit
+	url = https://github.com/Volv-G/android-kit.git

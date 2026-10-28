@@ -89,13 +89,13 @@ negotiation.
 Build `android/` and run it on the actual phone with the actual adapter:
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File android\scripts\bootstrap.ps1   REM once
+powershell -NoProfile -ExecutionPolicy Bypass -File android\kit\bootstrap.ps1   REM once
 android\deploy.cmd
 ```
 
-The bootstrap installs a private JDK + Android SDK under
-`%LOCALAPPDATA%\vme-android` with no admin rights and no machine-wide
-changes. **Pair the phone over wireless debugging**, not USB - the HDMI
+The bootstrap installs a private JDK + Android SDK in one folder under
+`%LOCALAPPDATA%` (see `android\kit\README.md`), with no admin rights and
+no machine-wide changes. **Pair the phone over wireless debugging**, not USB - the HDMI
 adapter takes the only port, so a cable and a capture test cannot happen
 at the same time.
 
