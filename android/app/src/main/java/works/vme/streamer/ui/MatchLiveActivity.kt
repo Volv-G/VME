@@ -252,6 +252,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private lateinit var liberoBtn: Button
     private lateinit var timeoutButton: Button
     private lateinit var killButton: Button
+    private lateinit var blockButton: Button
     private lateinit var cancelActionButton: Button
 
     /**
@@ -1005,7 +1006,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             playerActionButton("\uD83C\uDFAF Ace", EventType.Ace, BG_ATTACK),
             playerActionButton("\uD83E\uDD32 Dig", EventType.Dig, BG_DEFENCE),
             playerActionButton("\uD83E\uDD3F Dive", EventType.Dive, BG_DEFENCE),
-            playerActionButton("\uD83E\uDDF1 Block", EventType.Block, BG_DEFENCE),
+            playerActionButton(LBL_BLOCK, EventType.Block, BG_DEFENCE)
+                .also { blockButton = it },
             playerActionButton("\u2B50 Highlight", EventType.Highlight, BG_EXTRA),
         )
         buildCancelActionButton()
@@ -1042,9 +1044,13 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * "nobody set that one up" -- the same thing tapping the killer
      * means, for an operator whose eye is on the buttons rather than
      * the court.
+     *
+     * During the block question it is the "no" answer: the block
+     * happened, it just did not win the point.
      */
     private fun cancelArmed() {
         val armed = armedAction ?: return
+        if (armed == EventType.BlockPoint) { answerBlock(point = false); return }
         // Abandoned, so its clock goes with it - otherwise the next
         // event recorded would inherit this one's start.
         actionStartedAt = null
@@ -1537,33 +1543,44 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     }
 
     /**
-     * Log a player action. A Block first asks whether it won the point:
-     * a "block+" scores (see [EventType.BlockPoint]), a plain block is a
-     * stat. Either answer is stamped at the Block tap - [actionStartedAt]
-     * stays set until it is given - and backing out of the question logs
-     * the plain block rather than losing it.
+     * Log a player action. A Block is not logged yet: it first asks
+     * whether it won the point (see [askBlockPoint]).
      */
     private fun recordPlayerAction(type: EventType, jersey: Int, before: GameState) {
-        val payload = mapOf("team" to Side.Home.wire, "player_number" to jersey)
-        if (type != EventType.Block) {
-            record(type, payload)
-            askForAssist(type, jersey, before)
-            return
-        }
-        var answered = false
-        AlertDialog.Builder(this)
-            .setTitle("Point-winning block?")
-            .setMessage("Block by #$jersey")
-            .setPositiveButton("Yes, point") { _, _ ->
-                answered = true
-                record(EventType.BlockPoint, payload)
-            }
-            .setNegativeButton("No, just a block") { _, _ ->
-                answered = true
-                record(EventType.Block, payload)
-            }
-            .setOnDismissListener { if (!answered) record(EventType.Block, payload) }
-            .show()
+        if (type == EventType.Block) { askBlockPoint(jersey); return }
+        record(type, mapOf("team" to Side.Home.wire, "player_number" to jersey))
+        askForAssist(type, jersey, before)
+    }
+
+    /** Jersey of the blocker while "did it win the point?" is open. */
+    private var pendingBlocker: Int? = null
+
+    /**
+     * The blocker is picked - did the block win the point?
+     *
+     * Asked on the buttons, as the assist is, rather than in a dialog
+     * over the score: the Block button turns into "Block point" (yes,
+     * a "block+", see [EventType.BlockPoint]) and the Cancel button
+     * under it into "Just a block" (no). Nothing is logged until one is
+     * tapped, and either is stamped at the Block tap - [actionStartedAt]
+     * is left running for it.
+     */
+    private fun askBlockPoint(jersey: Int) {
+        pendingBlocker = jersey
+        armedAction = EventType.BlockPoint
+        armedLabel = LBL_BLOCK_POINT
+        refreshAllViews()
+        log("block #$jersey: point-winning? tap Block point, or Just a block")
+    }
+
+    private fun answerBlock(point: Boolean) {
+        val jersey = pendingBlocker ?: return
+        pendingBlocker = null
+        disarm()
+        record(
+            if (point) EventType.BlockPoint else EventType.Block,
+            mapOf("team" to Side.Home.wire, "player_number" to jersey),
+        )
     }
 
     /** Long-press: credit a player who is not on the court (armed),
@@ -1827,6 +1844,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                 // what the Cancel button beside it means: no assist.
                 armedAction == EventType.Assist && type == EventType.Kill ->
                     cancelArmed()
+                // Likewise the Block button, lit as "Block point" while
+                // the block's question is open, is the "yes".
+                armedAction == EventType.BlockPoint && type == EventType.Block ->
+                    answerBlock(point = true)
                 type == EventType.Ace -> recordAce()
                 else -> armAction(type, label)
             }
@@ -1909,6 +1930,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         if (assistForKiller != null && type != EventType.Assist) {
             assistForKiller = null
         }
+        // An unanswered block question is a block that did not score.
+        if (pendingBlocker != null) answerBlock(point = false)
         // Tapping the armed action again is a cancel, so its clock
         // goes too.
         if (armedAction == type) { actionStartedAt = null; disarm(); return }
@@ -2847,16 +2870,30 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // grid's highlight legible ("Assist -> tap the setter") instead
         // of a lit Kill button that has already been recorded.
         killButton.text = if (armed == EventType.Assist) LBL_ASSIST else LBL_KILL
+        // The same for Block, whose second stage is a yes/no.
+        blockButton.text = if (armed == EventType.BlockPoint) LBL_BLOCK_POINT else LBL_BLOCK
         cancelActionButton.visibility = if (armed != null) View.VISIBLE else View.GONE
-        cancelActionButton.text =
-            if (armed == EventType.Assist) LBL_NO_ASSIST else LBL_CANCEL
+        cancelActionButton.text = when (armed) {
+            EventType.Assist -> LBL_NO_ASSIST
+            EventType.BlockPoint -> LBL_JUST_BLOCK
+            else -> LBL_CANCEL
+        }
         if (armed != null) {
             for (b in gatedButtons) {
                 b.isEnabled = false
                 b.alpha = 0.25f
             }
             for ((pos, btn) in positionButtons) {
-                val filled = lineup.homePositions[pos] != null
+                val jersey = lineup.homePositions[pos]
+                if (armed == EventType.BlockPoint) {
+                    // The player is already picked: the grid only shows
+                    // who, and the answer is on the buttons.
+                    val blocker = jersey != null && jersey == pendingBlocker
+                    btn.alpha = if (blocker) 1.0f else 0.25f
+                    if (blocker) tintButton(btn, ARMED_SLOT_BG) else restoreButton(btn)
+                    continue
+                }
+                val filled = jersey != null
                 btn.isEnabled = true
                 btn.alpha = if (filled) 1.0f else 0.35f
                 tintButton(btn, if (filled) ARMED_SLOT_BG else ARMED_SLOT_EMPTY_BG)
@@ -4347,6 +4384,11 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
          *  assist prompt, where cancelling means "unassisted". */
         private const val LBL_CANCEL = "\u2715 Cancel"
         private const val LBL_NO_ASSIST = "\u2715 No assist"
+        private const val LBL_BLOCK = "\ud83e\uddf1 Block"
+        /** The Block button while "did it win the point?" is open; the
+         *  Cancel button says [LBL_JUST_BLOCK] then. */
+        private const val LBL_BLOCK_POINT = "\ud83e\uddf1 Block point"
+        private const val LBL_JUST_BLOCK = "\u2715 Just a block"
         private const val LBL_TIMEOUT = "\u23F1\uFE0F Timeout"
         private const val LBL_TIMEOUT_END = "\u23F1\uFE0F End Timeout"
 
