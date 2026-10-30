@@ -76,7 +76,25 @@ class MatchRenderer:
 
     def __enter__(self) -> "MatchRenderer":
         for clip in self.match.clips:
-            self._clips[clip.id] = VideoFileClip(str(self.media_dir / clip.filename))
+            vc = VideoFileClip(str(self.media_dir / clip.filename))
+            # MoviePy takes its fps from ffmpeg's "fps" figure, which for a
+            # variable-rate file (a phone's) is the AVERAGE - 59.69 for a
+            # nominal 59.94 - while the ffmpeg pipe it reads delivers frames
+            # on the nominal grid, duplicating to fill it. Left alone, a seek
+            # landed at frame/59.69 (up to ~5 s late by the end of a 20 min
+            # clip), sequential reads then ran at 59.94 from wherever it
+            # landed, and the audio, fetched at frame/59.69 throughout,
+            # drifted against both: pop-ups trailed the picture and the
+            # sound wandered in and out of sync at every cut. The probed
+            # fps (r_frame_rate) is the pipe's grid and the unit every
+            # frame number in the match is counted in.
+            if clip.fps > 0 and abs(vc.fps - clip.fps) > 1e-3:
+                logger.info(
+                    "%s: reading at %.3f fps, not MoviePy's %.3f (variable frame rate)",
+                    clip.filename, clip.fps, vc.fps,
+                )
+                vc.fps = vc.reader.fps = clip.fps
+            self._clips[clip.id] = vc
         return self
 
     def __exit__(self, *exc_info) -> None:
