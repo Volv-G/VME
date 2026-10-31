@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { formatBytes } from "../util/bytes";
 import { displayName } from "../util/names";
 import { RenderPlayerModal } from "./RenderPlayerModal";
 import type {
@@ -94,13 +95,6 @@ function isPlayerReel(filename: string): boolean {
  *  purpose (dozens of uploads per match). */
 function isUploadable(filename: string): boolean {
   return isFullRender(filename) || isPlayerReel(filename);
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function formatAge(unixSeconds: number): string {

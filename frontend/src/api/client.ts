@@ -14,6 +14,9 @@ import type {
   RosterDto,
   StatsDto,
   StatsScope,
+  StorageCleanupDto,
+  StorageCleanupIn,
+  StorageDto,
   TeamSummary,
   TournamentInfoDto,
   TournamentSummary,
@@ -110,6 +113,26 @@ export const api = {
           ? `/teams/${enc(team)}/tournaments/${enc(tournament)}`
           : `/teams/${enc(team)}`;
     return fetchJson<StatsDto>(`${base}/stats`);
+  },
+
+  // ---- Disk use -----------------------------------------------------------
+  async getStorage(team: string): Promise<StorageDto> {
+    return fetchJson<StorageDto>(`/teams/${enc(team)}/storage`);
+  },
+  /** Delete footage and/or renders of one match, or of every match of
+   *  the team when `match` is left out. */
+  async cleanupStorage(
+    body: StorageCleanupIn,
+    team: string,
+    match?: { tournament: string; date: string; match: string }
+  ): Promise<StorageCleanupDto> {
+    const base = match
+      ? matchBase(team, match.tournament, match.date, match.match)
+      : `/teams/${enc(team)}`;
+    return fetchJson<StorageCleanupDto>(`${base}/storage/cleanup`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   },
 
   // ---- Teams + roster ---------------------------------------------------

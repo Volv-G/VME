@@ -114,6 +114,44 @@ export interface StatsScope {
   match?: string;
 }
 
+/** Disk use of one match folder. Footage counts the clips and their
+ *  preview proxies; "other" is match.json and the opponent logo. */
+export interface MatchStorageDto {
+  tournament: string;
+  date: string;
+  match: string;
+  opponent: string;
+  match_index: number | null;
+  footage_bytes: number;
+  footage_files: number;
+  renders_bytes: number;
+  renders_files: number;
+  other_bytes: number;
+  /** A full (not condensed) render exists. */
+  has_full_render: boolean;
+  /** A job for this match is queued or running; cleanup skips it. */
+  busy: boolean;
+}
+
+export interface StorageDto {
+  matches: MatchStorageDto[];
+  total: { footage_bytes: number; renders_bytes: number; other_bytes: number };
+  disk_free_bytes: number | null;
+}
+
+/** What to delete: the clips and their proxies, the renders, or both. */
+export interface StorageCleanupIn {
+  footage?: boolean;
+  renders?: boolean;
+}
+
+export interface StorageCleanupDto {
+  freed_bytes: number;
+  matches: number;
+  /** Matches left alone, each with the reason. */
+  skipped: string[];
+}
+
 export interface TeamSummary {
   name: string;
   has_roster: boolean;

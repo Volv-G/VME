@@ -6,6 +6,7 @@ import { Modal } from "../components/Modal";
 import { StatsButton } from "../components/StatsButton";
 import { TeamRenderQueue } from "../components/TeamRenderQueue";
 import { TeamFullRendersPanel } from "../components/TeamFullRendersPanel";
+import { TeamStoragePanel } from "../components/TeamStoragePanel";
 import { displayName } from "../util/names";
 
 export function TeamDashboardPage() {
@@ -125,6 +126,8 @@ export function TeamDashboardPage() {
       <TeamRenderQueue team={team} />
 
       <TeamFullRendersPanel team={team} />
+
+      <TeamStoragePanel team={team} />
 
       {/* Settings moved to their own page once there were two upload
           engines: a playlist is YouTube's vocabulary and a folder path

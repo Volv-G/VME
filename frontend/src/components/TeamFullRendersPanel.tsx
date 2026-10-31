@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { FullRenderDto, YouTubeStatusDto } from "../types/api";
+import { formatBytes } from "../util/bytes";
 import { displayName } from "../util/names";
 import { RenderPlayerModal } from "./RenderPlayerModal";
 
@@ -21,12 +22,6 @@ interface Props {
 }
 
 const POLL_MS = 5000;
-
-function formatBytes(n: number): string {
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
 
 /** Stable identity for a render row: unique, and the same string the
  *  per-row busy indicator already keys on. */

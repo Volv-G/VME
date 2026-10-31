@@ -1580,3 +1580,10 @@ label {
 .stats-table th.stats-sortable:hover { color: var(--text); }
 .stats-table th[aria-sort="ascending"], .stats-table th[aria-sort="descending"] { color: var(--text); }
 .stats-table .stats-arrow { font-size: 10px; }
+
+/* Team storage panel: the stats table's look, scrolling under a sticky
+   header and total once a season outgrows the card. */
+.storage-scroll { max-height: 420px; overflow-y: auto; }
+.stats-table tfoot td { position: sticky; bottom: 0; background: var(--bg-elev); }
+.stats-table .storage-actions button { padding: 1px 6px; font-size: 11px; margin-left: 4px; }
+.storage-warn { color: var(--warn, #d29922); }
