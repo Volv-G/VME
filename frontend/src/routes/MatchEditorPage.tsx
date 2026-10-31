@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { MatchDto } from "../types/api";
+import { StatsButton } from "../components/StatsButton";
 import { ClipManager } from "../components/ClipManager";
 import { resolveClipFromGlobal } from "../components/clipFrames";
 import { analyzeCuts } from "../components/cutAnalysis";
@@ -749,6 +750,10 @@ export function MatchEditorPage() {
           {data.fps.toFixed(2)} fps
         </span>
         <div className="header-spacer" />
+        <StatsButton
+          scope={{ team, tournament, date, match }}
+          title={`vs ${data.opponent || "TBD"}${data.date ? `, ${data.date}` : ""}`}
+        />
         <button onClick={() => setClipsOpen(true)}>Clips...</button>
         <button
           onClick={() => {

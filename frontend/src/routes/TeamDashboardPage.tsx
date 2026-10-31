@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { RosterDto, TournamentSummary } from "../types/api";
 import { Modal } from "../components/Modal";
+import { StatsButton } from "../components/StatsButton";
 import { TeamRenderQueue } from "../components/TeamRenderQueue";
 import { TeamFullRendersPanel } from "../components/TeamFullRendersPanel";
 import { displayName } from "../util/names";
@@ -84,7 +85,10 @@ export function TeamDashboardPage() {
       <div className="card">
         <div className="card-header">
           <h2>{displayName(team)}</h2>
-          <Link to="/" className="muted">← All teams</Link>
+          <div className="toolbar">
+            <StatsButton scope={{ team }} title={`${displayName(team)}: all matches`} />
+            <Link to="/" className="muted">← All teams</Link>
+          </div>
         </div>
         {error && <div className="error">{error}</div>}
       </div>

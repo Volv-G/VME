@@ -87,6 +87,33 @@ export interface TournamentInfoDto {
   full_name?: string | null;
 }
 
+/** One row of the stats table: a player, or the team total. */
+export interface StatsLineDto {
+  number: number | null;
+  name: string;
+  /** Event type -> count. */
+  events: Record<string, number>;
+  /** Rallies served (ending in a point), and how many of those we won. */
+  serves: number;
+  serves_won: number;
+}
+
+export interface StatsDto {
+  matches: number;
+  /** Event types that occur, in display order. */
+  columns: string[];
+  players: StatsLineDto[];
+  total: StatsLineDto;
+}
+
+/** What a stats table covers: a team, one of its tournaments, or a match. */
+export interface StatsScope {
+  team: string;
+  tournament?: string;
+  date?: string;
+  match?: string;
+}
+
 export interface TeamSummary {
   name: string;
   has_roster: boolean;

@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { MatchSummary, OpponentDto, TournamentInfoDto } from "../types/api";
 import { Modal } from "../components/Modal";
+import { StatsButton } from "../components/StatsButton";
 import { displayName } from "../util/names";
 
 export function TournamentDashboardPage() {
@@ -182,9 +183,15 @@ export function TournamentDashboardPage() {
             <h2 style={{ margin: 0 }}>{displayName(tournament)}</h2>
             <div className="row-meta">{displayName(team)}</div>
           </div>
-          <Link to={`/teams/${encodeURIComponent(team)}`} className="muted">
-            ← {displayName(team)}
-          </Link>
+          <div className="toolbar">
+            <StatsButton
+              scope={{ team, tournament }}
+              title={`${displayName(tournament)}: all matches`}
+            />
+            <Link to={`/teams/${encodeURIComponent(team)}`} className="muted">
+              ← {displayName(team)}
+            </Link>
+          </div>
         </div>
         {error && <div className="error">{error}</div>}
 

@@ -12,6 +12,8 @@ import type {
   RenderFileDto,
   RenderJobDto,
   RosterDto,
+  StatsDto,
+  StatsScope,
   TeamSummary,
   TournamentInfoDto,
   TournamentSummary,
@@ -98,6 +100,18 @@ const matchBase = (
   `/dates/${enc(date)}/matches/${enc(match)}`;
 
 export const api = {
+  // ---- Player stats -------------------------------------------------------
+  async getStats(scope: StatsScope): Promise<StatsDto> {
+    const { team, tournament, date, match } = scope;
+    const base =
+      tournament && date && match
+        ? matchBase(team, tournament, date, match)
+        : tournament
+          ? `/teams/${enc(team)}/tournaments/${enc(tournament)}`
+          : `/teams/${enc(team)}`;
+    return fetchJson<StatsDto>(`${base}/stats`);
+  },
+
   // ---- Teams + roster ---------------------------------------------------
   async listTeams(): Promise<TeamSummary[]> {
     return fetchJson<TeamSummary[]>("/teams");
