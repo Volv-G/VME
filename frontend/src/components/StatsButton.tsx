@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { StatsDto, StatsLineDto, StatsScope } from "../types/api";
 import { eventIcon } from "./eventStyle";
@@ -61,8 +61,57 @@ function pct(won: number, of: number): string {
   return of ? `${Math.round((100 * won) / of)}%` : "";
 }
 
+/** Sortable columns: the jersey, the name, an event type, or a serve column. */
+type SortKey = "number" | "name" | "serves" | "serves_won" | "pct" | `ev:${string}`;
+
+function sortValue(line: StatsLineDto, key: SortKey): number | string {
+  switch (key) {
+    case "number":
+      return line.number ?? 0;
+    case "name":
+      return (line.name || "").toLocaleLowerCase();
+    case "serves":
+      return line.serves;
+    case "serves_won":
+      return line.serves_won;
+    case "pct":
+      // No serves sorts below 0%: there is nothing to rank.
+      return line.serves ? line.serves_won / line.serves : -1;
+    default:
+      return line.events[key.slice(3)] ?? 0;
+  }
+}
+
 function StatsTable({ stats }: { stats: StatsDto }) {
+  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({
+    key: "number",
+    desc: false,
+  });
   if (stats.matches === 0) return <p className="muted">No matches yet.</p>;
+
+  // A first click on a number column puts the most at the top - that is
+  // the question being asked - and a second click flips it.
+  const sortBy = (key: SortKey) =>
+    setSort((s) =>
+      s.key === key ? { key, desc: !s.desc } : { key, desc: key !== "number" && key !== "name" }
+    );
+  const players = [...stats.players].sort((a, b) => {
+    const va = sortValue(a, sort.key);
+    const vb = sortValue(b, sort.key);
+    const c = va < vb ? -1 : va > vb ? 1 : (a.number ?? 0) - (b.number ?? 0);
+    return sort.desc && va !== vb ? -c : c;
+  });
+  const th = (key: SortKey, label: React.ReactNode, className?: string, title?: string) => (
+    <th
+      className={`stats-sortable${className ? ` ${className}` : ""}`}
+      onClick={() => sortBy(key)}
+      title={title ? `${title} - click to sort` : "Click to sort"}
+      aria-sort={sort.key === key ? (sort.desc ? "descending" : "ascending") : "none"}
+    >
+      {label}
+      <span className="stats-arrow">{sort.key === key ? (sort.desc ? " ▼" : " ▲") : ""}</span>
+    </th>
+  );
   const row = (line: StatsLineDto, key: string, total = false) => (
     <tr key={key} className={total ? "stats-total" : undefined}>
       <td className="stats-num">{line.number ?? ""}</td>
@@ -86,20 +135,20 @@ function StatsTable({ stats }: { stats: StatsDto }) {
         <table className="stats-table">
           <thead>
             <tr>
-              <th>#</th>
-              <th className="stats-name">Player</th>
+              {th("number", "#")}
+              {th("name", "Player", "stats-name")}
               {stats.columns.map((c) => (
-                <th key={c} title={LABELS[c] ?? c}>
-                  {eventIcon(c)} {LABELS[c] ?? c}
-                </th>
+                <Fragment key={c}>
+                  {th(`ev:${c}`, `${eventIcon(c)} ${LABELS[c] ?? c}`, undefined, LABELS[c] ?? c)}
+                </Fragment>
               ))}
-              <th>Serves</th>
-              <th>Won</th>
-              <th>Won %</th>
+              {th("serves", "Serves")}
+              {th("serves_won", "Won")}
+              {th("pct", "Won %")}
             </tr>
           </thead>
           <tbody>
-            {stats.players.map((p) => row(p, String(p.number)))}
+            {players.map((p) => row(p, String(p.number)))}
             {row(stats.total, "total", true)}
           </tbody>
         </table>
