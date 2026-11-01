@@ -1056,6 +1056,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         actionStartedAt = null
         if (armed == EventType.Assist) {
             assistForKiller = null
+            killAt = null
             log("assist: none")
         } else {
             log("cancelled: $armedLabel")
@@ -1528,6 +1529,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // has no room for one.
         if (armed == EventType.Assist && jersey == assistForKiller) {
             assistForKiller = null
+            killAt = null
             disarm()
             log("assist: none")
             return
@@ -1548,7 +1550,9 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      */
     private fun recordPlayerAction(type: EventType, jersey: Int, before: GameState) {
         if (type == EventType.Block) { askBlockPoint(jersey); return }
-        record(type, mapOf("team" to Side.Home.wire, "player_number" to jersey))
+        val at = if (type == EventType.Assist) killAt else null
+        killAt = null
+        record(type, mapOf("team" to Side.Home.wire, "player_number" to jersey), at)
         askForAssist(type, jersey, before)
     }
 
@@ -1899,6 +1903,16 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      */
     private var stateBeforeKill: GameState? = null
 
+    /**
+     * When the kill whose assist prompt is open was stamped. The assist
+     * is stamped the same: the set and the kill are one play, and the
+     * setter is often picked well after the ball is down - long enough,
+     * through a celebration, to fall past [MAX_ACTION_BACKDATE_MS] and
+     * land in the next rally. Taken by the assist that answers the
+     * prompt; cleared when the prompt is dismissed or abandoned.
+     */
+    private var killAt: Long? = null
+
     /** What the grid and the court diagram show, and what grid taps
      *  resolve against. */
     private val lineupState: GameState
@@ -1929,6 +1943,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // the operator has moved on to another action.
         if (assistForKiller != null && type != EventType.Assist) {
             assistForKiller = null
+            killAt = null
         }
         // An unanswered block question is a block that did not score.
         if (pendingBlocker != null) answerBlock(point = false)
@@ -2009,7 +2024,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         pushCourt()
         // The set happened at the kill, not when the operator got round
         // to naming who made it.
-        beginAction()
+        killAt = match.events.lastOrNull { it.type == EventType.Kill }?.at
         armedAction = EventType.Assist
         armedLabel = LBL_ASSIST
         refreshAllViews()
@@ -2249,7 +2264,13 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         actionStartedAt = System.currentTimeMillis()
     }
 
-    private fun record(type: EventType, payload: Map<String, Any?> = emptyMap()) {
+    /** [stampAt], when given, is the event's moment outright: an assist
+     *  takes its kill's, however long the setter took to pick. */
+    private fun record(
+        type: EventType,
+        payload: Map<String, Any?> = emptyMap(),
+        stampAt: Long? = null,
+    ) {
         val started = actionStartedAt
         actionStartedAt = null
         val now = System.currentTimeMillis()
@@ -2258,6 +2279,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // walked away from and came back to - and stamping the event
         // minutes early would be worse than stamping it late.
         val at = when {
+            stampAt != null -> stampAt
             started == null -> now
             now - started > MAX_ACTION_BACKDATE_MS -> {
                 log("event: ignoring a stale start (${(now - started) / 1000}s)")
