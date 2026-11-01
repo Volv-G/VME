@@ -158,6 +158,52 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   const activeFpsRef = useRef(fps);
   activeFpsRef.current = activeClip?.fps || fps;
 
+  // The clip on screen while it is zoomed past what its reduced copy
+  // holds, and the size it goes back to. Zoom magnifies the decoded
+  // frame, so a 360p copy zoomed 4x shows 360p pixels four screen
+  // pixels wide - not the footage. Past that point the original is
+  // served instead, and zooming back out returns to the chosen size.
+  const zoomedFullRef = useRef<{ id: string; q: number } | null>(null);
+
+  /** Zoom moved: serve the original once a screen pixel would show
+   *  less than one pixel of the reduced copy, and give it back when
+   *  the zoom comes most of the way out (not at the same point, so a
+   *  wheel hovering at the threshold doesn't reload over and over). */
+  function onZoomChange(scale: number) {
+    const v = videoRef.current;
+    const clip = activeClip;
+    if (!v || !clip || !v.videoWidth || !v.videoHeight) return;
+    let full = zoomedFullRef.current;
+    if (full && full.id !== clip.id) {
+      // Moved on to another clip, which resets the zoom: the one left
+      // behind goes back to its reduced copy.
+      zoomedFullRef.current = null;
+      serveAt(full.id, full.q);
+      full = null;
+    }
+    const served = servedRef.current[clip.id] ?? 0;
+    // Device pixels the frame's height covers at scale 1, letterboxed
+    // into the element by object-fit: contain.
+    const fitted =
+      Math.min(v.clientHeight, (v.clientWidth * v.videoHeight) / v.videoWidth) *
+      (window.devicePixelRatio || 1);
+    if (!fitted) return;
+    if (full?.id === clip.id) {
+      // The reduced copy's height over the fitted height: where it ran out.
+      const ranOut = full.q / fitted;
+      if (scale <= Math.max(1, ranOut * 0.8)) {
+        zoomedFullRef.current = null;
+        serveAt(clip.id, full.q);
+      }
+      return;
+    }
+    if (served === 0 || !(clip.height > served)) return;
+    if (scale > Math.max(1.05, served / fitted)) {
+      zoomedFullRef.current = { id: clip.id, q: served };
+      serveAt(clip.id, 0);
+    }
+  }
+
   /** Serve clip `id` at `q` from now on. For the clip on screen, the
    *  reload keeps the frame and whether it was playing. */
   function serveAt(id: string, q: number) {
@@ -180,6 +226,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   useEffect(() => {
     let stop = false;
     let timer = 0;
+    // A new size is a fresh start; the next zoom re-decides.
+    zoomedFullRef.current = null;
     if (quality === 0) {
       for (const c of clips) serveAt(c.id, 0);
       setQualityNote({});
@@ -192,6 +240,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       const notes: Record<string, number> = {};
       for (const c of order) {
         if (stop) return;
+        // Zoomed in on the original: zooming out hands it back.
+        if (zoomedFullRef.current?.id === c.id) continue;
         if (c.height && c.height <= quality) {
           serveAt(c.id, 0);
           continue;
@@ -721,6 +771,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           doubleClick={{ mode: "reset" }}
           wheel={{ step: 0.01 }}
           panning={{ velocityDisabled: true }}
+          onTransform={(_ref, s) => onZoomChange(s.scale)}
         >
           <TransformComponent
             wrapperClass="vp-zoom-wrapper"
