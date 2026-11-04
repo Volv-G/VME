@@ -1587,3 +1587,5 @@ label {
 .stats-table tfoot td { position: sticky; bottom: 0; background: var(--bg-elev); }
 .stats-table .storage-actions button { padding: 1px 6px; font-size: 11px; margin-left: 4px; }
 .storage-warn { color: var(--warn, #d29922); }
+/* Plays sum up the event columns before it; set it apart from them. */
+.stats-table .stats-plays { border-left: 1px solid var(--border); font-weight: 600; }

@@ -12,6 +12,10 @@ the tagging behind it:
   redone (`replay`) never produced a point, so it is not a serve here,
   and a rally served with nobody in position 1 counts towards the team
   total only.
+- A play is what a player's reel shows: their events, with those close
+  enough to be one piece of play (a dig and the kill it set up) counted
+  once. Counted by the caller, which has the reel builder
+  (`api/stats.py`); the team's figure is the sum of its players'.
 """
 
 from __future__ import annotations
@@ -37,9 +41,11 @@ class PlayerLine:
     events: Counter = field(default_factory=Counter)
     serves: int = 0
     serves_won: int = 0
+    plays: int = 0
 
     def add(self, other: "PlayerLine") -> None:
         self.events.update(other.events)
+        self.plays += other.plays
         self.serves += other.serves
         self.serves_won += other.serves_won
 

@@ -62,7 +62,14 @@ function pct(won: number, of: number): string {
 }
 
 /** Sortable columns: the jersey, the name, an event type, or a serve column. */
-type SortKey = "number" | "name" | "serves" | "serves_won" | "pct" | `ev:${string}`;
+type SortKey =
+  | "number"
+  | "name"
+  | "plays"
+  | "serves"
+  | "serves_won"
+  | "pct"
+  | `ev:${string}`;
 
 function sortValue(line: StatsLineDto, key: SortKey): number | string {
   switch (key) {
@@ -70,6 +77,8 @@ function sortValue(line: StatsLineDto, key: SortKey): number | string {
       return line.number ?? 0;
     case "name":
       return (line.name || "").toLocaleLowerCase();
+    case "plays":
+      return line.plays;
     case "serves":
       return line.serves;
     case "serves_won":
@@ -119,6 +128,7 @@ function StatsTable({ stats }: { stats: StatsDto }) {
       {stats.columns.map((c) => (
         <td key={c}>{line.events[c] || ""}</td>
       ))}
+      <td className="stats-plays">{line.plays || ""}</td>
       <td>{line.serves || ""}</td>
       <td>{line.serves_won || ""}</td>
       <td className="muted">{pct(line.serves_won, line.serves)}</td>
@@ -127,9 +137,10 @@ function StatsTable({ stats }: { stats: StatsDto }) {
   return (
     <>
       <p className="muted" style={{ marginTop: 0 }}>
-        {stats.matches} {stats.matches === 1 ? "match" : "matches"}. A serve is a
-        rally that ended in a point while we served, credited to the player in
-        position 1.
+        {stats.matches} {stats.matches === 1 ? "match" : "matches"}. Plays are
+        what each player's reel shows: their events, with ones close together
+        counted once. A serve is a rally that ended in a point while we
+        served, credited to the player in position 1.
       </p>
       <div className="stats-scroll">
         <table className="stats-table">
@@ -142,6 +153,13 @@ function StatsTable({ stats }: { stats: StatsDto }) {
                   {th(`ev:${c}`, `${eventIcon(c)} ${LABELS[c] ?? c}`, undefined, LABELS[c] ?? c)}
                 </Fragment>
               ))}
+              {th(
+                "plays",
+                "🎬 Plays",
+                "stats-plays",
+                "Plays in the player's reel: every event above, with those " +
+                  "close together (a dig and the kill it set up) counted once"
+              )}
               {th("serves", "Serves")}
               {th("serves_won", "Won")}
               {th("pct", "Won %")}

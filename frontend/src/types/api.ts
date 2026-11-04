@@ -96,6 +96,9 @@ export interface StatsLineDto {
   /** Rallies served (ending in a point), and how many of those we won. */
   serves: number;
   serves_won: number;
+  /** Plays in the player's reel: every credited event, with those close
+   *  together (a dig and the kill it set up) counted once. */
+  plays: number;
 }
 
 export interface StatsDto {
