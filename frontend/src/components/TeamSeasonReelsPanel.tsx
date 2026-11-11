@@ -6,11 +6,12 @@ import { RenderPlayerModal } from "./RenderPlayerModal";
 
 /**
  * Season reels: one per player, every match of theirs in order, each
- * introduced by a title card. Rendering and uploading to OneDrive are
- * separate actions, as for a match's reels - render, check it, then send.
+ * introduced by a title card. This card is where they are rendered; the
+ * finished files are listed with the other renders, under "Season reels"
+ * in that list's picker (see `SeasonReelRows`).
  *
- * Polled quickly only while something is queued or being written, since
- * each listing re-reads every match of the season.
+ * Polled quickly only while a render is queued, since each listing
+ * re-reads every match of the season to count the plays.
  */
 const POLL_BUSY_MS = 5000;
 const POLL_IDLE_MS = 30000;
@@ -27,8 +28,7 @@ export function TeamSeasonReelsPanel({ team }: { team: string }) {
   const [data, setData] = useState<SeasonReelsDto | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [playing, setPlaying] = useState<SeasonReelFileDto | null>(null);
+  const [busy, setBusy] = useState<number | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -38,10 +38,7 @@ export function TeamSeasonReelsPanel({ team }: { team: string }) {
     }
   }, [team]);
 
-  const live =
-    !!data &&
-    (data.players.some((p) => p.job_state) ||
-      data.files.some((f) => f.rendering || f.upload_state));
+  const live = !!data && data.players.some((p) => p.job_state);
 
   useEffect(() => {
     void reload();
@@ -49,27 +46,22 @@ export function TeamSeasonReelsPanel({ team }: { team: string }) {
     return () => clearInterval(t);
   }, [reload, live]);
 
-  async function act(key: string, fn: () => Promise<unknown>, done: string) {
+  async function render(number: number, label: string) {
     setErr(null);
     setNote(null);
-    setBusy(key);
+    setBusy(number);
     try {
-      await fn();
-      setNote(done);
+      await api.renderSeasonReel(team, number);
+      setNote(
+        `${label}: season reel queued. It renders when the Render lane runs, ` +
+          `and appears in the renders list under "Season reels".`
+      );
     } catch (e) {
       setErr(String(e));
     } finally {
       setBusy(null);
       await reload();
     }
-  }
-
-  function remove(f: SeasonReelFileDto) {
-    const up = f.onedrive_url
-      ? "\n\nIt is in OneDrive; that copy is not touched."
-      : "";
-    if (!confirm(`Delete ${f.label}'s season reel (${formatBytes(f.size_bytes)})?${up}`)) return;
-    void act(f.filename, () => api.deleteSeasonReel(team, f.filename), `Deleted ${f.label}'s season reel.`);
   }
 
   const players = (data?.players ?? []).filter((p) => p.plays > 0 || p.job_state);
@@ -79,8 +71,8 @@ export function TeamSeasonReelsPanel({ team }: { team: string }) {
       <div className="card-header">
         <h2>Season reels</h2>
         <span className="row-meta">
-          Every match of a player's, each opened by a title card. Rendering
-          and uploading to OneDrive are separate steps.
+          Every match of a player's, each opened by a title card. Finished
+          reels are in the renders list under "Season reels".
         </span>
       </div>
 
@@ -115,127 +107,180 @@ export function TeamSeasonReelsPanel({ team }: { team: string }) {
               </tr>
             </thead>
             <tbody>
-              {players.map((p) => {
-                const key = `render:${p.number}`;
-                return (
-                  <tr key={p.number}>
-                    <td className="stats-name">{p.label}</td>
-                    <td>{p.plays || ""}</td>
-                    <td>{p.matches || ""}</td>
-                    <td className="storage-actions">
-                      {p.job_state ? (
-                        <span className="rendering-badge">
-                          {p.job_state === "rendering" ? "● rendering" : "queued"}
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() =>
-                            act(
-                              key,
-                              () => api.renderSeasonReel(team, p.number),
-                              `${p.label}: season reel queued. It renders when the Render lane runs.`
-                            )
-                          }
-                          disabled={busy !== null || p.plays === 0}
-                          title={`Render ${p.label}'s ${p.plays} plays from ${p.matches} matches into one reel`}
-                        >
-                          {busy === key ? "…" : "🎬 Render season reel"}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+              {players.map((p) => (
+                <tr key={p.number}>
+                  <td className="stats-name">{p.label}</td>
+                  <td>{p.plays || ""}</td>
+                  <td>{p.matches || ""}</td>
+                  <td className="storage-actions">
+                    {p.job_state ? (
+                      <span className="rendering-badge">
+                        {p.job_state === "rendering" ? "● rendering" : "queued"}
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => render(p.number, p.label)}
+                        disabled={busy !== null || p.plays === 0}
+                        title={`Render ${p.label}'s ${p.plays} plays from ${p.matches} matches into one reel`}
+                      >
+                        {busy === p.number ? "…" : "🎬 Render season reel"}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       )}
+    </div>
+  );
+}
 
-      {!!data?.files.length && (
-        <div className="list render-list" style={{ marginTop: 12 }}>
-          {data.files.map((f) => {
-            const leaf = f.filename.split("/").pop() || f.filename;
-            const disabled = busy !== null || f.rendering;
-            return (
-              <div
-                key={f.filename}
-                className={`list-row render-row${f.rendering ? " is-rendering" : ""}`}
-                style={{ alignItems: "center" }}
-              >
-                {f.has_thumbnail && (
-                  <img
-                    src={api.seasonReelThumbnailUrl(team, f.filename)}
-                    alt=""
-                    width={64}
-                    height={36}
-                    style={{ borderRadius: 3, border: "1px solid var(--border)", objectFit: "cover", flex: "0 0 auto" }}
-                  />
-                )}
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-                    <strong style={{ fontSize: 13 }}>{f.label}</strong>
-                    {f.matches > 0 && <span className="row-meta">{f.matches} matches</span>}
-                    {f.rendering && <span className="rendering-badge">● rendering</span>}
-                    {f.upload_state && (
-                      <span className="rendering-badge">↑ {f.upload_state}</span>
-                    )}
-                  </div>
-                  <div className="row-meta" style={{ marginTop: 2 }}>
-                    <a
-                      href="#"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        if (!f.rendering) setPlaying(f);
-                      }}
-                      title={`Play ${leaf}`}
-                    >
-                      {leaf}
-                    </a>{" "}
-                    · {formatBytes(f.size_bytes)} · {formatAge(f.created_at)}
-                  </div>
+/**
+ * Rows for finished season reels, as the renders list shows them when
+ * "Season reels" is picked: play, download, delete, and upload to
+ * OneDrive - a separate step from rendering, as for a match's reels.
+ */
+export function SeasonReelRows({
+  team,
+  files,
+  onChanged,
+  onError,
+  onNote,
+}: {
+  team: string;
+  files: SeasonReelFileDto[];
+  /** Something was deleted or queued: re-read the list. */
+  onChanged: () => void | Promise<void>;
+  onError: (msg: string | null) => void;
+  onNote: (msg: string) => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [playing, setPlaying] = useState<SeasonReelFileDto | null>(null);
+
+  async function act(key: string, fn: () => Promise<unknown>, done: string) {
+    onError(null);
+    setBusy(key);
+    try {
+      await fn();
+      onNote(done);
+    } catch (e) {
+      onError(String(e));
+    } finally {
+      setBusy(null);
+      await onChanged();
+    }
+  }
+
+  function remove(f: SeasonReelFileDto) {
+    const up = f.onedrive_url ? "\n\nIt is in OneDrive; that copy is not touched." : "";
+    if (!confirm(`Delete ${f.label}'s season reel (${formatBytes(f.size_bytes)})?${up}`)) return;
+    void act(f.filename, () => api.deleteSeasonReel(team, f.filename), `Deleted ${f.label}'s season reel.`);
+  }
+
+  if (!files.length) {
+    return (
+      <p className="muted" style={{ margin: 0 }}>
+        No season reels yet. Render one from the Season reels card.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <div className="list render-list">
+        {files.map((f) => {
+          const leaf = f.filename.split("/").pop() || f.filename;
+          const disabled = busy !== null || f.rendering;
+          return (
+            <div
+              key={f.filename}
+              className={`list-row render-row${f.rendering ? " is-rendering" : ""}`}
+              style={{ alignItems: "center" }}
+            >
+              {f.has_thumbnail && (
+                <img
+                  src={api.seasonReelThumbnailUrl(team, f.filename)}
+                  alt=""
+                  width={64}
+                  height={36}
+                  style={{ borderRadius: 3, border: "1px solid var(--border)", objectFit: "cover", flex: "0 0 auto" }}
+                />
+              )}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <span
+                    style={{
+                      fontSize: 10,
+                      padding: "1px 6px",
+                      borderRadius: 3,
+                      border: "1px solid var(--border)",
+                      color: "var(--text-dim)",
+                    }}
+                    title="Season reel: every match of this player's, each opened by a title card"
+                  >
+                    season
+                  </span>
+                  <strong style={{ fontSize: 13 }}>{f.label}</strong>
+                  {f.matches > 0 && <span className="row-meta">{f.matches} matches</span>}
+                  {f.rendering && <span className="rendering-badge">● rendering</span>}
+                  {f.upload_state && <span className="rendering-badge">↑ {f.upload_state}</span>}
                 </div>
-                <div style={{ display: "flex", gap: 6, alignItems: "center", whiteSpace: "nowrap" }}>
-                  {f.onedrive_url && (
-                    <a href={f.onedrive_url} target="_blank" rel="noreferrer" style={{ color: "#3aa55d" }}>
-                      ▶ in OneDrive
-                    </a>
-                  )}
-                  <a href={api.seasonReelUrl(team, f.filename)} download title="Download">
-                    <button style={{ padding: "2px 8px" }} disabled={f.rendering}>⬇</button>
-                  </a>
-                  <button
-                    onClick={() => remove(f)}
-                    disabled={disabled}
-                    title="Delete this season reel from disk"
-                    style={{ padding: "2px 8px" }}
+                <div className="row-meta" style={{ marginTop: 2 }}>
+                  <a
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (!f.rendering) setPlaying(f);
+                    }}
+                    title={`Play ${leaf}`}
                   >
-                    {busy === f.filename ? "…" : "🗑"}
-                  </button>
-                  <button
-                    onClick={() =>
-                      act(
-                        `up:${f.filename}`,
-                        () => api.uploadSeasonReel(team, f.filename),
-                        `${f.label}: upload queued. It runs when the OneDrive lane runs.`
-                      )
-                    }
-                    disabled={disabled || !!f.upload_state}
-                    title={
-                      f.onedrive_url
-                        ? "Upload to OneDrive again (replaces the copy there)"
-                        : "Upload this season reel to OneDrive"
-                    }
-                    style={{ padding: "2px 8px" }}
-                  >
-                    {busy === `up:${f.filename}` ? "…" : "📤"}
-                  </button>
+                    {leaf}
+                  </a>{" "}
+                  · {formatBytes(f.size_bytes)} · {formatAge(f.created_at)}
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
-
+              <div style={{ display: "flex", gap: 6, alignItems: "center", whiteSpace: "nowrap" }}>
+                {f.onedrive_url && (
+                  <a href={f.onedrive_url} target="_blank" rel="noreferrer" style={{ color: "#3aa55d" }}>
+                    ▶ in OneDrive
+                  </a>
+                )}
+                <a href={api.seasonReelUrl(team, f.filename)} download title="Download">
+                  <button style={{ padding: "2px 8px" }} disabled={f.rendering}>⬇</button>
+                </a>
+                <button
+                  onClick={() => remove(f)}
+                  disabled={disabled}
+                  title="Delete this season reel from disk"
+                  style={{ padding: "2px 8px" }}
+                >
+                  {busy === f.filename ? "…" : "🗑"}
+                </button>
+                <button
+                  onClick={() =>
+                    act(
+                      `up:${f.filename}`,
+                      () => api.uploadSeasonReel(team, f.filename),
+                      `${f.label}: upload queued. It runs when the OneDrive lane runs.`
+                    )
+                  }
+                  disabled={disabled || !!f.upload_state}
+                  title={
+                    f.onedrive_url
+                      ? "Upload to OneDrive again (replaces the copy there)"
+                      : "Upload this season reel to OneDrive"
+                  }
+                  style={{ padding: "2px 8px" }}
+                >
+                  {busy === `up:${f.filename}` ? "…" : "📤"}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
       {playing && (
         <RenderPlayerModal
           open
@@ -246,6 +291,6 @@ export function TeamSeasonReelsPanel({ team }: { team: string }) {
           downloadUrl={api.seasonReelUrl(team, playing.filename)}
         />
       )}
-    </div>
+    </>
   );
 }

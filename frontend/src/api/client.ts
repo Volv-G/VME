@@ -12,6 +12,7 @@ import type {
   RenderFileDto,
   RenderJobDto,
   RosterDto,
+  SeasonReelFileDto,
   SeasonReelsDto,
   StatsDto,
   StatsScope,
@@ -119,6 +120,10 @@ export const api = {
   // ---- Season reels -------------------------------------------------------
   async listSeasonReels(team: string): Promise<SeasonReelsDto> {
     return fetchJson<SeasonReelsDto>(`/teams/${enc(team)}/season-reels`);
+  },
+  /** Finished season reels only - cheap, for the renders list to poll. */
+  async listSeasonReelFiles(team: string): Promise<SeasonReelFileDto[]> {
+    return fetchJson<SeasonReelFileDto[]>(`/teams/${enc(team)}/season-reels/files`);
   },
   async renderSeasonReel(team: string, jersey: number): Promise<RenderJobDto> {
     return fetchJson<RenderJobDto>(`/teams/${enc(team)}/season-reels`, {

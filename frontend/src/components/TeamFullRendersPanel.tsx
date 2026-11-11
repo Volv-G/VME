@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { FullRenderDto, YouTubeStatusDto } from "../types/api";
+import type { FullRenderDto, SeasonReelFileDto, YouTubeStatusDto } from "../types/api";
 import { formatBytes } from "../util/bytes";
 import { displayName } from "../util/names";
 import { RenderPlayerModal } from "./RenderPlayerModal";
+import { SeasonReelRows } from "./TeamSeasonReelsPanel";
+
+/** Picker entry for the team's season reels, beside the matches. Not a
+ *  possible `matchKey`, which always has slashes in it. */
+const SEASON_KEY = "season-reels";
 
 /**
  * Team-wide "Full renders" list, with per-row YouTube upload action.
@@ -156,6 +161,8 @@ function PendingBadges({ r }: { r: FullRenderDto }) {
 
 export function TeamFullRendersPanel({ team }: Props) {
   const [renders, setRenders] = useState<FullRenderDto[]>([]);
+  // Season reels belong to no match; they get their own picker entry.
+  const [seasonFiles, setSeasonFiles] = useState<SeasonReelFileDto[]>([]);
   const [status, setStatus] = useState<YouTubeStatusDto | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -198,7 +205,13 @@ export function TeamFullRendersPanel({ team }: Props) {
 
   const reload = useCallback(async () => {
     try {
-      setRenders(await api.listTeamFullRenders(team));
+      const [r, s] = await Promise.all([
+        api.listTeamFullRenders(team),
+        // A failure here must not blank the match renders.
+        api.listSeasonReelFiles(team).catch(() => [] as SeasonReelFileDto[]),
+      ]);
+      setRenders(r);
+      setSeasonFiles(s);
     } catch (e) {
       setErr(String(e));
     }
@@ -568,12 +581,18 @@ export function TeamFullRendersPanel({ team }: Props) {
   // Fall back to the latest match when nothing is chosen yet, or when
   // the chosen one no longer has renders (deleted on disk).
   const currentMatch =
-    activeMatch && groupsByKey.has(activeMatch)
-      ? activeMatch
-      : matches[0]?.key ?? null;
-  const visible = currentMatch
-    ? renders.filter((r) => matchKey(r) === currentMatch)
-    : [];
+    activeMatch === SEASON_KEY && seasonFiles.length
+      ? SEASON_KEY
+      : activeMatch && groupsByKey.has(activeMatch)
+        ? activeMatch
+        : matches[0]?.key ?? (seasonFiles.length ? SEASON_KEY : null);
+  const showingSeason = currentMatch === SEASON_KEY;
+  // Season reels have rows of their own (`SeasonReelRows`), outside the
+  // selection and bulk actions, which are about match renders.
+  const visible =
+    currentMatch && !showingSeason
+      ? renders.filter((r) => matchKey(r) === currentMatch)
+      : [];
 
   // Selection is only ever over the visible match: a bulk delete that
   // also took rows from a match you can't see would be indefensible.
@@ -633,8 +652,10 @@ export function TeamFullRendersPanel({ team }: Props) {
     <div className="card">
       <div className="card-header">
         <h2>
-          Full renders ({visible.length}
-          {matches.length > 1 ? ` of ${renders.length}` : ""})
+          Full renders ({showingSeason ? seasonFiles.length : visible.length}
+          {matches.length > 1 || seasonFiles.length
+            ? ` of ${renders.length + seasonFiles.length}`
+            : ""})
         </h2>
         {status && (
           <span
@@ -741,8 +762,13 @@ export function TeamFullRendersPanel({ team }: Props) {
           onChange={(e) => goToMatch(e.target.value)}
           disabled={!!bulk}
           style={{ width: "100%", marginBottom: 8 }}
-          title="Choose a match. Latest first."
+          title="Choose a match (latest first), or the season reels."
         >
+          {seasonFiles.length > 0 && (
+            <option value={SEASON_KEY}>
+              Season reels ({seasonFiles.length})
+            </option>
+          )}
           {matches.map((g) => (
             <option key={g.key} value={g.key}>
               {matchOptionLabel(g)}
@@ -891,7 +917,15 @@ export function TeamFullRendersPanel({ team }: Props) {
         </div>
       )}
 
-      {renders.length === 0 ? (
+      {showingSeason ? (
+        <SeasonReelRows
+          team={team}
+          files={seasonFiles}
+          onChanged={reload}
+          onError={setErr}
+          onNote={(text) => setNote({ text, ok: true })}
+        />
+      ) : renders.length === 0 ? (
         <p className="muted" style={{ margin: 0 }}>
           No renders yet. Run a full render or player reels from a match
           page.

@@ -108,10 +108,7 @@ def list_season_reels(team: str) -> SeasonReelsOut:
         matches[sm.reel.jersey] = matches.get(sm.reel.jersey, 0) + 1
 
     renders = _live_jobs(team, SEASON_REEL_KIND)
-    uploads = _live_jobs(team, SEASON_UPLOAD_KIND)
     render_state = {int((j.payload or {}).get("jersey", -1)): _state(j) for j in renders}
-    writing = {j.output_filename for j in renders if j.status == JobStatus.RUNNING}
-    upload_state = {str((j.payload or {}).get("filename")): _state(j) for j in uploads}
 
     numbers = sorted({p.number for p in roster.players} | set(plays))
     players = [
@@ -124,6 +121,22 @@ def list_season_reels(team: str) -> SeasonReelsOut:
         )
         for n in numbers
     ]
+    return SeasonReelsOut(players=players, files=_files(team, roster), no_footage=no_footage)
+
+
+@router.get("/files", response_model=list[SeasonReelFileOut])
+def list_season_reel_files(team: str) -> list[SeasonReelFileOut]:
+    """The finished reels alone, without counting anyone's plays: cheap
+    enough for the renders list to poll."""
+    _team_or_404(team)
+    return _files(team, scanner.load_team_roster(team))
+
+
+def _files(team: str, roster) -> list[SeasonReelFileOut]:
+    renders = _live_jobs(team, SEASON_REEL_KIND)
+    uploads = _live_jobs(team, SEASON_UPLOAD_KIND)
+    writing = {j.output_filename for j in renders if j.status == JobStatus.RUNNING}
+    upload_state = {str((j.payload or {}).get("filename")): _state(j) for j in uploads}
 
     files: list[SeasonReelFileOut] = []
     root = paths.season_reels_dir(team)
@@ -162,7 +175,7 @@ def list_season_reels(team: str) -> SeasonReelsOut:
                     )
                 )
     files.sort(key=lambda f: f.created_at, reverse=True)
-    return SeasonReelsOut(players=players, files=files, no_footage=no_footage)
+    return files
 
 
 @router.post("")
