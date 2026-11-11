@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import MEDIA_ROOT, VIDEO_EXTENSIONS
-from ..jobs.manager import JOBS, JobStatus
+from ..jobs.manager import JOBS, SEASON_REEL_KIND, JobStatus
 from ..library import paths, scanner
 from ..library.preview_proxy import PROXY_DIR
 
@@ -101,12 +101,14 @@ def _footage_files(folder: Path) -> list[Path]:
 
 
 def _busy(team: str, tournament: str, date: str, match: str) -> bool:
+    # A season reel reads the footage of every match of the team.
     return any(
         j.status in _LIVE
         and j.team == team
-        and j.tournament == tournament
-        and j.date == date
-        and j.match == match
+        and (
+            j.kind == SEASON_REEL_KIND
+            or (j.tournament == tournament and j.date == date and j.match == match)
+        )
         for j in JOBS.list_jobs()
     )
 

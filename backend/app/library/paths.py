@@ -190,9 +190,14 @@ TOURNAMENTS_SUBDIR = "tournaments"
 # to the team folder (same convention as team logos).
 PLAYER_PHOTO_SUBDIR = "players"
 
+# Season reels: one player's plays from every match of the team, so they
+# belong to the team rather than to any match folder.
+# `season_reels/<NN>_<player>/<file>`.
+SEASON_REELS_SUBDIR = "season_reels"
+
 # Per-team folders that are never tournaments, for the benefit of the
 # legacy scan below.
-RESERVED_TEAM_SUBDIRS = {TOURNAMENTS_SUBDIR, PLAYER_PHOTO_SUBDIR}
+RESERVED_TEAM_SUBDIRS = {TOURNAMENTS_SUBDIR, PLAYER_PHOTO_SUBDIR, SEASON_REELS_SUBDIR}
 
 
 def tournaments_root(team: str) -> Path:
@@ -283,6 +288,10 @@ OPPONENT_LOGO_STEM = "opponent_logo"
 # Formats accepted for logo uploads. PNG/WebP keep transparency, which
 # matters for overlaying a logo on a thumbnail.
 LOGO_EXTENSIONS = {".png", ".webp", ".jpg", ".jpeg", ".gif", ".bmp"}
+
+
+def season_reels_dir(team: str) -> Path:
+    return team_dir(team) / SEASON_REELS_SUBDIR
 
 
 def player_photo_dir(team: str) -> Path:

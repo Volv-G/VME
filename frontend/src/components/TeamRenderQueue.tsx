@@ -4,6 +4,11 @@ import type { QueueLane, QueueStateDto, RenderJobDto } from "../types/api";
 import { JobRow } from "./RenderPanel";
 import { displayName } from "../util/names";
 
+/** Season reel jobs belong to the team, not to a match. */
+function isSeason(j: RenderJobDto): boolean {
+  return j.kind === "season_reel" || j.kind === "season_reel_upload";
+}
+
 interface Props {
   team: string;
 }
@@ -296,10 +301,18 @@ export function TeamRenderQueue({ team }: Props) {
           {jobs.map((j) => (
             <div key={j.id}>
               <div className="row-meta" style={{ marginBottom: 2 }}>
-                {j.match_index ? `Match ${j.match_index} – ` : ""}
-                vs {j.opponent || "TBD"}
-                {" · "}
-                {displayName(j.tournament)} · {j.date}
+                {isSeason(j) ? (
+                  // Team-level: the season, not a match. `opponent`
+                  // carries the player.
+                  <>Season reel · {j.opponent}</>
+                ) : (
+                  <>
+                    {j.match_index ? `Match ${j.match_index} – ` : ""}
+                    vs {j.opponent || "TBD"}
+                    {" · "}
+                    {displayName(j.tournament)} · {j.date}
+                  </>
+                )}
               </div>
               <JobRow
                 job={j}
@@ -307,7 +320,13 @@ export function TeamRenderQueue({ team }: Props) {
                 onDelete={() => deleteJob(j.id)}
                 onRetry={() => retryJob(j)}
                 downloadUrl={
-                  j.output_filename
+                  j.kind === "season_reel"
+                    ? j.output_filename
+                      ? api.seasonReelUrl(j.team, j.output_filename)
+                      : undefined
+                    : isSeason(j)
+                      ? undefined
+                      : j.output_filename
                     ? api.downloadUrl(
                         j.team,
                         j.tournament,

@@ -6,6 +6,7 @@ import { Modal } from "../components/Modal";
 import { StatsButton } from "../components/StatsButton";
 import { TeamRenderQueue } from "../components/TeamRenderQueue";
 import { TeamFullRendersPanel } from "../components/TeamFullRendersPanel";
+import { TeamSeasonReelsPanel } from "../components/TeamSeasonReelsPanel";
 import { TeamStoragePanel } from "../components/TeamStoragePanel";
 import { displayName } from "../util/names";
 
@@ -126,6 +127,8 @@ export function TeamDashboardPage() {
       <TeamRenderQueue team={team} />
 
       <TeamFullRendersPanel team={team} />
+
+      <TeamSeasonReelsPanel team={team} />
 
       <TeamStoragePanel team={team} />
 

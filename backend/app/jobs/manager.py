@@ -73,7 +73,12 @@ LANES = (RENDER_LANE, UPLOAD_LANE, ONEDRIVE_LANE)
 # the render lane: it is a local file copy that competes for the same
 # disk a render is writing to, and it can't be parked for hours the way
 # a YouTube upload can.
-_UPLOAD_KINDS = {"youtube_upload"}
+#
+# Season reels are team-level jobs (no tournament / date / match): the
+# render runs in the render lane, and the upload always goes to OneDrive.
+SEASON_REEL_KIND = "season_reel"
+SEASON_UPLOAD_KIND = "season_reel_upload"
+_UPLOAD_KINDS = {"youtube_upload", SEASON_UPLOAD_KIND}
 
 
 def lane_for_kind(kind: str) -> str:

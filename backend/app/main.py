@@ -20,6 +20,7 @@ from .api import (
     matches,
     media,
     renders,
+    season_reels,
     stats as stats_api,
     storage as storage_api,
     teams,
@@ -108,6 +109,7 @@ api.include_router(events.router)
 api.include_router(media.router)
 api.include_router(logos.router)
 api.include_router(renders.router)
+api.include_router(season_reels.router)
 api.include_router(stats_api.router)
 api.include_router(storage_api.router)
 app.mount("/api", api)

@@ -36,6 +36,8 @@ from ..render.thumbnail import (
 from .manager import (
     JOBS,
     ONEDRIVE_LANE,
+    SEASON_REEL_KIND,
+    SEASON_UPLOAD_KIND,
     UPLOAD_LANE,
     JobStatus,
     RenderJob,
@@ -318,6 +320,17 @@ def run_render(job: RenderJob) -> None:
 
     if job.kind == "media_server_copy":
         _run_media_server_copy(job, cancel_check)
+        return
+
+    # Team-level: a season reel spans every match, so there is no one
+    # match to load here.
+    if job.kind in (SEASON_REEL_KIND, SEASON_UPLOAD_KIND):
+        from .season_reel import run_season_reel, run_season_upload
+
+        if job.kind == SEASON_REEL_KIND:
+            run_season_reel(job, cancel_check)
+        else:
+            run_season_upload(job, cancel_check)
         return
 
     m = scanner.load_or_create_match(job.team, job.tournament, job.date, job.match)
@@ -1005,6 +1018,8 @@ def _is_reel_filename(filename: str) -> bool:
 
 def _upload_lane(job: RenderJob) -> str:
     """The lane an upload job runs in: the engine it would go to right now."""
+    if job.kind == SEASON_UPLOAD_KIND:
+        return ONEDRIVE_LANE  # season reels only ever go to OneDrive
     filename = str((job.payload or {}).get("filename", ""))
     dest = _upload_config(job.team).destination_for(
         is_reel=_is_reel_filename(filename)

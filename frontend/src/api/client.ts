@@ -12,6 +12,7 @@ import type {
   RenderFileDto,
   RenderJobDto,
   RosterDto,
+  SeasonReelsDto,
   StatsDto,
   StatsScope,
   StorageCleanupDto,
@@ -113,6 +114,38 @@ export const api = {
           ? `/teams/${enc(team)}/tournaments/${enc(tournament)}`
           : `/teams/${enc(team)}`;
     return fetchJson<StatsDto>(`${base}/stats`);
+  },
+
+  // ---- Season reels -------------------------------------------------------
+  async listSeasonReels(team: string): Promise<SeasonReelsDto> {
+    return fetchJson<SeasonReelsDto>(`/teams/${enc(team)}/season-reels`);
+  },
+  async renderSeasonReel(team: string, jersey: number): Promise<RenderJobDto> {
+    return fetchJson<RenderJobDto>(`/teams/${enc(team)}/season-reels`, {
+      method: "POST",
+      body: JSON.stringify({ jersey }),
+    });
+  },
+  async uploadSeasonReel(team: string, filename: string): Promise<RenderJobDto> {
+    return fetchJson<RenderJobDto>(`/teams/${enc(team)}/season-reels/upload`, {
+      method: "POST",
+      body: JSON.stringify({ filename }),
+    });
+  },
+  async deleteSeasonReel(team: string, filename: string): Promise<void> {
+    await fetchJson<unknown>(
+      `/teams/${enc(team)}/season-reels/files/${encPath(filename)}`,
+      { method: "DELETE" }
+    );
+  },
+  seasonReelUrl(team: string, filename: string, inline = false): string {
+    return (
+      `${BASE}/teams/${enc(team)}/season-reels/files/${encPath(filename)}` +
+      (inline ? "?inline=1" : "")
+    );
+  },
+  seasonReelThumbnailUrl(team: string, filename: string): string {
+    return `${BASE}/teams/${enc(team)}/season-reels/files/${encPath(filename)}/thumbnail`;
   },
 
   // ---- Disk use -----------------------------------------------------------

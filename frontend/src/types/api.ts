@@ -117,6 +117,42 @@ export interface StatsScope {
   match?: string;
 }
 
+/** One player in the season reels panel. */
+export interface SeasonPlayerDto {
+  number: number;
+  /** "#8 Kate G". */
+  label: string;
+  /** Plays across every match with footage, and in how many matches. */
+  plays: number;
+  matches: number;
+  /** Set while a season render for them is in the queue. */
+  job_state: "queued" | "rendering" | null;
+}
+
+export interface SeasonReelFileDto {
+  /** Relative to the team's season reels folder: `<NN>_<player>/<file>`. */
+  filename: string;
+  number: number | null;
+  label: string;
+  size_bytes: number;
+  created_at: number;
+  /** Still being written by a running job. */
+  rendering: boolean;
+  has_thumbnail: boolean;
+  /** Matches in the reel. */
+  matches: number;
+  onedrive_url: string | null;
+  onedrive_uploaded_at: number | null;
+  upload_state: "queued" | "uploading" | null;
+}
+
+export interface SeasonReelsDto {
+  players: SeasonPlayerDto[];
+  files: SeasonReelFileDto[];
+  /** Matches with plays whose footage is gone, so they can't be rendered. */
+  no_footage: string[];
+}
+
 /** Disk use of one match folder. Footage counts the clips and their
  *  preview proxies; "other" is match.json and the opponent logo. */
 export interface MatchStorageDto {
@@ -321,7 +357,10 @@ export interface RenderJobDto {
    *  - "focused_highlights" one mp4 per FocusIn/FocusOut span
    *  - "condensed"          whole match, plays only (serve -> point)
    *  - "player_reels"       one file per player, all of their plays
-   *                         concatenated, with a chapter sidecar */
+   *                         concatenated, with a chapter sidecar
+   *  - "season_reel"        one player's plays from every match; a
+   *                         team-level job (no tournament/date/match)
+   *  - "season_reel_upload" a season reel to OneDrive */
   kind:
     | "full"
     | "condensed"
@@ -329,7 +368,10 @@ export interface RenderJobDto {
     | "highlights"
     | "focused_highlights"
     | "player_reels"
-    | "youtube_upload";
+    | "youtube_upload"
+    | "media_server_copy"
+    | "season_reel"
+    | "season_reel_upload";
   /** Render parameters captured at enqueue time. */
   playhead_frame: number | null;
   seconds_around: number | null;
