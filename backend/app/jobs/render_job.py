@@ -1529,6 +1529,11 @@ def _run_upload(job: RenderJob, cancel_check) -> None:
             ),
         )
     JOBS.mark_done(job.id, result.video_url)
+    # The public site embeds YouTube videos, so a new one is worth a
+    # publish - once the day's uploads settle, not after each.
+    from ..publish.site import publish_soon
+
+    publish_soon()
 
 
 # Backoff for an upload YouTube is throttling. The per-channel upload

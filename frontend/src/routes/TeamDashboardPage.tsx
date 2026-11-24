@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { RosterDto, TournamentSummary } from "../types/api";
 import { Modal } from "../components/Modal";
 import { StatsButton } from "../components/StatsButton";
+import { SitePublishButton } from "../components/SitePublishButton";
 import { TeamRenderQueue } from "../components/TeamRenderQueue";
 import { TeamFullRendersPanel } from "../components/TeamFullRendersPanel";
 import { TeamSeasonReelsPanel } from "../components/TeamSeasonReelsPanel";
@@ -88,6 +89,7 @@ export function TeamDashboardPage() {
         <div className="card-header">
           <h2>{displayName(team)}</h2>
           <div className="toolbar">
+            <SitePublishButton />
             <StatsButton scope={{ team }} title={`${displayName(team)}: all matches`} />
             <Link to="/" className="muted">← All teams</Link>
           </div>

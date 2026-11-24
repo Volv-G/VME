@@ -1,0 +1,77 @@
+/**
+ * The documents VME publishes and the site reads, by key:
+ *
+ *   teams                                     TeamsDoc
+ *   team/<team>                               TeamDoc
+ *   match/<team>/<tournament>/<date>/<match>  MatchDoc
+ *
+ * Written by `backend/app/publish/` in VME; keep the two in step.
+ * Image fields hold a key for `/api/image/<key>`.
+ */
+
+export interface TeamsDoc {
+  teams: { slug: string; name: string; color: string; logo: string | null }[];
+  published_at: number;
+}
+
+export interface StatsLine {
+  number: number | null;
+  name: string;
+  events: Record<string, number>;
+  serves: number;
+  serves_won: number;
+  plays: number;
+}
+
+export interface Stats {
+  matches: number;
+  columns: string[];
+  players: StatsLine[];
+  total: StatsLine;
+}
+
+export interface Video {
+  kind: "full" | "condensed" | "reel" | "season";
+  youtube_id: string;
+  /** Set for reels: whose plays they are. */
+  player_number?: number | null;
+  player_label?: string;
+}
+
+export interface MatchSummary {
+  /** `<tournament>/<date>/<match>`, the tail of the match doc's key. */
+  key: string;
+  date: string;
+  /** Order on the day; null for the day's only match. */
+  index: number | null;
+  opponent: string;
+  opponent_logo: string | null;
+  /** Finished sets, ours first: [[25, 19], [22, 25]]. */
+  sets: [number, number][];
+  home_sets: number;
+  away_sets: number;
+  /** "W" / "L" once the match is over, else null. */
+  result: "W" | "L" | null;
+  videos: Video[];
+}
+
+export interface TeamDoc {
+  slug: string;
+  name: string;
+  color: string;
+  logo: string | null;
+  players: { number: number; name: string; photo: string | null }[];
+  stats: Stats;
+  tournaments: { slug: string; name: string; matches: MatchSummary[] }[];
+  season_reels: Video[];
+  published_at: number;
+}
+
+export interface MatchDoc extends MatchSummary {
+  team: string;
+  team_name: string;
+  tournament: string;
+  tournament_name: string;
+  stats: Stats;
+  published_at: number;
+}

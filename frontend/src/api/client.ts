@@ -117,6 +117,14 @@ export const api = {
     return fetchJson<StatsDto>(`${base}/stats`);
   },
 
+  // ---- Public site --------------------------------------------------------
+  async siteStatus(): Promise<{ configured: boolean; url: string | null }> {
+    return fetchJson(`/site/status`);
+  },
+  async publishSite(): Promise<{ docs: number; images: number; url: string }> {
+    return fetchJson(`/site/publish`, { method: "POST" });
+  },
+
   // ---- Season reels -------------------------------------------------------
   async listSeasonReels(team: string): Promise<SeasonReelsDto> {
     return fetchJson<SeasonReelsDto>(`/teams/${enc(team)}/season-reels`);
