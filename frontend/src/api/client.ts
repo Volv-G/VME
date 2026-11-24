@@ -14,6 +14,7 @@ import type {
   RosterDto,
   SeasonReelFileDto,
   SeasonReelsDto,
+  SiteRequestsDto,
   StatsDto,
   StatsScope,
   StorageCleanupDto,
@@ -123,6 +124,16 @@ export const api = {
   },
   async publishSite(): Promise<{ docs: number; images: number; url: string }> {
     return fetchJson(`/site/publish`, { method: "POST" });
+  },
+  async siteRequests(): Promise<SiteRequestsDto> {
+    return fetchJson(`/site/requests`);
+  },
+  async decideSiteRequest(id: number, action: "approve" | "decline"): Promise<SiteRequestsDto> {
+    return fetchJson(`/site/requests/${id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
   },
 
   // ---- Season reels -------------------------------------------------------

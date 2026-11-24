@@ -30,6 +30,7 @@ from .api import (
 from .jobs import persistence as jobs_persistence
 from .jobs.dispatcher import DISPATCHER
 from .upload.thumbnail_sync import WORKER as THUMBNAIL_SYNC
+from .publish.site_sync import WORKER as SITE_SYNC
 
 logging.basicConfig(
     level=logging.INFO,
@@ -87,6 +88,8 @@ def _startup_jobs() -> None:
     # limit) so a batch of reels ends up fully branded without the user
     # re-pushing each one by hand.
     THUMBNAIL_SYNC.start()
+    # Fetches join requests and player edits from the public site.
+    SITE_SYNC.start()
 
 
 @app.on_event("shutdown")
@@ -96,6 +99,7 @@ def _shutdown_jobs() -> None:
     explicit flush is needed here."""
     DISPATCHER.stop()
     THUMBNAIL_SYNC.stop()
+    SITE_SYNC.stop()
 
 
 api = FastAPI()

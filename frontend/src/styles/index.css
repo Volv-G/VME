@@ -1589,3 +1589,11 @@ label {
 .storage-warn { color: var(--warn, #d29922); }
 /* Plays sum up the event columns before it; set it apart from them. */
 .stats-table .stats-plays { border-left: 1px solid var(--border); font-weight: 600; }
+
+/* Access requests from the public site (SiteRequestsBell). */
+.site-bell { margin-left: 8px; padding: 2px 8px; font-size: 13px; }
+.site-bell-count { display: inline-block; min-width: 16px; padding: 0 5px; border-radius: 8px; background: var(--danger, #c64545); color: #fff; font-weight: 700; font-size: 11px; line-height: 16px; text-align: center; }
+.site-requests { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.site-request { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.site-request-main { flex: 1; min-width: 0; }
+.site-small { font-size: 12px; }

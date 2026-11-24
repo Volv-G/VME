@@ -1,75 +1,114 @@
 import { Link, Route, Routes, useParams } from "react-router-dom";
 import type { MatchDoc, MatchSummary, TeamDoc, TeamsDoc, Video } from "../shared/docs";
-import { formatDate, imageUrl, useDoc, type Loaded } from "./api";
+import type { Me } from "../shared/api";
+import { formatDate, imageUrl, MeContext, savedInvite, useApi, useDoc, useMe } from "./api";
+import { Crest, Gate, matchPath, playerPath, teamPath } from "./common";
+import { AdminPage } from "./Admin";
+import { JoinPage } from "./Join";
+import { PlayerEditor } from "./PlayerEditor";
 import { StatsTable } from "./StatsTable";
 import { YouTube } from "./YouTube";
 
-const enc = encodeURIComponent;
-const teamPath = (team: string) => `/t/${enc(team)}`;
-const matchPath = (team: string, key: string) =>
-  `${teamPath(team)}/m/${key.split("/").map(enc).join("/")}`;
-
 export function App() {
+  const me = useApi<Me>("/api/me");
+  const value = { me: me.state === "ok" ? me.doc : null, reload: me.reload };
   return (
-    <div className="page">
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/t/:team" element={<TeamPage />} />
-        <Route path="/t/:team/p/:number" element={<PlayerPage />} />
-        <Route path="/t/:team/m/:tournament/:date/:match" element={<MatchPage />} />
-        <Route path="*" element={<p className="muted">Nothing here. <Link to="/">Home</Link></p>} />
-      </Routes>
-    </div>
+    <MeContext.Provider value={value}>
+      <TopBar />
+      <div className="page">
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/join/:code" element={<JoinPage />} />
+          <Route path="/admin" element={<AdminPage />} />
+          <Route path="/t/:team" element={<TeamPage />} />
+          <Route path="/t/:team/p/:number" element={<PlayerPage />} />
+          <Route path="/t/:team/m/:tournament/:date/:match" element={<MatchPage />} />
+          <Route path="*" element={<p className="muted">Nothing here. <Link to="/">Home</Link></p>} />
+        </Routes>
+      </div>
+    </MeContext.Provider>
   );
 }
 
-/** Loading / error states shared by every page. */
-function Gate<T>({ res, children }: { res: Loaded<T>; children: (doc: T) => React.ReactNode }) {
-  if (res.state === "loading") return <p className="muted">Loading…</p>;
-  if (res.state === "error") {
-    const text =
-      res.status === 401
-        ? "Please sign in to see this page."
-        : res.status === 503
-          ? "The site is being set up. Check back soon."
-          : res.status === 404
-            ? "Nothing has been published here yet."
-            : `Something went wrong (${res.message}).`;
-    return <p className="notice">{text}</p>;
-  }
-  return <>{children(res.doc)}</>;
-}
-
-function Crest({ src, color, label, size = 40 }: { src: string | null; color?: string; label: string; size?: number }) {
-  return src ? (
-    <img className="crest" src={imageUrl(src)} alt="" width={size} height={size} />
-  ) : (
-    <span className="crest crest-blank" style={{ width: size, height: size, background: color || "#555" }}>
-      {label.slice(0, 2).toUpperCase()}
-    </span>
+function TopBar() {
+  const { me } = useMe();
+  return (
+    <nav className="topbar">
+      <Link to="/" className="brand">Courtside</Link>
+      <span className="topbar-right">
+        {me?.admin && (
+          <Link to="/admin">
+            Admin{me.pending > 0 && <span className="badge" title="Requests waiting">{me.pending}</span>}
+          </Link>
+        )}
+        {me && (
+          <span className="muted small who" title={me.email}>
+            {me.email}
+          </span>
+        )}
+        {me && (
+          <a href="/cdn-cgi/access/logout" className="small">
+            Sign out
+          </a>
+        )}
+      </span>
+    </nav>
   );
 }
 
 function Home() {
+  const { me } = useMe();
   const res = useDoc<TeamsDoc>("teams");
+  const invite = savedInvite.get();
+  const waiting = (me?.memberships ?? []).filter((m) => m.status !== "approved");
   return (
     <>
       <header className="masthead">
-        <h1>VME</h1>
-        <p className="muted">Matches, highlights and stats.</p>
+        <h1>Matches, highlights and stats</h1>
       </header>
+      {waiting.length > 0 && (
+        <div className="list notices">
+          {waiting.map((m) => (
+            <div key={m.id} className="row">
+              <span className="row-main">
+                {m.role === "coach" ? "Coach" : m.player_name} · {m.team_name}
+              </span>
+              <span className={`chip chip-${m.status}`}>
+                {m.status === "pending" ? "waiting for approval" : "declined"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       <Gate res={res}>
-        {(doc) => (
-          <div className="cards">
-            {doc.teams.map((t) => (
-              <Link key={t.slug} to={teamPath(t.slug)} className="card team-card" style={{ borderTopColor: t.color }}>
-                <Crest src={t.logo} color={t.color} label={t.name} size={56} />
-                <strong>{t.name}</strong>
-              </Link>
-            ))}
-          </div>
-        )}
+        {(doc) =>
+          doc.teams.length ? (
+            <div className="cards">
+              {doc.teams.map((t) => (
+                <Link key={t.slug} to={teamPath(t.slug)} className="card team-card" style={{ borderTopColor: t.color }}>
+                  <Crest src={t.logo} color={t.color} label={t.name} size={56} />
+                  <strong>{t.name}</strong>
+                </Link>
+              ))}
+            </div>
+          ) : waiting.length ? null : (
+            <p className="notice">
+              This site is for team families. To get in, open the invite link your team shared
+              {invite ? (
+                <>
+                  {" "}- or <Link to={`/join/${invite}`}>use the one you opened before</Link>
+                </>
+              ) : null}
+              .
+            </p>
+          )
+        }
       </Gate>
+      {invite && (me?.memberships.length ?? 0) > 0 && (
+        <p className="small">
+          <Link to={`/join/${invite}`}>Ask for access to another player or team</Link>
+        </p>
+      )}
     </>
   );
 }
@@ -147,7 +186,7 @@ function TeamPage() {
             <h2>Players</h2>
             <div className="players">
               {t.players.map((p) => (
-                <Link key={p.number} to={`${teamPath(t.slug)}/p/${p.number}`} className="player">
+                <Link key={p.number} to={playerPath(t.slug, p.number)} className="player">
                   {p.photo ? (
                     <img src={imageUrl(p.photo)} alt="" loading="lazy" />
                   ) : (
@@ -168,8 +207,13 @@ function TeamPage() {
 
 function PlayerPage() {
   const { team = "", number = "" } = useParams();
+  const { me } = useMe();
   const res = useDoc<TeamDoc>(`team/${team}`);
   const n = Number(number);
+  const canEdit =
+    !!me &&
+    (me.admin ||
+      me.memberships.some((m) => m.team === team && m.status === "approved" && m.role === "player" && m.number === n));
   return (
     <Gate res={res}>
       {(t) => {
@@ -192,6 +236,7 @@ function PlayerPage() {
                 </h1>
               </div>
             </header>
+            {canEdit && <PlayerEditor team={t.slug} number={n} />}
             {line && (
               <section>
                 <h2>Season</h2>

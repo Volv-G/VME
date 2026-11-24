@@ -4,6 +4,7 @@
  *   teams                                     TeamsDoc
  *   team/<team>                               TeamDoc
  *   match/<team>/<tournament>/<date>/<match>  MatchDoc
+ *   private/<team>                            full names; only for the edit form (never via /api/doc)
  *
  * Written by `backend/app/publish/` in VME; keep the two in step.
  * Image fields hold a key for `/api/image/<key>`.

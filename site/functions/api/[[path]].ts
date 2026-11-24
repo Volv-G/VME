@@ -1,13 +1,31 @@
 /**
- * The site's API. Reached only after `_middleware.ts` has verified the
- * caller's sign-in.
+ * The site's API. People reach it only through `_middleware.ts`, which
+ * has verified their sign-in and put their email in `ctx.data.email`;
+ * what each route then shows depends on who that is (server/access.ts).
  *
- *   GET  /api/me              who is signed in
- *   GET  /api/doc/<key>       a published document (see schema.sql)
- *   GET  /api/image/<key>     a published photo or logo
- *   POST /api/publish         VME replacing what is published (bearer token)
+ *   GET  /api/me                        who you are, your memberships
+ *   GET  /api/doc/<key>                 a published document, trimmed for you
+ *   GET  /api/image/<key>               a photo or logo
+ *   GET  /api/join/<code>               teams and players, for the invite page
+ *   POST /api/join/<code>               ask to be a team's player or coach
+ *   GET  /api/player/<team>/<n>         a player's details, for editing
+ *   POST /api/player/<team>/<n>         change a player's name or photo
+ *   GET  /api/admin                     requests, members, the invite link (admin)
+ *   POST /api/admin/invite              a new invite link; the old one stops working
+ *   POST /api/admin/members/<id>        approve / decline / remove
+ *
+ * And for VME, with its bearer token instead of a sign-in:
+ *
+ *   POST /api/publish                   replace what is published
+ *   POST /api/publish/sync              decisions and acks in; requests and edits out
  */
 import type { Env } from "../../shared/env";
+import type { Decision, Me } from "../../shared/api";
+import { loadViewer, type Viewer } from "../../server/access";
+import { canSeeImage, Names, readDoc } from "../../server/content";
+import { blobBytes, fromBase64, HttpError, json, readBody, sameSecret } from "../../server/http";
+import { adminState, decide, inviteCode, joinTeams, pendingRequests, requestJoin, type JoinRequest } from "../../server/members";
+import { ackEdits, editPlayer, pendingEdits, playerInfo, type PlayerEdit } from "../../server/players";
 
 interface PublishBody {
   /** Keys whose prefix is listed here are deleted before the docs below
@@ -18,35 +36,23 @@ interface PublishBody {
   images?: { key: string; mime: string; base64: string }[];
 }
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
-  });
+interface SyncBody {
+  /** Player edits VME has applied to its roster. */
+  ack?: number[];
+  /** Requests decided in VME. */
+  decide?: { id: number; action: Decision }[];
 }
 
-function fromBase64(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-/** Constant-time comparison, so the token can't be guessed byte by byte. */
-function sameSecret(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
+function checkToken(request: Request, env: Env): void {
+  const auth = request.headers.get("authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!env.PUBLISH_TOKEN || !sameSecret(token, env.PUBLISH_TOKEN)) {
+    throw new HttpError(403, "Not allowed to publish.");
+  }
 }
 
 async function publish(request: Request, env: Env): Promise<Response> {
-  const auth = request.headers.get("authorization") || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (!env.PUBLISH_TOKEN || !token || !sameSecret(token, env.PUBLISH_TOKEN)) {
-    return json({ error: "Not allowed to publish." }, 403);
-  }
-  const body = (await request.json()) as PublishBody;
+  const body = await readBody<PublishBody>(request);
   const now = Date.now();
   const stmts: D1PreparedStatement[] = [];
   for (const prefix of body.replace_prefixes ?? []) {
@@ -69,36 +75,100 @@ async function publish(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, docs: body.docs?.length ?? 0, images: body.images?.length ?? 0 });
 }
 
-export const onRequest: PagesFunction<Env> = async (ctx) => {
+async function sync(request: Request, env: Env): Promise<Response> {
+  const body = await readBody<SyncBody>(request);
+  await ackEdits(env, body.ack ?? []);
+  for (const d of body.decide ?? []) await decide(env, Number(d.id), d.action, "VME");
+  return json({ requests: await pendingRequests(env), edits: await pendingEdits(env) });
+}
+
+function requireAdmin(v: Viewer): void {
+  if (!v.admin) throw new HttpError(403, "Admins only.");
+}
+
+async function route(ctx: EventContext<Env, string, Record<string, unknown>>): Promise<Response> {
   const { request, env } = ctx;
   const url = new URL(request.url);
   const path = decodeURIComponent(url.pathname.replace(/^\/api\/?/, ""));
+  const method = request.method;
 
-  if (path === "publish" && request.method === "POST") return publish(request, env);
-  if (request.method !== "GET") return json({ error: "Method not allowed" }, 405);
+  if (path === "publish" || path.startsWith("publish/")) {
+    if (method !== "POST") throw new HttpError(405, "Method not allowed");
+    checkToken(request, env);
+    if (path === "publish") return publish(request, env);
+    if (path === "publish/sync") return sync(request, env);
+    throw new HttpError(404, "Not found");
+  }
 
-  if (path === "me") return json({ identity: ctx.data.identity ?? "" });
+  const v = await loadViewer(env, String(ctx.data.email || ""));
+  const parts = path.split("/");
 
-  if (path.startsWith("doc/")) {
-    const row = await env.DB.prepare("SELECT json FROM docs WHERE key = ?")
-      .bind(path.slice(4))
-      .first<{ json: string }>();
-    if (!row) return json({ error: "Not found" }, 404);
-    return new Response(row.json, {
+  if (path === "me" && method === "GET") {
+    const pending = v.admin
+      ? ((await env.DB.prepare("SELECT count(*) AS n FROM members WHERE status = 'pending'").first<{ n: number }>())?.n ?? 0)
+      : 0;
+    const me: Me = {
+      email: v.email,
+      admin: v.admin,
+      memberships: await new Names(env).describeAll(v.memberships),
+      pending,
+    };
+    return json(me);
+  }
+
+  if (parts[0] === "doc" && method === "GET") {
+    return new Response(JSON.stringify(await readDoc(env, v, parts.slice(1).join("/"))), {
       headers: { "content-type": "application/json", "cache-control": "private, no-cache" },
     });
   }
 
-  if (path.startsWith("image/")) {
+  if (parts[0] === "image" && method === "GET") {
+    const key = parts.slice(1).join("/");
+    if (!canSeeImage(v, key)) throw new HttpError(403, "Not allowed.");
     const row = await env.DB.prepare("SELECT mime, data FROM images WHERE key = ?")
-      .bind(path.slice(6))
-      .first<{ mime: string; data: number[] | ArrayBuffer }>();
+      .bind(key)
+      .first<{ mime: string; data: unknown }>();
     if (!row) return new Response("Not found", { status: 404 });
-    // D1 hands a BLOB back as an array of byte values, not as bytes.
-    return new Response(new Uint8Array(row.data as ArrayLike<number>), {
+    return new Response(blobBytes(row.data), {
       headers: { "content-type": row.mime, "cache-control": "private, max-age=3600" },
     });
   }
 
-  return json({ error: "Not found" }, 404);
+  if (parts[0] === "join" && parts.length === 2) {
+    if (method === "GET") return json({ teams: await joinTeams(env, parts[1]) });
+    if (method === "POST") return json(await requestJoin(env, v, parts[1], await readBody<JoinRequest>(request)));
+  }
+
+  if (parts[0] === "player" && parts.length === 3) {
+    const number = Number(parts[2]);
+    if (!Number.isInteger(number)) throw new HttpError(404, "Not found");
+    if (method === "GET") return json(await playerInfo(env, v, parts[1], number));
+    if (method === "POST") {
+      await editPlayer(env, v, parts[1], number, await readBody<PlayerEdit>(request));
+      return json({ ok: true });
+    }
+  }
+
+  if (parts[0] === "admin") {
+    requireAdmin(v);
+    if (path === "admin" && method === "GET") return json(await adminState(env));
+    if (path === "admin/invite" && method === "POST") return json({ invite_code: await inviteCode(env, true) });
+    if (parts[1] === "members" && parts.length === 3 && method === "POST") {
+      const { action } = await readBody<{ action: Decision }>(request);
+      await decide(env, Number(parts[2]), action, v.email);
+      return json({ ok: true });
+    }
+  }
+
+  throw new HttpError(404, "Not found");
+}
+
+export const onRequest: PagesFunction<Env> = async (ctx) => {
+  try {
+    return await route(ctx);
+  } catch (e) {
+    if (e instanceof HttpError) return json({ error: e.message }, e.status);
+    console.error(e);
+    return json({ error: "Something went wrong on the server." }, 500);
+  }
 };

@@ -7,8 +7,9 @@ internet ever calls into VME; the site works with this PC switched off.
 
 What goes out, and what deliberately does not:
 
-- Players by short name ("Kate G"), never the full name on the roster,
-  with their photo shrunk to a thumbnail.
+- Players by short name ("Kate G") with their photo shrunk to a
+  thumbnail. The full name goes only into `private/<team>`, which the
+  site hands to nobody but those allowed to edit that player.
 - Scores, set by set, and the same per-player stats VME shows.
 - Videos that are on YouTube and not private - a private video would
   only show an error to everyone but the channel owner.
@@ -240,6 +241,18 @@ def build(team: str) -> tuple[dict, list[dict], list[dict]]:
         "published_at": now,
     }
     docs.append({"key": f"team/{team}", "json": team_doc})
+    # Full names for the site's edit form. The site serves this only to
+    # whoever may edit that player (a parent who claimed them, the admin),
+    # never as a page.
+    docs.append({
+        "key": f"private/{team}",
+        "json": {
+            "players": {
+                str(p.number): {"name": p.name or "", "short_name": p.short_name or ""}
+                for p in roster.players
+            }
+        },
+    })
     return team_doc, docs, images
 
 
@@ -262,7 +275,7 @@ def publish(teams: Optional[list[str]] = None) -> dict:
     body = {
         # Everything is replaced in one transaction, so a match deleted in
         # VME disappears from the site instead of lingering.
-        "replace_prefixes": ["team/", "match/", "img/"],
+        "replace_prefixes": ["team/", "match/", "img/", "private/"],
         "docs": docs,
         "images": images,
     }

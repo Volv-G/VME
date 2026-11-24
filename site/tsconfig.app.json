@@ -11,5 +11,5 @@
     "isolatedModules": true,
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo"
   },
-  "include": ["src", "shared/docs.ts"]
+  "include": ["src", "shared/docs.ts", "shared/api.ts"]
 }

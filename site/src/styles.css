@@ -88,3 +88,37 @@ table.stats { border-collapse: collapse; width: 100%; font-size: 13px; font-vari
 .stats th.sortable { cursor: pointer; user-select: none; }
 .stats th[aria-sort="ascending"], .stats th[aria-sort="descending"] { color: var(--text); }
 .stats .arrow { font-size: 10px; }
+
+/* Top bar: who is signed in, and the admin's way in. */
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 1000px; margin: 0 auto; padding: 10px 16px 0; }
+.brand { font-weight: 800; color: var(--text); letter-spacing: .02em; }
+.topbar-right { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+.badge { display: inline-block; min-width: 18px; padding: 0 6px; margin-left: 6px; border-radius: 9px; background: var(--loss); color: #fff; font-size: 12px; font-weight: 700; text-align: center; line-height: 18px; vertical-align: 1px; }
+
+button { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .55; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.link { background: none; border: none; padding: 0; color: var(--accent); }
+button.card { text-align: left; width: 100%; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.error { color: var(--loss); }
+
+.form { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.form h2 { margin: 0; }
+.form label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
+.form input:not([type=file]) { font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-weight: 400; }
+.preview { width: 96px; height: 96px; }
+
+.row.claim { width: 100%; border-radius: 0; border-left: none; border-right: none; border-bottom: none; background: none; text-align: left; }
+.row.claim:first-child { border-top: none; }
+.row.claim.selected { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.chip { font-size: 12px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; background: var(--border); color: var(--text); }
+.chip-pending { background: color-mix(in srgb, #e0a100 25%, transparent); }
+.chip-approved { background: color-mix(in srgb, var(--win) 25%, transparent); }
+.chip-declined { background: color-mix(in srgb, var(--loss) 25%, transparent); }
+.notices { margin-bottom: 16px; }
+
+.invite { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.invite code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 14px; }

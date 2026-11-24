@@ -567,3 +567,22 @@ export const EVENT_TYPES = [
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
+
+/** Someone on the public site asking to be a team's player or coach. */
+export interface SiteRequestDto {
+  id: number;
+  email: string;
+  team: string;
+  team_name: string;
+  role: "player" | "coach";
+  number: number | null;
+  player_name: string;
+  note: string;
+  requested_at: number;
+}
+
+export interface SiteRequestsDto {
+  requests: SiteRequestDto[];
+  last_sync: number | null;
+  error: string | null;
+}

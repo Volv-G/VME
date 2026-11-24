@@ -6,6 +6,7 @@ import { ServerSettingsPage } from "./routes/ServerSettingsPage";
 import { TournamentDashboardPage } from "./routes/TournamentDashboardPage";
 import { MatchEditorPage } from "./routes/MatchEditorPage";
 import { displayName } from "./util/names";
+import { SiteRequestsBell } from "./components/SiteRequestsBell";
 
 export function App() {
   // Anywhere inside a team - its tournaments, a match, its settings - the
@@ -21,6 +22,7 @@ export function App() {
           <Link to="/">Teams</Link>
           {team && <Link to={`/teams/${teamSlug}`}>{displayName(team)}</Link>}
           <Link to="/settings">Settings</Link>
+          <SiteRequestsBell />
         </nav>
       </header>
       <main className="app-main">
