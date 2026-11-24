@@ -1,7 +1,7 @@
 # VME site
 
 The page families use to watch matches and highlights and follow scores
-and stats. Hosted on Cloudflare's free plan at https://vme-site.pages.dev:
+and stats. Hosted on Cloudflare's free plan at https://courtside-vb.pages.dev:
 
 - **Pages** serves the React app (`src/`) and the API (`functions/api/`).
 - **D1** (`vme-site`) holds what VME publishes: documents (`shared/docs.ts`)
@@ -34,7 +34,7 @@ Set `CLOUDFLARE_ACCOUNT_ID` if wrangler asks which account to use.
   set, every API read answers 503.
 - Secret `PUBLISH_TOKEN` (`wrangler pages secret put PUBLISH_TOKEN`): the
   same value as `token` in VME's `site.json`.
-- Access needs a **Bypass** application for `vme-site.pages.dev/api/publish`
+- Access needs a **Bypass** application for `courtside-vb.pages.dev/api/publish`
   so VME can publish; that path accepts nothing but the token and serves no data.
 
 ## Local development

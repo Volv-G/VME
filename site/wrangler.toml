@@ -1,5 +1,5 @@
 # Cloudflare Pages project for the public VME site. See README.md.
-name = "vme-site"
+name = "courtside-vb"
 pages_build_output_dir = "dist"
 compatibility_date = "2026-11-01"
 
