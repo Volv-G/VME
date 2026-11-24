@@ -20,8 +20,9 @@ export interface Viewer {
 
 export function adminEmails(env: Env): string[] {
   return (env.ADMIN_EMAILS || "")
-    .split(/[,\s]+/)
-    .map((s) => s.trim().toLowerCase())
+    .split(/[,;\s]+/)
+    // Forgiving about how the secret was typed: quotes, <angle brackets>.
+    .map((s) => s.replace(/^["'<]+|["'>]+$/g, "").trim().toLowerCase())
     .filter(Boolean);
 }
 

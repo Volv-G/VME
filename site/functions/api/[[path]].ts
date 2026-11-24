@@ -6,12 +6,12 @@
  *   GET  /api/me                        who you are, your memberships
  *   GET  /api/doc/<key>                 a published document, trimmed for you
  *   GET  /api/image/<key>               a photo or logo
- *   GET  /api/join/<code>               teams and players, for the invite page
- *   POST /api/join/<code>               ask to be a team's player or coach
+ *   GET  /api/join/<code>               the invite's team and players
+ *   POST /api/join/<code>               ask to be that team's player or coach
  *   GET  /api/player/<team>/<n>         a player's details, for editing
  *   POST /api/player/<team>/<n>         change a player's name or photo
- *   GET  /api/admin                     requests, members, the invite link (admin)
- *   POST /api/admin/invite              a new invite link; the old one stops working
+ *   GET  /api/admin                     requests, members, each team's invite link (admin)
+ *   POST /api/admin/invite              a team's new invite link; the old one stops working
  *   POST /api/admin/members/<id>        approve / decline / remove
  *
  * And for VME, with its bearer token instead of a sign-in:
@@ -24,7 +24,7 @@ import type { Decision, Me } from "../../shared/api";
 import { loadViewer, type Viewer } from "../../server/access";
 import { canSeeImage, Names, readDoc } from "../../server/content";
 import { blobBytes, fromBase64, HttpError, json, readBody, sameSecret } from "../../server/http";
-import { adminState, decide, inviteCode, joinTeams, pendingRequests, requestJoin, type JoinRequest } from "../../server/members";
+import { adminState, decide, inviteCode, joinTeam, pendingRequests, requestJoin, type JoinRequest } from "../../server/members";
 import { ackEdits, editPlayer, pendingEdits, playerInfo, type PlayerEdit } from "../../server/players";
 
 interface PublishBody {
@@ -135,7 +135,7 @@ async function route(ctx: EventContext<Env, string, Record<string, unknown>>): P
   }
 
   if (parts[0] === "join" && parts.length === 2) {
-    if (method === "GET") return json({ teams: await joinTeams(env, parts[1]) });
+    if (method === "GET") return json(await joinTeam(env, parts[1]));
     if (method === "POST") return json(await requestJoin(env, v, parts[1], await readBody<JoinRequest>(request)));
   }
 
@@ -152,7 +152,11 @@ async function route(ctx: EventContext<Env, string, Record<string, unknown>>): P
   if (parts[0] === "admin") {
     requireAdmin(v);
     if (path === "admin" && method === "GET") return json(await adminState(env));
-    if (path === "admin/invite" && method === "POST") return json({ invite_code: await inviteCode(env, true) });
+    if (path === "admin/invite" && method === "POST") {
+      const { team } = await readBody<{ team: string }>(request);
+      if (!(await new Names(env).team(String(team || "")))) throw new HttpError(400, "No such team.");
+      return json({ code: await inviteCode(env, team, true) });
+    }
     if (parts[1] === "members" && parts.length === 3 && method === "POST") {
       const { action } = await readBody<{ action: Decision }>(request);
       await decide(env, Number(parts[2]), action, v.email);

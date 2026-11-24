@@ -1,13 +1,13 @@
-import { Link, Route, Routes, useParams } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useParams } from "react-router-dom";
 import type { MatchDoc, MatchSummary, TeamDoc, TeamsDoc, Video } from "../shared/docs";
 import type { Me } from "../shared/api";
-import { formatDate, imageUrl, MeContext, savedInvite, useApi, useDoc, useMe } from "./api";
+import { formatDate, imageUrl, MeContext, savedInvites, useApi, useDoc, useMe } from "./api";
 import { Crest, Gate, matchPath, playerPath, teamPath } from "./common";
 import { AdminPage } from "./Admin";
 import { JoinPage } from "./Join";
 import { PlayerEditor } from "./PlayerEditor";
 import { StatsTable } from "./StatsTable";
-import { YouTube } from "./YouTube";
+import { VideoTile, videoKey } from "./YouTube";
 
 export function App() {
   const me = useApi<Me>("/api/me");
@@ -59,8 +59,17 @@ function TopBar() {
 function Home() {
   const { me } = useMe();
   const res = useDoc<TeamsDoc>("teams");
-  const invite = savedInvite.get();
+  const invites = savedInvites.all();
   const waiting = (me?.memberships ?? []).filter((m) => m.status !== "approved");
+  const teams = res.state === "ok" ? res.doc.teams : null;
+  // A parent or coach of one team has nothing to choose here: straight
+  // to the team. (Not for the admin, who needs the list.)
+  if (me && !me.admin && teams?.length === 1 && waiting.length === 0) {
+    return <Navigate to={teamPath(teams[0].slug)} replace />;
+  }
+  // Teams whose invite this device opened but where nothing is approved
+  // yet, or where another player could be claimed.
+  const askMore = Object.entries(invites).filter(([team]) => teams?.some((t) => t.slug === team));
   return (
     <>
       <header className="masthead">
@@ -93,20 +102,24 @@ function Home() {
             </div>
           ) : waiting.length ? null : (
             <p className="notice">
-              This site is for team families. To get in, open the invite link your team shared
-              {invite ? (
+              This site is for team families. To get in, open the invite link your team shared.
+              {Object.values(invites).length > 0 && (
                 <>
-                  {" "}- or <Link to={`/join/${invite}`}>use the one you opened before</Link>
+                  {" "}
+                  <Link to={`/join/${Object.values(invites)[0]}`}>Open the one you used before</Link>
                 </>
-              ) : null}
-              .
+              )}
             </p>
           )
         }
       </Gate>
-      {invite && (me?.memberships.length ?? 0) > 0 && (
+      {askMore.length > 0 && (
         <p className="small">
-          <Link to={`/join/${invite}`}>Ask for access to another player or team</Link>
+          {askMore.map(([team, code]) => (
+            <Link key={team} to={`/join/${code}`} className="ask-more">
+              Ask for access to another {teams?.find((t) => t.slug === team)?.name} player
+            </Link>
+          ))}
         </p>
       )}
     </>
@@ -127,13 +140,16 @@ function Score({ m }: { m: MatchSummary }) {
 
 function TeamPage() {
   const { team = "" } = useParams();
+  const { me } = useMe();
   const res = useDoc<TeamDoc>(`team/${team}`);
+  const manyTeams =
+    !me || me.admin || new Set(me.memberships.filter((m) => m.status === "approved").map((m) => m.team)).size > 1;
   return (
     <Gate res={res}>
       {(t) => (
         <>
           <header className="team-head" style={{ borderBottomColor: t.color }}>
-            <Link to="/" className="muted back">← Teams</Link>
+            {manyTeams && <Link to="/" className="muted back">← Teams</Link>}
             <div className="team-title">
               <Crest src={t.logo} color={t.color} label={t.name} size={64} />
               <h1>{t.name}</h1>
@@ -145,7 +161,7 @@ function TeamPage() {
               <h2>Season highlights</h2>
               <div className="videos">
                 {t.season_reels.map((v) => (
-                  <YouTube key={v.youtube_id} id={v.youtube_id} title={`${v.player_label}: season`} />
+                  <VideoTile key={videoKey(v)} video={v} title={`${v.player_label}: season`} />
                 ))}
               </div>
             </section>
@@ -248,10 +264,10 @@ function PlayerPage() {
                 <h2>Highlights</h2>
                 <div className="videos">
                   {season.map((v) => (
-                    <YouTube key={v.youtube_id} id={v.youtube_id} title="Season highlights" />
+                    <VideoTile key={videoKey(v)} video={v} title="Season highlights" />
                   ))}
                   {reels.map(({ m, v }) => (
-                    <YouTube key={v.youtube_id} id={v.youtube_id} title={`${formatDate(m.date)} vs ${m.opponent}`} />
+                    <VideoTile key={videoKey(v)} video={v} title={`${formatDate(m.date)} vs ${m.opponent}`} />
                   ))}
                 </div>
               </section>
@@ -295,7 +311,7 @@ function MatchPage() {
               <section>
                 <div className="videos videos-wide">
                   {main.map((v) => (
-                    <YouTube key={v.youtube_id} id={v.youtube_id} title={VIDEO_TITLES[v.kind]} />
+                    <VideoTile key={videoKey(v)} video={v} title={VIDEO_TITLES[v.kind]} />
                   ))}
                 </div>
               </section>
@@ -305,7 +321,7 @@ function MatchPage() {
                 <h2>Player reels</h2>
                 <div className="videos">
                   {reels.map((v) => (
-                    <YouTube key={v.youtube_id} id={v.youtube_id} title={v.player_label || "Reel"} />
+                    <VideoTile key={videoKey(v)} video={v} title={v.player_label || "Reel"} />
                   ))}
                 </div>
               </section>

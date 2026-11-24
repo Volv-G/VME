@@ -12,8 +12,11 @@ What goes out, and what deliberately does not:
   site hands to nobody but those allowed to edit that player.
 - Scores, set by set, and the same per-player stats VME shows.
 - Videos that are on YouTube and not private - a private video would
-  only show an error to everyone but the channel owner.
-- No footage, renders or files of any kind: the site embeds YouTube.
+  only show an error to everyone but the channel owner - and, for what
+  VME put on OneDrive instead (reels, season reels), anonymous OneDrive
+  links: a player to embed and a link to OneDrive's page. The site shows
+  a reel only to the player's family, the coaches and the admin.
+- No footage or files: the site embeds YouTube and OneDrive.
 
 Configured by `<data dir>/site.json`: `{"url": ..., "token": ...}`, plus
 optionally `"teams": [...]` to publish only some teams.
@@ -113,23 +116,94 @@ def _final_state(m: Match):
     return state or m.initial_state()
 
 
+def _onedrive_links(render: Path) -> Optional[dict]:
+    """Anonymous links for a file VME put on OneDrive: `embed` (a player
+    for the site's frame; personal OneDrive only) and `view` (OneDrive's
+    page). Made once and remembered in the file's `.onedrive.json`, so a
+    publish only calls Microsoft for files it hasn't linked before."""
+    from ..upload import onedrive
+
+    od = scanner.load_onedrive_sidecar(render)
+    if not od or not od.get("item_id"):
+        return None
+    cached = od.get("site_links")
+    if isinstance(cached, dict) and (cached.get("embed") or cached.get("view")):
+        return cached
+    view = od.get("share_url") or onedrive.create_share_link(od["item_id"])
+    embed = onedrive.create_share_link(od["item_id"], link_type="embed")
+    if not view and not embed:
+        return None
+    links = {"embed": embed, "view": view}
+    od["site_links"] = links
+    try:
+        paths.onedrive_sidecar_path(render).write_text(json.dumps(od, indent=2), encoding="utf-8")
+    except OSError:
+        logger.warning("site publish: could not remember links for %s", render)
+    return links
+
+
+def _link_onedrive(pending: list[tuple[dict, Path]]) -> None:
+    """Fill OneDrive links into videos, a few files at a time (the first
+    publish after this feature links every reel at once)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for (v, _), links in zip(pending, pool.map(lambda item: _onedrive_links(item[1]), pending)):
+            if links:
+                v["onedrive_embed"] = links.get("embed")
+                v["onedrive_url"] = links.get("view")
+
+
 def _videos(team: str) -> dict[str, list[dict]]:
-    """`<tournament>/<date>/<match>` -> the match's YouTube videos."""
+    """`<tournament>/<date>/<match>` -> the match's videos: on YouTube
+    when there (and not private), else on OneDrive when VME put it there."""
     out: dict[str, list[dict]] = {}
+    pending: list[tuple[dict, Path]] = []
     for r in scanner.list_team_full_renders(team):
-        if not r.youtube_video_id or (r.youtube_privacy_status or "") == "private":
+        v: dict[str, Any] = {"kind": r.kind or "full"}
+        if r.youtube_video_id and (r.youtube_privacy_status or "") != "private":
+            v["youtube_id"] = r.youtube_video_id
+        elif r.onedrive_item_id:
+            pending.append((v, paths.match_dir(team, r.tournament, r.date, r.match) / "renders" / r.filename))
+        else:
             continue
-        v: dict[str, Any] = {"kind": r.kind or "full", "youtube_id": r.youtube_video_id}
         if r.kind == "reel":
             parts = Path(r.filename).parts
             jersey = paths.parse_player_folder(parts[2])[0] if len(parts) > 2 else None
             v["player_number"] = jersey
             v["player_label"] = r.player_label or ""
         out.setdefault(f"{r.tournament}/{r.date}/{r.match}", []).append(v)
+    _link_onedrive(pending)
     order = {"full": 0, "condensed": 1, "reel": 2}
-    for vids in out.values():
+    for key, vids in list(out.items()):
+        vids[:] = [v for v in vids if v.get("youtube_id") or v.get("onedrive_url") or v.get("onedrive_embed")]
         vids.sort(key=lambda v: (order.get(v["kind"], 3), v.get("player_number") or 0))
+        if not vids:
+            del out[key]
     return out
+
+
+def _season_reels(team: str, names: dict[int, str]) -> list[dict]:
+    """Each player's newest season reel that VME put on OneDrive."""
+    root = paths.season_reels_dir(team)
+    newest: dict[int, tuple[float, Path]] = {}
+    if root.is_dir():
+        for folder in root.iterdir():
+            number = paths.parse_player_folder(folder.name)[0] if folder.is_dir() else None
+            if number is None:
+                continue
+            for f in folder.iterdir():
+                od = scanner.load_onedrive_sidecar(f) if f.suffix.lower() == ".mp4" else None
+                if od and od.get("item_id"):
+                    at = float(od.get("uploaded_at") or 0)
+                    if number not in newest or at > newest[number][0]:
+                        newest[number] = (at, f)
+    pending = [
+        ({"kind": "season", "player_number": n, "player_label": names.get(n) or f"#{n}"}, f)
+        for n, (_, f) in sorted(newest.items())
+    ]
+    _link_onedrive(pending)
+    return [v for v, _ in pending if v.get("onedrive_url") or v.get("onedrive_embed")]
 
 
 def build(team: str) -> tuple[dict, list[dict], list[dict]]:
@@ -237,7 +311,7 @@ def build(team: str) -> tuple[dict, list[dict], list[dict]]:
         "players": players,
         "stats": _stats_out(season, names),
         "tournaments": tournaments,
-        "season_reels": [],
+        "season_reels": _season_reels(team, names),
         "published_at": now,
     }
     docs.append({"key": f"team/{team}", "json": team_doc})

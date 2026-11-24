@@ -1,7 +1,7 @@
-/** The invite link, requests to join, and the admin's decisions. */
+/** Invite links, requests to join, and the admin's decisions. */
 import type { Env } from "../shared/env";
-import type { TeamsDoc } from "../shared/docs";
-import type { AdminState, Decision, JoinTeam, Membership, Role } from "../shared/api";
+import type { TeamDoc, TeamsDoc } from "../shared/docs";
+import type { AdminState, Decision, Invite, JoinTeam, Membership, Role } from "../shared/api";
 import type { Viewer } from "./access";
 import { getDoc, Names } from "./content";
 import { HttpError, sameSecret } from "./http";
@@ -13,47 +13,54 @@ function newCode(): string {
   return Array.from(bytes, (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("");
 }
 
-export async function inviteCode(env: Env, renew = false): Promise<string> {
+// One invite link per team, kept in `settings` as `invite:<team>`.
+const inviteKey = (team: string) => `invite:${team}`;
+
+export async function inviteCode(env: Env, team: string, renew = false): Promise<string> {
   if (!renew) {
-    const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'invite_code'").first<{ value: string }>();
+    const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
+      .bind(inviteKey(team))
+      .first<{ value: string }>();
     if (row) return row.value;
   }
   const code = newCode();
-  await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('invite_code', ?)").bind(code).run();
+  await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").bind(inviteKey(team), code).run();
   return code;
 }
 
-async function checkCode(env: Env, code: string): Promise<void> {
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'invite_code'").first<{ value: string }>();
-  if (!row || !sameSecret(code, row.value)) {
-    throw new HttpError(404, "This invite link doesn't work any more. Ask for a new one.");
-  }
+/** The team an invite code opens, or 404. */
+async function teamForCode(env: Env, code: string): Promise<TeamDoc> {
+  const { results } = await env.DB.prepare("SELECT key, value FROM settings WHERE key LIKE 'invite:%'")
+    .all<{ key: string; value: string }>();
+  // Compare against every code, not stopping at a match, so timing
+  // doesn't hint at how close a guess came.
+  let team: string | null = null;
+  for (const r of results) if (sameSecret(code, r.value)) team = r.key.slice("invite:".length);
+  const doc = team ? await getDoc<TeamDoc>(env, `team/${team}`) : null;
+  if (!doc) throw new HttpError(404, "This invite link doesn't work any more. Ask your team for a new one.");
+  return doc;
 }
 
-/** Every team with its players, for choosing whom to claim. */
-export async function joinTeams(env: Env, code: string): Promise<JoinTeam[]> {
-  await checkCode(env, code);
-  const teams = await getDoc<TeamsDoc>(env, "teams");
-  const names = new Names(env);
-  const out: JoinTeam[] = [];
-  for (const t of teams?.teams ?? []) {
-    const doc = await names.team(t.slug);
-    out.push({ ...t, players: (doc?.players ?? []).map((p) => ({ number: p.number, name: p.name })) });
-  }
-  return out;
+/** The invite's team with its players, for choosing whom to claim. */
+export async function joinTeam(env: Env, code: string): Promise<JoinTeam> {
+  const t = await teamForCode(env, code);
+  return {
+    slug: t.slug,
+    name: t.name,
+    color: t.color,
+    logo: t.logo,
+    players: t.players.map((p) => ({ number: p.number, name: p.name })),
+  };
 }
 
 export interface JoinRequest {
-  team: string;
   role: Role;
   number?: number | null;
   note?: string;
 }
 
 export async function requestJoin(env: Env, v: Viewer, code: string, req: JoinRequest): Promise<Membership> {
-  await checkCode(env, code);
-  const team = await new Names(env).team(String(req.team || ""));
-  if (!team) throw new HttpError(400, "No such team.");
+  const team = await teamForCode(env, code);
   if (req.role !== "player" && req.role !== "coach") throw new HttpError(400, "Choose a player or coach.");
   const number = req.role === "player" ? Number(req.number) : null;
   if (number !== null && !team.players.some((p) => p.number === number)) {
@@ -111,8 +118,11 @@ export async function adminState(env: Env): Promise<AdminState> {
   const declined = await env.DB.prepare(
     "SELECT * FROM members WHERE status = 'declined' ORDER BY decided_at DESC LIMIT 50"
   ).all<Membership>();
+  const teams = (await getDoc<TeamsDoc>(env, "teams"))?.teams ?? [];
+  const invites: Invite[] = [];
+  for (const t of teams) invites.push({ team: t.slug, team_name: t.name, code: await inviteCode(env, t.slug) });
   return {
-    invite_code: await inviteCode(env),
+    invites,
     requests: await pendingRequests(env, names),
     members: await names.describeAll(approved.results),
     declined: await names.describeAll(declined.results),

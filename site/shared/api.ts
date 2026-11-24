@@ -38,8 +38,14 @@ export interface JoinTeam {
   players: { number: number; name: string }[];
 }
 
+export interface Invite {
+  team: string;
+  team_name: string;
+  code: string;
+}
+
 export interface AdminState {
-  invite_code: string;
+  invites: Invite[];
   requests: MembershipOut[];
   members: MembershipOut[];
   declined: MembershipOut[];

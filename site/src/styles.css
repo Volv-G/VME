@@ -122,3 +122,11 @@ button.card { text-align: left; width: 100%; }
 
 .invite { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .invite code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
+
+/* OneDrive reels have no poster image to borrow: a plain tile instead. */
+.video-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.od-poster { background: linear-gradient(135deg, #1c3d6e, #0b1a33); }
+.od-link { align-self: flex-end; }
+.invite + .invite { margin-top: 8px; }
+.invite-team { flex-basis: 100%; }
+.ask-more { display: block; margin-top: 4px; }

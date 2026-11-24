@@ -56,19 +56,22 @@ export async function post<T = unknown>(path: string, body: unknown): Promise<T>
 export const MeContext = createContext<{ me: Me | null; reload: () => void }>({ me: null, reload: () => {} });
 export const useMe = () => useContext(MeContext);
 
-/** The invite code last used on this device, so a member can ask for
+/** Invite codes opened on this device, by team, so a member can ask for
  *  another player later without digging out the link. */
-export const savedInvite = {
-  get(): string | null {
+export const savedInvites = {
+  all(): Record<string, string> {
     try {
-      return localStorage.getItem("invite");
+      return JSON.parse(localStorage.getItem("invites") || "{}") as Record<string, string>;
     } catch {
-      return null;
+      return {};
     }
   },
-  set(code: string) {
+  get(team: string): string | null {
+    return this.all()[team] ?? null;
+  },
+  set(team: string, code: string) {
     try {
-      localStorage.setItem("invite", code);
+      localStorage.setItem("invites", JSON.stringify({ ...this.all(), [team]: code }));
     } catch {
       /* private mode: the link still works, it just isn't remembered */
     }

@@ -31,9 +31,14 @@ export interface Stats {
   total: StatsLine;
 }
 
+/** A video on YouTube (`youtube_id`) or, for reels VME uploads to
+ *  OneDrive, an anonymous OneDrive link: `onedrive_embed` plays in a
+ *  frame, `onedrive_url` opens OneDrive's own page. */
 export interface Video {
   kind: "full" | "condensed" | "reel" | "season";
-  youtube_id: string;
+  youtube_id?: string;
+  onedrive_embed?: string;
+  onedrive_url?: string;
   /** Set for reels: whose plays they are. */
   player_number?: number | null;
   player_label?: string;

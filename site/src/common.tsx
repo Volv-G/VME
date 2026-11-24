@@ -1,5 +1,5 @@
-import { Link } from "react-router-dom";
-import { imageUrl, savedInvite, type Loaded } from "./api";
+import { Link, useParams } from "react-router-dom";
+import { imageUrl, savedInvites, type Loaded } from "./api";
 
 const enc = encodeURIComponent;
 export const teamPath = (team: string) => `/t/${enc(team)}`;
@@ -8,10 +8,11 @@ export const playerPath = (team: string, number: number) => `${teamPath(team)}/p
 
 /** Loading / error states shared by every page. */
 export function Gate<T>({ res, children }: { res: Loaded<T>; children: (doc: T) => React.ReactNode }) {
+  const { team } = useParams();
   if (res.state === "loading") return <p className="muted">Loading…</p>;
   if (res.state === "error") {
     if (res.status === 403) {
-      const code = savedInvite.get();
+      const code = team ? savedInvites.get(team) : null;
       return (
         <p className="notice">
           {res.message || "You don't have access to this page."}{" "}

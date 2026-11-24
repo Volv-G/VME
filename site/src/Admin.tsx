@@ -8,12 +8,12 @@ function who(m: MembershipOut) {
   return m.role === "coach" ? "Coach" : m.player_name;
 }
 
-/** Requests to approve, who has access, and the invite link. */
+/** Requests to approve, who has access, and each team's invite link. */
 export function AdminPage() {
   const res = useApi<AdminState>("/api/admin");
   const { reload: reloadMe } = useMe();
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
 
   async function act(path: string, body: unknown) {
     setError(null);
@@ -39,7 +39,6 @@ export function AdminPage() {
       {error && <p className="error">{error}</p>}
       <Gate res={res}>
         {(s) => {
-          const link = `${location.origin}/join/${s.invite_code}`;
           const byTeam = new Map<string, MembershipOut[]>();
           for (const m of s.members) byTeam.set(m.team_name, [...(byTeam.get(m.team_name) ?? []), m]);
           return (
@@ -72,32 +71,42 @@ export function AdminPage() {
               </section>
 
               <section>
-                <h2>Invite link</h2>
+                <h2>Invite links</h2>
                 <p className="muted small">
-                  Anyone with this link can ask to join; nobody sees anything until you approve them.
+                  One per team. Anyone with a team's link can ask to join it; nobody sees anything until you approve them.
                 </p>
-                <div className="card invite">
-                  <code>{link}</code>
-                  <span className="actions">
-                    <button
-                      onClick={() => {
-                        void navigator.clipboard.writeText(link).then(() => setCopied(true));
-                      }}
-                    >
-                      {copied ? "Copied" : "Copy"}
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (confirm("Make a new link? The current one stops working; people already approved keep access.")) {
-                          setCopied(false);
-                          void act("/api/admin/invite", {});
-                        }
-                      }}
-                    >
-                      New link
-                    </button>
-                  </span>
-                </div>
+                {s.invites.map((inv) => {
+                  const link = `${location.origin}/join/${inv.code}`;
+                  return (
+                    <div key={inv.team} className="card invite">
+                      <strong className="invite-team">{inv.team_name}</strong>
+                      <code>{link}</code>
+                      <span className="actions">
+                        <button
+                          onClick={() => {
+                            void navigator.clipboard.writeText(link).then(() => setCopied(inv.team));
+                          }}
+                        >
+                          {copied === inv.team ? "Copied" : "Copy"}
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (
+                              confirm(
+                                `Make a new ${inv.team_name} link? The current one stops working; people already approved keep access.`
+                              )
+                            ) {
+                              setCopied(null);
+                              void act("/api/admin/invite", { team: inv.team });
+                            }
+                          }}
+                        >
+                          New link
+                        </button>
+                      </span>
+                    </div>
+                  );
+                })}
               </section>
 
               <section>

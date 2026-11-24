@@ -338,8 +338,11 @@ def upload_file(
     return result
 
 
-def create_share_link(item_id: str, scope: str = "anonymous") -> Optional[str]:
-    """An unauthenticated view link, or None when the tenant forbids one.
+def create_share_link(item_id: str, scope: str = "anonymous", link_type: str = "view") -> Optional[str]:
+    """An unauthenticated link, or None when the tenant forbids one.
+
+    `link_type` "view" opens OneDrive's page for the file; "embed" (a
+    personal OneDrive only) is a player meant for an <iframe>.
 
     Business and SharePoint tenants routinely disable anonymous sharing
     by policy. That is a configuration fact rather than an error, so it
@@ -348,10 +351,13 @@ def create_share_link(item_id: str, scope: str = "anonymous") -> Optional[str]:
     """
     try:
         token = access_token()
+        body: dict = {"type": link_type}
+        if link_type != "embed":  # embed links are always anonymous
+            body["scope"] = scope
         r = requests.post(
             f"{GRAPH}/me/drive/items/{item_id}/createLink",
             headers={"Authorization": f"Bearer {token}"},
-            json={"type": "view", "scope": scope},
+            json=body,
             timeout=30,
         )
         if r.status_code not in (200, 201):
