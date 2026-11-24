@@ -22,8 +22,8 @@ on the internet calls into VME.
 ## Who sees what
 
 Anyone can sign in; signing in proves an email and opens nothing. People
-get in through the invite link (`/join/<code>`, shown on `/admin`): they
-pick a team and claim a player (a parent, or the player) or the coach's
+get in through their team's invite link (`/join/<code>`, one per team, on `/admin`): they
+claim a player (a parent, or the player) or the coach's
 place, and wait for the admin to approve - on `/admin`, or from the 🔔 in
 VME's header.
 
