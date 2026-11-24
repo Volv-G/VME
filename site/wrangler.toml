@@ -12,5 +12,5 @@ database_id = "1cace9cf-ec37-40e5-8e86-955b2b5574b2"
 # Cloudflare Access: the team domain (https://<team>.cloudflareaccess.com)
 # and the application's AUD tag. Until both are set the API refuses every
 # request, so a site deployed before sign-in is configured shows nothing.
-ACCESS_TEAM_DOMAIN = ""
-ACCESS_AUD = ""
+ACCESS_TEAM_DOMAIN = "https://green-dream-4218.cloudflareaccess.com"
+ACCESS_AUD = "e997d3c83547878f5e0e8555c3aa649d8e77ee6562a81b15e6d78d2fc1c5668a"
