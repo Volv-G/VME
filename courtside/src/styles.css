@@ -173,3 +173,8 @@ button.card { text-align: left; width: 100%; }
 .invite-team { flex-basis: 100%; }
 .invite code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
 .ask-more { display: block; margin-top: 4px; }
+
+/* No spoilers: scores and stats wait behind a button. */
+.spoiler { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+button.reveal { border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent); font-weight: 600; }
+.team-head .spoiler { margin-top: 6px; }

@@ -1,5 +1,6 @@
 import { Link, Navigate, Route, Routes, useParams } from "react-router-dom";
 import type { MatchDoc, MatchSummary, TeamDoc, TeamsDoc, Video } from "../shared/docs";
+import type { ReactNode } from "react";
 import type { Me } from "../shared/api";
 import { formatDate, imageUrl, MeContext, savedInvites, useApi, useDoc, useMe } from "./api";
 import { Crest, Gate, InviteButton, matchPath, playerPath, teamPath, TeamTheme } from "./common";
@@ -8,6 +9,7 @@ import { JoinPage } from "./Join";
 import { PlayerEditor } from "./PlayerEditor";
 import { StatsTable } from "./StatsTable";
 import { VideoTile, videoKey } from "./YouTube";
+import { isRevealed, matchSpoiler, seasonSpoiler, Spoiler, useRevealed } from "./Spoilers";
 
 export function App() {
   const me = useApi<Me>("/api/me");
@@ -138,6 +140,15 @@ function Score({ m }: { m: MatchSummary }) {
   );
 }
 
+function SeasonSpoiler({ team, matches, children }: { team: string; matches: number; children: ReactNode }) {
+  const [revealed, reveal] = useRevealed(seasonSpoiler(team, matches));
+  return (
+    <Spoiler revealed={revealed} onReveal={reveal} label="Show season stats" note="They include the latest matches.">
+      {children}
+    </Spoiler>
+  );
+}
+
 function TeamPage() {
   const { team = "" } = useParams();
   const { me } = useMe();
@@ -175,7 +186,7 @@ function TeamPage() {
                           {m.videos.length ? ` · ${m.videos.length} video${m.videos.length === 1 ? "" : "s"}` : ""}
                         </span>
                       </span>
-                      <Score m={m} />
+                      {isRevealed(matchSpoiler(t.slug, m.key)) && <Score m={m} />}
                     </Link>
                   ))}
                 </div>
@@ -185,8 +196,10 @@ function TeamPage() {
 
           <section>
             <h2>Season stats</h2>
-            <p className="muted small">{t.stats.matches} matches. Tap a column to sort.</p>
-            <StatsTable stats={t.stats} />
+            <SeasonSpoiler team={t.slug} matches={t.stats.matches}>
+              <p className="muted small">{t.stats.matches} matches. Tap a column to sort.</p>
+              <StatsTable stats={t.stats} />
+            </SeasonSpoiler>
           </section>
 
           <section>
@@ -247,7 +260,9 @@ function PlayerPage() {
             {line && (
               <section>
                 <h2>Season</h2>
-                <StatsTable stats={{ ...t.stats, players: [line], total: line }} total={false} />
+                <SeasonSpoiler team={t.slug} matches={t.stats.matches}>
+                  <StatsTable stats={{ ...t.stats, players: [line], total: line }} total={false} />
+                </SeasonSpoiler>
               </section>
             )}
             {reels.length > 0 && (
@@ -277,6 +292,8 @@ const VIDEO_TITLES: Record<Video["kind"], string> = {
 function MatchPage() {
   const { team = "", tournament = "", date = "", match = "" } = useParams();
   const res = useDoc<MatchDoc>(`match/${team}/${tournament}/${date}/${match}`);
+  // Same id the team page checks: the match key is the URL tail.
+  const [revealed, reveal] = useRevealed(matchSpoiler(team, `${tournament}/${date}/${match}`));
   return (
     <Gate res={res}>
       {(m) => {
@@ -294,7 +311,9 @@ function MatchPage() {
                 {formatDate(m.date)} · {m.tournament_name}
                 {m.index ? ` · Match ${m.index}` : ""}
               </p>
-              <Score m={m} />
+              <Spoiler revealed={revealed} onReveal={reveal} label="Reveal score">
+                <Score m={m} />
+              </Spoiler>
             </header>
             {main.length > 0 && (
               <section>
@@ -317,7 +336,9 @@ function MatchPage() {
             )}
             <section>
               <h2>Stats</h2>
-              <StatsTable stats={m.stats} />
+              <Spoiler revealed={revealed} onReveal={reveal} label="Reveal stats" note="Hidden so they don't give the result away.">
+                <StatsTable stats={m.stats} />
+              </Spoiler>
             </section>
           </>
         );
