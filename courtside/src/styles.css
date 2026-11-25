@@ -186,10 +186,10 @@ button.reveal { border-color: color-mix(in srgb, var(--accent) 55%, transparent)
 .row-link button { position: relative; z-index: 1; }
 button.reveal-row { font-size: 13px; padding: 4px 10px; }
 button.reveal-all { margin-left: auto; font-size: 13px; padding: 4px 10px; }
-/* A reel with a web copy: the whole tile plays it; "Original" goes to OneDrive. */
+/* A reel with a web copy plays in its tile; the full-HD original is a button below. */
 .yt video { position: absolute; inset: 0; width: 100%; height: 100%; background: #000; }
-.web-play { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 0; background: none; cursor: pointer; }
-.web-play:hover:not(:disabled) { border: 0; }
-.web-poster .yt-title { pointer-events: none; }
-.web-poster .yt-title a { pointer-events: auto; color: #fff; }
-.web-poster .yt-title a:hover { opacity: 1; text-decoration: underline; }
+.video-item { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+a.download { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); font-size: 13px; font-weight: 600; }
+a.download:hover { background: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { a.download:hover { color: #111; } }
+.od-corner { position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 999px; background: rgba(0, 0, 0, .65); color: #fff; font-size: 12px; }

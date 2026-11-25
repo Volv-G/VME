@@ -9,7 +9,10 @@ site plays it in place, to the same people who may see the reel.
 A copy's key is `reels/<team>/<number>/<hash>.mp4`, the hash taken from
 the reel's path, size and time - a re-rendered reel gets a new copy, and
 the old one is pruned at the next publish. Nothing is kept on disk: a
-copy is made in the temp folder, uploaded, deleted.
+copy is made in the temp folder, uploaded, deleted. The reel's thumbnail
+(the one VME also gives OneDrive) goes up beside it, shrunk, as
+`<hash>.jpg` - during the publish itself, being small, so even a reel
+still waiting for its copy shows its own picture.
 
 The free R2 tier holds 10 GB. Uploads stop at STORAGE_LIMIT; reels past it
 simply keep their OneDrive link.
@@ -37,16 +40,39 @@ PREFIX = "reels"
 HEIGHT = 720
 STORAGE_LIMIT = int(9.5 * 1024**3)
 MAX_COPY = 95 * 1024 * 1024  # the site's request size limit
+THUMB_PX = 640
 
 
-def key_for(team: str, number: int, reel: Path) -> str:
-    st = reel.stat()
+def key_for(team: str, number: int, f: Path, ext: str = "mp4") -> str:
+    st = f.stat()
     try:
-        rel = reel.relative_to(paths.team_dir(team)).as_posix()
+        rel = f.relative_to(paths.team_dir(team)).as_posix()
     except ValueError:
-        rel = reel.name
+        rel = f.name
     digest = hashlib.sha1(f"{rel}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:20]
-    return f"{PREFIX}/{team}/{number}/{digest}.mp4"
+    return f"{PREFIX}/{team}/{number}/{digest}.{ext}"
+
+
+def upload_thumb(cfg: dict, key: str, thumb: Path) -> bool:
+    import io
+
+    from PIL import Image
+
+    try:
+        with Image.open(thumb) as im:
+            im = im.convert("RGB")
+            im.thumbnail((THUMB_PX, THUMB_PX))
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=82, optimize=True)
+        r = _request(cfg, "PUT", f"/api/publish/video/{key}", data=buf.getvalue(),
+                     headers={"Content-Type": "image/jpeg"})
+    except (OSError, requests.RequestException) as exc:
+        logger.warning("site videos: thumbnail %s not uploaded: %s", thumb.name, exc)
+        return False
+    if r.status_code != 200:
+        logger.warning("site videos: site refused thumbnail %s: %s", key, r.status_code)
+        return False
+    return True
 
 
 def _request(cfg: dict, method: str, path: str, **kw) -> requests.Response:
@@ -87,17 +113,28 @@ class TeamCopies:
         self.have = stored(self.cfg, f"{PREFIX}/{self.team}/")
 
     def attach(self, video: dict, number: Optional[int], reel: Path) -> None:
+        from ..render.thumbnail import thumbnail_path
+
         if self.have is None or number is None or not reel.is_file():
             return
         key = key_for(self.team, number, reel)
         self.wanted[key] = reel
         if key in self.have:
             video["web"] = key
+        thumb = thumbnail_path(reel)
+        if thumb.is_file():
+            tkey = key_for(self.team, number, thumb, "jpg")
+            self.wanted[tkey] = thumb
+            if tkey not in self.have and upload_thumb(self.cfg, tkey, thumb):
+                self.have[tkey] = thumb.stat().st_size
+            if tkey in self.have:
+                video["web_poster"] = tkey
 
     def missing(self) -> list[tuple[str, Path]]:
+        """Reel copies still to make (thumbnails go up during attach)."""
         if self.have is None:
             return []
-        items = [(k, p) for k, p in self.wanted.items() if k not in self.have]
+        items = [(k, p) for k, p in self.wanted.items() if k.endswith(".mp4") and k not in self.have]
         # Newest reels first: the match people are waiting for.
         return sorted(items, key=lambda kp: kp[1].stat().st_mtime, reverse=True)
 

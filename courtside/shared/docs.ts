@@ -42,6 +42,8 @@ export interface Video {
   /** A reel's web copy on the site itself, played in place: the key
    *  for /api/video/<key>. The OneDrive links stay for the original. */
   web?: string;
+  /** A reel's thumbnail, same place: the key for /api/video/<key>. */
+  web_poster?: string;
   /** Set for reels: whose plays they are. */
   player_number?: number | null;
   player_label?: string;

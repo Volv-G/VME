@@ -57,3 +57,12 @@ CREATE TABLE IF NOT EXISTS player_edits (
   submitted_by TEXT NOT NULL,
   submitted_at INTEGER NOT NULL
 );
+
+-- Scores and stats someone chose to see (src/Spoilers.tsx ids such as
+-- "match:<team>/<key>"), kept per person so every device agrees.
+CREATE TABLE IF NOT EXISTS reveals (
+  email TEXT NOT NULL,
+  id TEXT NOT NULL,
+  revealed_at INTEGER NOT NULL,
+  PRIMARY KEY (email, id)
+);

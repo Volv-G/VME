@@ -1,9 +1,10 @@
 /**
  * Web copies of the reels, kept in R2 (binding VIDEOS) so the site can
  * play them in place. VME makes a small H.264 copy of each reel it put on
- * OneDrive and uploads it here; the key says whose reel it is,
+ * OneDrive and uploads it here, with the reel's thumbnail; the key says
+ * whose reel it is,
  *
- *   reels/<team>/<player number>/<content hash>.mp4
+ *   reels/<team>/<player number>/<content hash>.mp4   (or .jpg)
  *
  * so a viewer's right to it is checked with the same rule as the reel's
  * entry in the team doc (server/access.ts reelFilter).
@@ -12,14 +13,15 @@ import type { Env } from "../shared/env";
 import { canSeeTeam, reelFilter, type Viewer } from "./access";
 import { HttpError, json } from "./http";
 
-const KEY = /^reels\/([A-Za-z0-9._-]+)\/(\d{1,3})\/[a-f0-9]{8,64}\.mp4$/;
+const KEY = /^reels\/([A-Za-z0-9._-]+)\/(\d{1,3})\/[a-f0-9]{8,64}\.(mp4|jpg)$/;
+const TYPES: Record<string, string> = { mp4: "video/mp4", jpg: "image/jpeg" };
 /** A copy is ~15-25 MB; the request body limit on the free plan is 100 MB. */
 const MAX_BYTES = 95 * 1024 * 1024;
 
-function parseKey(key: string): { team: string; number: number } {
+function parseKey(key: string): { team: string; number: number; type: string } {
   const m = KEY.exec(key);
   if (!m) throw new HttpError(404, "Not found");
-  return { team: m[1], number: Number(m[2]) };
+  return { team: m[1], number: Number(m[2]), type: TYPES[m[3]] };
 }
 
 function bucket(env: Env): R2Bucket {
@@ -29,7 +31,7 @@ function bucket(env: Env): R2Bucket {
 
 /** GET / HEAD a copy for a viewer, honouring Range so players can seek. */
 export async function serveVideo(env: Env, v: Viewer, key: string, request: Request): Promise<Response> {
-  const { team, number } = parseKey(key);
+  const { team, number, type } = parseKey(key);
   if (!canSeeTeam(v, team) || !reelFilter(v, team)(number)) throw new HttpError(403, "Not allowed.");
   const videos = bucket(env);
 
@@ -37,10 +39,11 @@ export async function serveVideo(env: Env, v: Viewer, key: string, request: Requ
   if (!head) return new Response("Not found", { status: 404 });
   const size = head.size;
   const headers = new Headers({
-    "content-type": "video/mp4",
+    "content-type": type,
     "accept-ranges": "bytes",
-    // Private: the copy is only for this viewer's browser, never a shared cache.
-    "cache-control": "private, max-age=86400",
+    // Private: only for this viewer's browser, never a shared cache. Keys
+    // change with the content, so a copy never goes stale.
+    "cache-control": "private, max-age=604800, immutable",
     etag: head.httpEtag,
   });
   if (request.method === "HEAD") {
@@ -88,12 +91,12 @@ function parseRange(header: string | null, size: number): { start: number; end: 
 
 /** VME: store one copy (the request body is the MP4 itself). */
 export async function putVideo(env: Env, key: string, request: Request): Promise<Response> {
-  parseKey(key);
+  const { type } = parseKey(key);
   const length = Number(request.headers.get("content-length") || 0);
   if (!length) throw new HttpError(411, "Send the file with its Content-Length.");
   if (length > MAX_BYTES) throw new HttpError(413, "That copy is too big.");
   if (!request.body) throw new HttpError(400, "No file.");
-  await bucket(env).put(key, request.body, { httpMetadata: { contentType: "video/mp4" } });
+  await bucket(env).put(key, request.body, { httpMetadata: { contentType: type } });
   return json({ ok: true, key, size: length });
 }
 

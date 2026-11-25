@@ -1,6 +1,6 @@
 import { Link, Navigate, Route, Routes, useParams } from "react-router-dom";
 import type { MatchDoc, MatchSummary, TeamDoc, TeamsDoc, Video } from "../shared/docs";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import type { Me } from "../shared/api";
 import { formatDate, imageUrl, MeContext, savedInvites, useApi, useDoc, useMe } from "./api";
 import { Crest, Gate, InviteButton, matchPath, playerPath, teamPath, TeamTheme } from "./common";
@@ -9,11 +9,14 @@ import { JoinPage } from "./Join";
 import { PlayerEditor } from "./PlayerEditor";
 import { StatsTable } from "./StatsTable";
 import { VideoTile, videoKey } from "./YouTube";
-import { matchSpoiler, seasonSpoiler, Spoiler, useRevealed, useReveals } from "./Spoilers";
+import { loadReveals, matchSpoiler, seasonSpoiler, Spoiler, useRevealed, useReveals } from "./Spoilers";
 
 export function App() {
   const me = useApi<Me>("/api/me");
   const value = { me: me.state === "ok" ? me.doc : null, reload: me.reload };
+  useEffect(() => {
+    void loadReveals();
+  }, []);
   return (
     <MeContext.Provider value={value}>
       <TopBar />
