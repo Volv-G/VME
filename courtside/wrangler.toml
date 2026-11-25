@@ -14,3 +14,8 @@ database_id = "1cace9cf-ec37-40e5-8e86-955b2b5574b2"
 # request, so a site deployed before sign-in is configured shows nothing.
 ACCESS_TEAM_DOMAIN = "https://green-dream-4218.cloudflareaccess.com"
 ACCESS_AUD = "e997d3c83547878f5e0e8555c3aa649d8e77ee6562a81b15e6d78d2fc1c5668a"
+
+# Web copies of the reels, played on the site (server/videos.ts).
+[[r2_buckets]]
+binding = "VIDEOS"
+bucket_name = "courtside-videos"

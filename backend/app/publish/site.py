@@ -40,6 +40,7 @@ from ..domain.match import Match
 from ..domain.roster import Roster
 from ..domain.stats import Stats
 from ..library import paths, scanner
+from . import site_video
 
 logger = logging.getLogger(__name__)
 
@@ -154,17 +155,20 @@ def _link_onedrive(pending: list[tuple[dict, Path]]) -> None:
                 v["onedrive_url"] = links.get("view")
 
 
-def _videos(team: str) -> dict[str, list[dict]]:
+def _videos(team: str, web: Optional["site_video.TeamCopies"] = None) -> dict[str, list[dict]]:
     """`<tournament>/<date>/<match>` -> the match's videos: on YouTube
-    when there (and not private), else on OneDrive when VME put it there."""
+    when there (and not private), else on OneDrive when VME put it there.
+    Reels on OneDrive also get their web copy on the site, once `web`
+    reports it uploaded (see site_video)."""
     out: dict[str, list[dict]] = {}
     pending: list[tuple[dict, Path]] = []
     for r in scanner.list_team_full_renders(team):
         v: dict[str, Any] = {"kind": r.kind or "full"}
+        render = paths.match_dir(team, r.tournament, r.date, r.match) / "renders" / r.filename
         if r.youtube_video_id and (r.youtube_privacy_status or "") != "private":
             v["youtube_id"] = r.youtube_video_id
         elif r.onedrive_item_id:
-            pending.append((v, paths.match_dir(team, r.tournament, r.date, r.match) / "renders" / r.filename))
+            pending.append((v, render))
         else:
             continue
         if r.kind == "reel":
@@ -172,6 +176,8 @@ def _videos(team: str) -> dict[str, list[dict]]:
             jersey = paths.parse_player_folder(parts[2])[0] if len(parts) > 2 else None
             v["player_number"] = jersey
             v["player_label"] = r.player_label or ""
+            if web is not None and "youtube_id" not in v:
+                web.attach(v, jersey, render)
         out.setdefault(f"{r.tournament}/{r.date}/{r.match}", []).append(v)
     _link_onedrive(pending)
     order = {"full": 0, "condensed": 1, "reel": 2}
@@ -183,7 +189,7 @@ def _videos(team: str) -> dict[str, list[dict]]:
     return out
 
 
-def build(team: str) -> tuple[dict, list[dict], list[dict]]:
+def build(team: str, web: Optional["site_video.TeamCopies"] = None) -> tuple[dict, list[dict], list[dict]]:
     """(team doc, docs, images) for one team. Docs include the team doc."""
     from ..api.stats import _add_match
     from ..jobs.render_job import _resolve_logo, _resolve_player_photo
@@ -218,7 +224,7 @@ def build(team: str) -> tuple[dict, list[dict], list[dict]]:
         for p in sorted(roster.players, key=lambda p: p.number)
     ]
 
-    videos = _videos(team)
+    videos = _videos(team, web)
     season = Stats()
     tournaments = []
     for d in paths.iter_tournament_dirs(team):
@@ -308,7 +314,7 @@ def build(team: str) -> tuple[dict, list[dict], list[dict]]:
     return team_doc, docs, images
 
 
-def publish(teams: Optional[list[str]] = None) -> dict:
+def publish(teams: Optional[list[str]] = None, *, upload_in_background: bool = True) -> dict:
     """Replace everything on the site with the current state of `teams`
     (default: the config's list, else every team). Returns counts."""
     cfg = load_config()
@@ -318,8 +324,11 @@ def publish(teams: Optional[list[str]] = None) -> dict:
     docs: list[dict] = []
     images: list[dict] = []
     listing = []
+    copies = []
     for team in teams:
-        team_doc, team_docs, team_images = build(team)
+        web = site_video.TeamCopies(team, cfg)
+        copies.append(web)
+        team_doc, team_docs, team_images = build(team, web)
         docs += team_docs
         images += team_images
         listing.append({k: team_doc[k] for k in ("slug", "name", "color", "logo")})
@@ -340,7 +349,18 @@ def publish(teams: Optional[list[str]] = None) -> dict:
     if r.status_code != 200:
         raise RuntimeError(f"Site refused the publish: {r.status_code} {r.text[:300]}")
     logger.info("site publish: %d docs, %d images for %s", len(docs), len(images), ", ".join(teams))
-    return {"teams": teams, "docs": len(docs), "images": len(images), "url": cfg["url"]}
+    # Only now that the docs no longer point at them: drop stale reel
+    # copies, then make the missing ones (which republishes when done).
+    missing = []
+    for web in copies:
+        try:
+            web.prune()
+        except requests.RequestException:
+            logger.warning("site videos: pruning %s failed", web.team, exc_info=True)
+        missing += web.missing()
+    if missing and upload_in_background:
+        site_video.UPLOADER.enqueue(cfg, missing)
+    return {"teams": teams, "docs": len(docs), "images": len(images), "url": cfg["url"], "videos_missing": len(missing)}
 
 
 _timer_lock = threading.Lock()

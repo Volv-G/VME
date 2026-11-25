@@ -39,6 +39,9 @@ export interface Video {
   youtube_id?: string;
   onedrive_embed?: string;
   onedrive_url?: string;
+  /** A reel's web copy on the site itself, played in place: the key
+   *  for /api/video/<key>. The OneDrive links stay for the original. */
+  web?: string;
   /** Set for reels: whose plays they are. */
   player_number?: number | null;
   player_label?: string;

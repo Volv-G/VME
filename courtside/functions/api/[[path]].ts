@@ -9,6 +9,7 @@
  *   GET  /api/join/<code>               the invite's team and players
  *   POST /api/join/<code>               ask to be that team's player or coach
  *   GET  /api/invite/<team>             the team's invite link (its members and the admin)
+ *   GET  /api/video/<key>               a reel's web copy (Range supported)
  *   GET  /api/player/<team>/<n>         a player's details, for editing
  *   POST /api/player/<team>/<n>         change a player's name or photo
  *   GET  /api/admin                     requests, members, each team's invite link (admin)
@@ -19,6 +20,9 @@
  *
  *   POST /api/publish                   replace what is published
  *   POST /api/publish/sync              decisions and acks in; requests and edits out
+ *   GET  /api/publish/videos?prefix=    the reel copies stored (server/videos.ts)
+ *   PUT  /api/publish/video/<key>       store a reel copy (body: the MP4)
+ *   DELETE /api/publish/video/<key>     drop a reel copy
  */
 import type { Env } from "../../shared/env";
 import type { Decision, Me } from "../../shared/api";
@@ -27,6 +31,7 @@ import { canSeeImage, Names, readDoc } from "../../server/content";
 import { blobBytes, fromBase64, HttpError, json, readBody, sameSecret } from "../../server/http";
 import { adminState, decide, inviteCode, joinTeam, pendingRequests, requestJoin, type JoinRequest } from "../../server/members";
 import { ackEdits, editPlayer, pendingEdits, playerInfo, type PlayerEdit } from "../../server/players";
+import { deleteVideo, listVideos, putVideo, serveVideo } from "../../server/videos";
 
 interface PublishBody {
   /** Keys whose prefix is listed here are deleted before the docs below
@@ -94,10 +99,15 @@ async function route(ctx: EventContext<Env, string, Record<string, unknown>>): P
   const method = request.method;
 
   if (path === "publish" || path.startsWith("publish/")) {
-    if (method !== "POST") throw new HttpError(405, "Method not allowed");
     checkToken(request, env);
-    if (path === "publish") return publish(request, env);
-    if (path === "publish/sync") return sync(request, env);
+    if (path === "publish" && method === "POST") return publish(request, env);
+    if (path === "publish/sync" && method === "POST") return sync(request, env);
+    if (path === "publish/videos" && method === "GET") return listVideos(env, url.searchParams.get("prefix") || "reels/");
+    if (path.startsWith("publish/video/")) {
+      const key = path.slice("publish/video/".length);
+      if (method === "PUT") return putVideo(env, key, request);
+      if (method === "DELETE") return deleteVideo(env, key);
+    }
     throw new HttpError(404, "Not found");
   }
 
@@ -133,6 +143,10 @@ async function route(ctx: EventContext<Env, string, Record<string, unknown>>): P
     return new Response(blobBytes(row.data), {
       headers: { "content-type": row.mime, "cache-control": "private, max-age=3600" },
     });
+  }
+
+  if (parts[0] === "video" && (method === "GET" || method === "HEAD")) {
+    return serveVideo(env, v, parts.slice(1).join("/"), request);
   }
 
   if (parts[0] === "invite" && parts.length === 2 && method === "GET") {

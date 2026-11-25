@@ -37,6 +37,19 @@ Rules live in `server/access.ts`; documents are trimmed per person in
 `server/content.ts`. Player edits wait in `player_edits` until VME
 applies them to its roster and republishes.
 
+## Reels
+
+Reels play on the site itself, from small web copies in the R2 bucket
+`courtside-videos` (binding `VIDEOS`): OneDrive won't play a personal
+file inside another site, and the 1080p HEVC originals don't play in most
+browsers anyway. On every publish VME (`backend/app/publish/site_video.py`)
+makes a 720p H.264 copy of each reel it put on OneDrive that has none yet
+(about 2 Mbps, a fifth of the original), uploads it, and republishes so
+the tile plays it; copies of re-rendered or deleted reels are pruned.
+`/api/video/<key>` serves a copy with Range support, under the same rule
+as the reel itself. Uploads stop at 9.5 GB to stay in R2's free 10 GB;
+past that, reels keep their OneDrive link.
+
 ## Deploying
 
 ```
@@ -44,6 +57,7 @@ cd courtside
 npm install
 npx wrangler login            # once
 npm run db:schema             # after schema.sql changes (idempotent)
+npx wrangler r2 bucket create courtside-videos   # once (R2 enabled in the dashboard)
 npm run deploy                # build + wrangler pages deploy
 ```
 

@@ -1,5 +1,7 @@
 export interface Env {
   DB: D1Database;
+  /** R2: web copies of the reels (server/videos.ts). */
+  VIDEOS?: R2Bucket;
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
   /** Secret shared with VME's publisher (`wrangler pages secret put`). */
