@@ -31,11 +31,13 @@ export async function readDoc(env: Env, v: Viewer, key: string): Promise<unknown
   if (!canSeeTeam(v, team)) throw new HttpError(403, "You don't have access to this team.");
   const keep = keepVideo(reelFilter(v, team));
   if (kind === "team") {
-    const doc = await getDoc<TeamDoc>(env, key);
-    if (!doc) throw new HttpError(404, "Not found");
+    const stored = await getDoc<TeamDoc & { season_reels?: unknown }>(env, key);
+    if (!stored) throw new HttpError(404, "Not found");
+    // Season reels are off the site for now; an older VME still sends
+    // them, unfiltered by player, so they are dropped here.
+    const { season_reels: _dropped, ...doc } = stored;
     return {
       ...doc,
-      season_reels: doc.season_reels.filter(keep),
       tournaments: doc.tournaments.map((t) => ({
         ...t,
         matches: t.matches.map((m) => ({ ...m, videos: m.videos.filter(keep) })),

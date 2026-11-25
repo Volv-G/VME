@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { PlayerInfo } from "../shared/api";
-import { formatWhen, post, shrinkPhoto, useApi } from "./api";
+import { formatWhen, post, useApi } from "./api";
+import { PhotoCropper, type Crop } from "./PhotoCropper";
 
 /**
  * A parent's (or the admin's) form for their player: the name and photo.
@@ -12,7 +13,11 @@ export function PlayerEditor({ team, number }: { team: string; number: number })
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [shortName, setShortName] = useState("");
-  const [photo, setPhoto] = useState<{ base64: string; url: string } | null>(null);
+  // The picked file stays around so the crop can be adjusted again.
+  const [file, setFile] = useState<File | null>(null);
+  const [cropping, setCropping] = useState(false);
+  const [photo, setPhoto] = useState<{ base64: string; url: string; crop: Crop; turns: number } | null>(null);
+  const [fileKey, setFileKey] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,18 +28,25 @@ export function PlayerEditor({ team, number }: { team: string; number: number })
     setName(info.pending?.name ?? info.name);
     setShortName(info.pending?.short_name ?? info.short_name);
     setPhoto(null);
+    setFile(null);
+    setCropping(false);
     setError(null);
     setOpen(true);
   }
 
-  async function pick(file: File | undefined) {
-    if (!file) return;
-    try {
-      const base64 = await shrinkPhoto(file);
-      setPhoto({ base64, url: `data:image/jpeg;base64,${base64}` });
-    } catch {
-      setError("That file couldn't be read as a photo.");
-    }
+  function pick(picked: File | undefined) {
+    if (!picked) return;
+    setFile(picked);
+    setPhoto(null);
+    setError(null);
+    setCropping(true);
+    setFileKey((k) => k + 1);
+  }
+
+  function clearPhoto() {
+    setPhoto(null);
+    setFile(null);
+    setFileKey((k) => k + 1);
   }
 
   async function save() {
@@ -80,15 +92,42 @@ export function PlayerEditor({ team, number }: { team: string; number: number })
           </label>
           <label>
             Photo <span className="muted small">(a clear face shot works best)</span>
-            <input type="file" accept="image/*" onChange={(e) => void pick(e.target.files?.[0])} />
+            <input key={fileKey} type="file" accept="image/*" onChange={(e) => pick(e.target.files?.[0])} />
           </label>
-          {photo && <img className="player-photo preview" src={photo.url} alt="New photo" />}
-          <div className="actions">
-            <button className="primary" onClick={save} disabled={busy || !changed || !name.trim()}>
-              {busy ? "Saving…" : "Save"}
-            </button>
-            <button onClick={() => setOpen(false)}>Cancel</button>
-          </div>
+          {file && cropping && (
+            <PhotoCropper
+              key={fileKey}
+              file={file}
+              initial={photo ?? undefined}
+              onDone={(result) => {
+                setPhoto(result);
+                setCropping(false);
+              }}
+              onCancel={() => {
+                setCropping(false);
+                if (!photo) clearPhoto();
+              }}
+            />
+          )}
+          {photo && !cropping && (
+            <div className="photo-picked">
+              <img className="player-photo preview" src={photo.url} alt="New photo" />
+              <button type="button" onClick={() => setCropping(true)}>
+                Adjust
+              </button>
+              <button type="button" className="link" onClick={clearPhoto}>
+                Remove
+              </button>
+            </div>
+          )}
+          {!cropping && (
+            <div className="actions">
+              <button className="primary" onClick={save} disabled={busy || !changed || !name.trim()}>
+                {busy ? "Saving…" : "Save"}
+              </button>
+              <button onClick={() => setOpen(false)}>Cancel</button>
+            </div>
+          )}
           {error && <p className="error">{error}</p>}
         </div>
       )}

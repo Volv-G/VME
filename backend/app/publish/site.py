@@ -13,7 +13,7 @@ What goes out, and what deliberately does not:
 - Scores, set by set, and the same per-player stats VME shows.
 - Videos that are on YouTube and not private - a private video would
   only show an error to everyone but the channel owner - and, for what
-  VME put on OneDrive instead (reels, season reels), anonymous OneDrive
+  VME put on OneDrive instead (reels), anonymous OneDrive
   links: a player to embed and a link to OneDrive's page. The site shows
   a reel only to the player's family, the coaches and the admin.
 - No footage or files: the site embeds YouTube and OneDrive.
@@ -183,29 +183,6 @@ def _videos(team: str) -> dict[str, list[dict]]:
     return out
 
 
-def _season_reels(team: str, names: dict[int, str]) -> list[dict]:
-    """Each player's newest season reel that VME put on OneDrive."""
-    root = paths.season_reels_dir(team)
-    newest: dict[int, tuple[float, Path]] = {}
-    if root.is_dir():
-        for folder in root.iterdir():
-            number = paths.parse_player_folder(folder.name)[0] if folder.is_dir() else None
-            if number is None:
-                continue
-            for f in folder.iterdir():
-                od = scanner.load_onedrive_sidecar(f) if f.suffix.lower() == ".mp4" else None
-                if od and od.get("item_id"):
-                    at = float(od.get("uploaded_at") or 0)
-                    if number not in newest or at > newest[number][0]:
-                        newest[number] = (at, f)
-    pending = [
-        ({"kind": "season", "player_number": n, "player_label": names.get(n) or f"#{n}"}, f)
-        for n, (_, f) in sorted(newest.items())
-    ]
-    _link_onedrive(pending)
-    return [v for v, _ in pending if v.get("onedrive_url") or v.get("onedrive_embed")]
-
-
 def build(team: str) -> tuple[dict, list[dict], list[dict]]:
     """(team doc, docs, images) for one team. Docs include the team doc."""
     from ..api.stats import _add_match
@@ -313,7 +290,6 @@ def build(team: str) -> tuple[dict, list[dict], list[dict]]:
         "players": players,
         "stats": _stats_out(season, names),
         "tournaments": tournaments,
-        "season_reels": _season_reels(team, names),
         "published_at": now,
     }
     docs.append({"key": f"team/{team}", "json": team_doc})

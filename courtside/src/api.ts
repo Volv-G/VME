@@ -88,16 +88,3 @@ export function formatDate(iso: string): string {
 export function formatWhen(ms: number): string {
   return new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
-
-/** A photo shrunk in the browser to a JPEG, as base64 without the prefix. */
-export async function shrinkPhoto(file: File, maxPx = 1024): Promise<string> {
-  const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, maxPx / Math.max(bitmap.width, bitmap.height));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.round(bitmap.width * scale);
-  canvas.height = Math.round(bitmap.height * scale);
-  canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  bitmap.close();
-  const url = canvas.toDataURL("image/jpeg", 0.88);
-  return url.slice(url.indexOf(",") + 1);
-}

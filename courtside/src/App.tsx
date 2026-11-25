@@ -158,17 +158,6 @@ function TeamPage() {
             </div>
           </header>
 
-          {t.season_reels.length > 0 && (
-            <section>
-              <h2>Season highlights</h2>
-              <div className="videos">
-                {t.season_reels.map((v) => (
-                  <VideoTile key={videoKey(v)} video={v} title={`${v.player_label}: season`} poster={t.players.find((p) => p.number === v.player_number)?.photo} />
-                ))}
-              </div>
-            </section>
-          )}
-
           <section>
             <h2>Matches</h2>
             {t.tournaments.map((tour) => (
@@ -237,7 +226,6 @@ function PlayerPage() {
       {(t) => {
         const p = t.players.find((x) => x.number === n);
         const line = t.stats.players.find((x) => x.number === n);
-        const season = t.season_reels.filter((v) => v.player_number === n);
         const reels: { m: MatchSummary; v: Video }[] = [];
         for (const tour of t.tournaments)
           for (const m of tour.matches)
@@ -262,13 +250,10 @@ function PlayerPage() {
                 <StatsTable stats={{ ...t.stats, players: [line], total: line }} total={false} />
               </section>
             )}
-            {(season.length > 0 || reels.length > 0) && (
+            {reels.length > 0 && (
               <section>
                 <h2>Highlights</h2>
                 <div className="videos">
-                  {season.map((v) => (
-                    <VideoTile key={videoKey(v)} video={v} title="Season highlights" poster={p?.photo} />
-                  ))}
                   {reels.map(({ m, v }) => (
                     <VideoTile key={videoKey(v)} video={v} title={`${formatDate(m.date)} vs ${m.opponent}`} poster={m.opponent_logo} />
                   ))}

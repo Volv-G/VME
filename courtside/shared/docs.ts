@@ -69,7 +69,6 @@ export interface TeamDoc {
   players: { number: number; name: string; photo: string | null }[];
   stats: Stats;
   tournaments: { slug: string; name: string; matches: MatchSummary[] }[];
-  season_reels: Video[];
   published_at: number;
 }
 
