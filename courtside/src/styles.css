@@ -178,3 +178,11 @@ button.card { text-align: left; width: 100%; }
 .spoiler { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 button.reveal { border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent); font-weight: 600; }
 .team-head .spoiler { margin-top: 6px; }
+/* A list row that is one big link but still holds its own Reveal button. */
+.row-link { position: relative; }
+.row-link:hover { background: var(--tint); }
+.row-link .stretched { color: var(--text); }
+.row-link .stretched::after { content: ""; position: absolute; inset: 0; }
+.row-link button { position: relative; z-index: 1; }
+button.reveal-row { font-size: 13px; padding: 4px 10px; }
+button.reveal-all { margin-left: auto; font-size: 13px; padding: 4px 10px; }

@@ -19,17 +19,33 @@ function load(): string[] {
 }
 
 export function isRevealed(id: string): boolean {
-  return load().includes(id);
+  return session.has(id) || load().includes(id);
 }
 
-function remember(id: string) {
+/** Ids revealed this visit, for browsers that won't store them. */
+const session = new Set<string>();
+
+function remember(...ids: string[]) {
+  ids.forEach((id) => session.add(id));
   try {
-    const all = load().filter((x) => x !== id);
-    all.push(id);
+    const all = load().filter((x) => !ids.includes(x));
+    all.push(...ids);
     localStorage.setItem(KEY, JSON.stringify(all.slice(-KEEP)));
   } catch {
     /* private mode: revealed for this visit only */
   }
+}
+
+/** For a page with many spoilers: check any id, reveal some, re-render. */
+export function useReveals(): { revealed: (id: string) => boolean; reveal: (...ids: string[]) => void } {
+  const [, setTick] = useState(0);
+  return {
+    revealed: isRevealed,
+    reveal: (...ids) => {
+      remember(...ids);
+      setTick((t) => t + 1);
+    },
+  };
 }
 
 export function useRevealed(id: string): [boolean, () => void] {

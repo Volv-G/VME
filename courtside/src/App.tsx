@@ -9,7 +9,7 @@ import { JoinPage } from "./Join";
 import { PlayerEditor } from "./PlayerEditor";
 import { StatsTable } from "./StatsTable";
 import { VideoTile, videoKey } from "./YouTube";
-import { isRevealed, matchSpoiler, seasonSpoiler, Spoiler, useRevealed } from "./Spoilers";
+import { matchSpoiler, seasonSpoiler, Spoiler, useRevealed, useReveals } from "./Spoilers";
 
 export function App() {
   const me = useApi<Me>("/api/me");
@@ -153,74 +153,97 @@ function TeamPage() {
   const { team = "" } = useParams();
   const { me } = useMe();
   const res = useDoc<TeamDoc>(`team/${team}`);
+  const spoilers = useReveals();
   const manyTeams =
     !me || me.admin || new Set(me.memberships.filter((m) => m.status === "approved").map((m) => m.team)).size > 1;
   return (
     <Gate res={res}>
-      {(t) => (
-        <>
-          <TeamTheme color={t.color} logo={t.logo} />
-          <header className="team-head">
-            {manyTeams && <Link to="/" className="muted back">← Teams</Link>}
-            <div className="team-title">
-              <Crest src={t.logo} color={t.color} label={t.name} size={72} />
-              <h1>{t.name}</h1>
-              <InviteButton team={t.slug} teamName={t.name} />
-            </div>
-          </header>
-
-          <section>
-            <h2>Matches</h2>
-            {t.tournaments.map((tour) => (
-              <div key={tour.slug} className="tournament">
-                <h3>{tour.name}</h3>
-                <div className="list">
-                  {[...tour.matches].reverse().map((m) => (
-                    <Link key={m.key} to={matchPath(t.slug, m.key)} className="row">
-                      <Crest src={m.opponent_logo} label={m.opponent} size={32} />
-                      <span className="row-main">
-                        <span>vs {m.opponent}</span>
-                        <span className="muted small">
-                          {formatDate(m.date)}
-                          {m.index ? ` · Match ${m.index}` : ""}
-                          {m.videos.length ? ` · ${m.videos.length} video${m.videos.length === 1 ? "" : "s"}` : ""}
-                        </span>
-                      </span>
-                      {isRevealed(matchSpoiler(t.slug, m.key)) && <Score m={m} />}
-                    </Link>
-                  ))}
-                </div>
+      {(t) => {
+        const hidden = [
+          ...t.tournaments.flatMap((tour) => tour.matches.map((m) => matchSpoiler(t.slug, m.key))),
+          seasonSpoiler(t.slug, t.stats.matches),
+        ].filter((id) => !spoilers.revealed(id));
+        return (
+          <>
+            <TeamTheme color={t.color} logo={t.logo} />
+            <header className="team-head">
+              {manyTeams && <Link to="/" className="muted back">← Teams</Link>}
+              <div className="team-title">
+                <Crest src={t.logo} color={t.color} label={t.name} size={72} />
+                <h1>{t.name}</h1>
+                <InviteButton team={t.slug} teamName={t.name} />
               </div>
-            ))}
-          </section>
+            </header>
 
-          <section>
-            <h2>Season stats</h2>
-            <SeasonSpoiler team={t.slug} matches={t.stats.matches}>
-              <p className="muted small">{t.stats.matches} matches. Tap a column to sort.</p>
-              <StatsTable stats={t.stats} />
-            </SeasonSpoiler>
-          </section>
-
-          <section>
-            <h2>Players</h2>
-            <div className="players">
-              {t.players.map((p) => (
-                <Link key={p.number} to={playerPath(t.slug, p.number)} className="player">
-                  {p.photo ? (
-                    <img src={imageUrl(p.photo)} alt="" loading="lazy" />
-                  ) : (
-                    <span className="player-blank" style={{ background: t.color }}>#{p.number}</span>
-                  )}
-                  <span>
-                    <strong>#{p.number}</strong> {p.name}
-                  </span>
-                </Link>
+            <section>
+              <h2>
+                Matches
+                {hidden.length > 0 && (
+                  <button type="button" className="reveal reveal-all" onClick={() => spoilers.reveal(...hidden)}>
+                    👁 Reveal all
+                  </button>
+                )}
+              </h2>
+              {t.tournaments.map((tour) => (
+                <div key={tour.slug} className="tournament">
+                  <h3>{tour.name}</h3>
+                  <div className="list">
+                    {[...tour.matches].reverse().map((m) => {
+                      const id = matchSpoiler(t.slug, m.key);
+                      return (
+                        <div key={m.key} className="row row-link">
+                          <Crest src={m.opponent_logo} label={m.opponent} size={32} />
+                          <Link to={matchPath(t.slug, m.key)} className="row-main stretched">
+                            <span>vs {m.opponent}</span>
+                            <span className="muted small">
+                              {formatDate(m.date)}
+                              {m.index ? ` · Match ${m.index}` : ""}
+                              {m.videos.length ? ` · ${m.videos.length} video${m.videos.length === 1 ? "" : "s"}` : ""}
+                            </span>
+                          </Link>
+                          {spoilers.revealed(id) ? (
+                            <Score m={m} />
+                          ) : (
+                            <button type="button" className="reveal reveal-row" onClick={() => spoilers.reveal(id)}>
+                              👁 Reveal
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               ))}
-            </div>
-          </section>
-        </>
-      )}
+            </section>
+
+            <section>
+              <h2>Season stats</h2>
+              <SeasonSpoiler team={t.slug} matches={t.stats.matches}>
+                <p className="muted small">{t.stats.matches} matches. Tap a column to sort.</p>
+                <StatsTable stats={t.stats} />
+              </SeasonSpoiler>
+            </section>
+
+            <section>
+              <h2>Players</h2>
+              <div className="players">
+                {t.players.map((p) => (
+                  <Link key={p.number} to={playerPath(t.slug, p.number)} className="player">
+                    {p.photo ? (
+                      <img src={imageUrl(p.photo)} alt="" loading="lazy" />
+                    ) : (
+                      <span className="player-blank" style={{ background: t.color }}>#{p.number}</span>
+                    )}
+                    <span>
+                      <strong>#{p.number}</strong> {p.name}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          </>
+        );
+      }}
     </Gate>
   );
 }
