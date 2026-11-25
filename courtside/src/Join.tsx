@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import type { JoinTeam, Membership, Role } from "../shared/api";
 import { post, savedInvites, useApi, useMe } from "./api";
-import { Crest, Gate, teamPath } from "./common";
+import { Crest, Gate, teamPath, TeamTheme } from "./common";
 
 const STATUS: Record<Membership["status"], string> = {
   pending: "waiting for approval",
@@ -74,7 +74,8 @@ function TeamClaim({ code, team }: { code: string; team: JoinTeam }) {
 
   return (
     <>
-      <header className="team-head" style={{ borderBottomColor: team.color }}>
+      <TeamTheme color={team.color} logo={team.logo} />
+      <header className="team-head">
         <div className="team-title">
           <Crest src={team.logo} color={team.color} label={team.name} size={64} />
           <div>

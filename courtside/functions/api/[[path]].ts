@@ -8,6 +8,7 @@
  *   GET  /api/image/<key>               a photo or logo
  *   GET  /api/join/<code>               the invite's team and players
  *   POST /api/join/<code>               ask to be that team's player or coach
+ *   GET  /api/invite/<team>             the team's invite link (its members and the admin)
  *   GET  /api/player/<team>/<n>         a player's details, for editing
  *   POST /api/player/<team>/<n>         change a player's name or photo
  *   GET  /api/admin                     requests, members, each team's invite link (admin)
@@ -21,7 +22,7 @@
  */
 import type { Env } from "../../shared/env";
 import type { Decision, Me } from "../../shared/api";
-import { loadViewer, type Viewer } from "../../server/access";
+import { canSeeTeam, loadViewer, type Viewer } from "../../server/access";
 import { canSeeImage, Names, readDoc } from "../../server/content";
 import { blobBytes, fromBase64, HttpError, json, readBody, sameSecret } from "../../server/http";
 import { adminState, decide, inviteCode, joinTeam, pendingRequests, requestJoin, type JoinRequest } from "../../server/members";
@@ -132,6 +133,14 @@ async function route(ctx: EventContext<Env, string, Record<string, unknown>>): P
     return new Response(blobBytes(row.data), {
       headers: { "content-type": row.mime, "cache-control": "private, max-age=3600" },
     });
+  }
+
+  if (parts[0] === "invite" && parts.length === 2 && method === "GET") {
+    // A team's own people can pass its invite link on; it still takes
+    // the admin's approval to get in.
+    if (!canSeeTeam(v, parts[1])) throw new HttpError(403, "You don't have access to this team.");
+    if (!(await new Names(env).team(parts[1]))) throw new HttpError(404, "No such team.");
+    return json({ code: await inviteCode(env, parts[1]) });
   }
 
   if (parts[0] === "join" && parts.length === 2) {

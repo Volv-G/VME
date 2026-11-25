@@ -2,7 +2,7 @@ import { Link, Navigate, Route, Routes, useParams } from "react-router-dom";
 import type { MatchDoc, MatchSummary, TeamDoc, TeamsDoc, Video } from "../shared/docs";
 import type { Me } from "../shared/api";
 import { formatDate, imageUrl, MeContext, savedInvites, useApi, useDoc, useMe } from "./api";
-import { Crest, Gate, matchPath, playerPath, teamPath } from "./common";
+import { Crest, Gate, InviteButton, matchPath, playerPath, teamPath, TeamTheme } from "./common";
 import { AdminPage } from "./Admin";
 import { JoinPage } from "./Join";
 import { PlayerEditor } from "./PlayerEditor";
@@ -34,7 +34,7 @@ function TopBar() {
   const { me } = useMe();
   return (
     <nav className="topbar">
-      <Link to="/" className="brand">Courtside</Link>
+      <Link to="/" className="brand">Courtside VB</Link>
       <span className="topbar-right">
         {me?.admin && (
           <Link to="/admin">
@@ -148,11 +148,13 @@ function TeamPage() {
     <Gate res={res}>
       {(t) => (
         <>
-          <header className="team-head" style={{ borderBottomColor: t.color }}>
+          <TeamTheme color={t.color} logo={t.logo} />
+          <header className="team-head">
             {manyTeams && <Link to="/" className="muted back">← Teams</Link>}
             <div className="team-title">
-              <Crest src={t.logo} color={t.color} label={t.name} size={64} />
+              <Crest src={t.logo} color={t.color} label={t.name} size={72} />
               <h1>{t.name}</h1>
+              <InviteButton team={t.slug} teamName={t.name} />
             </div>
           </header>
 
@@ -161,7 +163,7 @@ function TeamPage() {
               <h2>Season highlights</h2>
               <div className="videos">
                 {t.season_reels.map((v) => (
-                  <VideoTile key={videoKey(v)} video={v} title={`${v.player_label}: season`} />
+                  <VideoTile key={videoKey(v)} video={v} title={`${v.player_label}: season`} poster={t.players.find((p) => p.number === v.player_number)?.photo} />
                 ))}
               </div>
             </section>
@@ -243,7 +245,8 @@ function PlayerPage() {
         reels.reverse();
         return (
           <>
-            <header className="team-head" style={{ borderBottomColor: t.color }}>
+            <TeamTheme color={t.color} logo={t.logo} />
+            <header className="team-head">
               <Link to={teamPath(t.slug)} className="muted back">← {t.name}</Link>
               <div className="team-title">
                 {p?.photo && <img className="player-photo" src={imageUrl(p.photo)} alt="" />}
@@ -264,10 +267,10 @@ function PlayerPage() {
                 <h2>Highlights</h2>
                 <div className="videos">
                   {season.map((v) => (
-                    <VideoTile key={videoKey(v)} video={v} title="Season highlights" />
+                    <VideoTile key={videoKey(v)} video={v} title="Season highlights" poster={p?.photo} />
                   ))}
                   {reels.map(({ m, v }) => (
-                    <VideoTile key={videoKey(v)} video={v} title={`${formatDate(m.date)} vs ${m.opponent}`} />
+                    <VideoTile key={videoKey(v)} video={v} title={`${formatDate(m.date)} vs ${m.opponent}`} poster={m.opponent_logo} />
                   ))}
                 </div>
               </section>
@@ -296,6 +299,7 @@ function MatchPage() {
         const reels = m.videos.filter((v) => v.kind === "reel");
         return (
           <>
+            <TeamTheme color={m.team_color} logo={m.team_logo} />
             <header className="team-head">
               <Link to={teamPath(m.team)} className="muted back">← {m.team_name}</Link>
               <h1>
@@ -311,7 +315,7 @@ function MatchPage() {
               <section>
                 <div className="videos videos-wide">
                   {main.map((v) => (
-                    <VideoTile key={videoKey(v)} video={v} title={VIDEO_TITLES[v.kind]} />
+                    <VideoTile key={videoKey(v)} video={v} title={VIDEO_TITLES[v.kind]} poster={m.opponent_logo} />
                   ))}
                 </div>
               </section>
@@ -321,7 +325,7 @@ function MatchPage() {
                 <h2>Player reels</h2>
                 <div className="videos">
                   {reels.map((v) => (
-                    <VideoTile key={videoKey(v)} video={v} title={v.player_label || "Reel"} />
+                    <VideoTile key={videoKey(v)} video={v} title={v.player_label || "Reel"} poster={m.team_logo} />
                   ))}
                 </div>
               </section>

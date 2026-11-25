@@ -1,7 +1,7 @@
-"""Publish what families may see to the public VME site (`site/`).
+"""Publish what families may see to Courtside VB, the public site (`courtside/`).
 
 VME stays the source of truth and the site holds a copy: this builds the
-documents described in `site/shared/docs.ts` - teams, each team's season,
+documents described in `courtside/shared/docs.ts` - teams, each team's season,
 each match - and replaces the site's copy in one request. Nothing on the
 internet ever calls into VME; the site works with this PC switched off.
 
@@ -292,6 +292,8 @@ def build(team: str) -> tuple[dict, list[dict], list[dict]]:
                     **summary,
                     "team": team,
                     "team_name": team_name,
+                    "team_color": color,
+                    "team_logo": logo,
                     "tournament": d.name,
                     "tournament_name": t_name,
                     "stats": _stats_out(one, names),

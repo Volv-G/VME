@@ -76,6 +76,8 @@ export interface TeamDoc {
 export interface MatchDoc extends MatchSummary {
   team: string;
   team_name: string;
+  team_color?: string;
+  team_logo?: string | null;
   tournament: string;
   tournament_name: string;
   stats: Stats;

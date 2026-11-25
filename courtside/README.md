@@ -1,4 +1,4 @@
-# VME site
+# Courtside VB
 
 The page families use to watch matches and highlights and follow scores
 and stats. Hosted on Cloudflare's free plan at https://courtside-vb.pages.dev:
@@ -40,7 +40,7 @@ applies them to its roster and republishes.
 ## Deploying
 
 ```
-cd site
+cd courtside
 npm install
 npx wrangler login            # once
 npm run db:schema             # after schema.sql changes (idempotent)
