@@ -63,6 +63,7 @@ import works.vme.streamer.data.GameState
 import works.vme.streamer.data.Match
 import works.vme.streamer.data.MatchEvent
 import works.vme.streamer.data.jerseyLabel
+import works.vme.streamer.data.byNumber
 import works.vme.streamer.data.MatchStore
 import works.vme.streamer.data.PhotoCache
 import works.vme.streamer.data.Player
@@ -1994,7 +1995,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * time pressure.
      */
     private fun pickLiberos() {
-        val players = match.homeRoster.players.sortedBy { it.number }
+        val players = match.homeRoster.players.byNumber()
         if (players.isEmpty()) {
             log("liberos: roster is empty")
             return
@@ -3007,7 +3008,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                 gameState.homePositions.values.filterNotNull().toSet()
             else emptySet()
         val available = roster.players
-            .sortedBy { it.number }
+            .byNumber()
             .filter { it.number !in onCourt }
             .filter { !(excludeLiberos && it.number in liberos) }
         // Rows are built by hand rather than handed to `setItems`
@@ -3143,7 +3144,11 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private fun addPlayer(side: Side, jersey: Int) {
         val roster = if (side == Side.Home) match.homeRoster else match.opponentRoster
         if (roster.players.any { it.number == jersey }) return
-        val added = roster.copy(players = roster.players + Player(name = "#$jersey", number = jersey))
+        // Slotted into jersey order rather than appended, so a player
+        // added mid-match is where the eye looks for them next time.
+        val added = roster.copy(
+            players = (roster.players + Player(name = "#$jersey", number = jersey)).byNumber(),
+        )
         match = if (side == Side.Home) match.copy(homeRoster = added)
                 else match.copy(opponentRoster = added)
         store.save(match)

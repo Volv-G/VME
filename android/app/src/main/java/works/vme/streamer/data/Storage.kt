@@ -102,7 +102,7 @@ fun JSONObject.toRoster(): Roster {
             profilePicPath = p.optString("profile_pic_path").ifBlank { null },
             localPhotoPath = p.optString("_local_photo_path").ifBlank { null },
         )
-    }
+    }.byNumber()  // VME sends them sorted now; older files may not be.
     return Roster(
         teamName = optString("team_name").ifBlank { "" },
         teamColor = optString("team_color").ifBlank { null },
@@ -155,7 +155,9 @@ fun Roster.toJson(): JSONObject {
     // Phone-only (see Models.kt).
     if (localLogoPath != null) obj.put("_local_logo_path", localLogoPath)
     val arr = JSONArray()
-    players.forEach { p ->
+    // Stored in jersey order too, so the file reads the way every list
+    // on the phone does (see byNumber).
+    players.byNumber().forEach { p ->
         val po = JSONObject()
             .put("name", p.name)
             .put("number", p.number)

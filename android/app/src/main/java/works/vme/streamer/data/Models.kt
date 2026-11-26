@@ -47,6 +47,19 @@ data class Player(
     val localPhotoPath: String? = null,
 )
 
+/**
+ * Players in jersey order, the order every list on the phone shows.
+ *
+ * A squad is known courtside by number: the operator reads "#12" off
+ * the back of a shirt and looks for 12, so a list in import order (or
+ * in the order players were added mid-match) meant scanning the whole
+ * thing every time. Kept sorted where rosters are read and written
+ * (see `toRoster` / `toJson` in Storage.kt) and where a player is
+ * added on the fly, so nothing downstream has to remember to.
+ * Stable, so two players sharing a number keep their relative order.
+ */
+fun List<Player>.byNumber(): List<Player> = sortedBy { it.number }
+
 /** A roster, either the local team's or an opponent's. */
 data class Roster(
     /** Human-readable team name. Distinct from the storage key: a team
