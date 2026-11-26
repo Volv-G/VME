@@ -152,16 +152,18 @@ class TeamCopies:
         return len(stale)
 
 
-def transcode(src: Path, dst: Path) -> None:
+def transcode(src: Path, dst: Path, rate: float = 1.0) -> None:
     """720p H.264 + AAC, fast-start so playback begins before the download
-    ends. NVENC when the GPU has it, else x264."""
+    ends. NVENC when the GPU has it, else x264. `rate` scales the bitrate
+    cap, for a long reel whose copy came out over the upload limit."""
+    cap = lambda kbps: f"{max(300, int(kbps * rate))}k"  # noqa: E731
     common_in = ["-hide_banner", "-loglevel", "error", "-y"]
     video_filter = ["-vf", f"scale=-2:'min({HEIGHT},ih)'"]
     tail = ["-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k", "-ac", "2", "-movflags", "+faststart", str(dst)]
     encoders = [
-        ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "28", "-b:v", "1500k", "-maxrate", "2200k",
-         "-bufsize", "4400k", "-profile:v", "high"],
-        ["-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-maxrate", "2200k", "-bufsize", "4400k",
+        ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "28", "-b:v", cap(1500), "-maxrate", cap(2200),
+         "-bufsize", cap(4400), "-profile:v", "high"],
+        ["-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-maxrate", cap(2200), "-bufsize", cap(4400),
          "-profile:v", "high"],
     ]
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -184,6 +186,10 @@ def upload_one(cfg: dict, key: str, reel: Path, used: list[int]) -> bool:
         out = Path(tmp) / "copy.mp4"
         transcode(reel, out)
         size = out.stat().st_size
+        if size > MAX_COPY:
+            # A long reel: once more with the bitrate cut to fit, with room to spare.
+            transcode(reel, out, rate=MAX_COPY * 0.85 / size)
+            size = out.stat().st_size
         if size > MAX_COPY:
             logger.warning("site videos: copy of %s is %d MB, too big to upload", reel.name, size // 2**20)
             return False
