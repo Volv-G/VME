@@ -79,7 +79,7 @@ interface ActionDef {
    * when omitted - which is the right answer for almost every action since
    * the type itself already tells you what verb is being logged.
    */
-  icon?: string;
+  icon?: React.ReactNode;
 }
 
 // Per-player home-team action buttons rendered under the lineup grid. Order

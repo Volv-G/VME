@@ -1,6 +1,9 @@
 """Keep VME and the site in step - every call made from here, never to here.
 
-Once a minute VME asks the site (`POST /api/publish/sync`) for:
+Once a minute VME asks the site (`POST /api/publish/sync`) for what is
+waiting there (below), and checks its own media tree for anything the
+site shows that has changed, republishing when it has (site_watch.py).
+What the site is asked for:
 
 - **requests**: people asking to be a team's coach or one of its
   players. VME shows them so the admin can approve or decline without
@@ -28,8 +31,10 @@ from typing import Any, Optional
 
 import requests
 
+from ..config import MEDIA_ROOT
 from ..library import paths, scanner, schedule
 from . import site
+from .site_watch import TreeWatch
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +54,7 @@ class SiteSync:
         self.requests: list[dict] = []
         self.last_sync: Optional[float] = None
         self.error: Optional[str] = None
+        self._watch = TreeWatch(MEDIA_ROOT)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -73,6 +79,15 @@ class SiteSync:
                 except Exception as exc:  # network down, site redeploying...
                     self.error = str(exc)
                     logger.info("site sync failed: %s", exc)
+                # Anything the site shows changed in VME (events tagged,
+                # an upload finished, a file fixed by hand): publish once
+                # things settle. The first round also catches up with
+                # whatever happened while VME was off.
+                try:
+                    if self._watch.changed():
+                        site.publish_soon(30.0)
+                except Exception:
+                    logger.warning("site watch failed", exc_info=True)
             self._wake.wait(INTERVAL)
 
     # -- one round ---------------------------------------------------------

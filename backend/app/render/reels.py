@@ -68,13 +68,14 @@ MERGE_GAP_SECONDS = 1.5
 # Strongly asymmetric, and for the same reason the rally caps are: an
 # action is tagged when it FINISHES, so everything that makes it worth
 # watching - the pass, the set, the approach - is behind it, while what
-# follows is a ball on the floor. 10 s covers a whole rally's build-up;
-# 2 s is the point landing.
+# follows is a ball on the floor. 5 s covers the pass, set and approach
+# that lead into the action (10 s, the old default, played most of the
+# rally before it and made reels drag); 2 s is the point landing.
 #
 # Overridable per match (`Match.reel_lead_seconds` / `reel_tail_seconds`)
 # because tagging habits differ: someone who tags on contact needs less
 # lead than someone who tags when the whistle goes.
-REEL_MAX_LEAD_SECONDS = 10.0
+REEL_MAX_LEAD_SECONDS = 5.0
 REEL_MAX_TAIL_SECONDS = 2.0
 
 # Two tagged events this close together are one moment, not two, and the

@@ -1,12 +1,18 @@
 import { Fragment, useState } from "react";
 import type { Stats, StatsLine } from "../shared/docs";
+import blockPng from "./assets/block.png";
+import blockPointPng from "./assets/block_point.png";
 
-const LABELS: Record<string, [string, string]> = {
+/** Blocks have drawn icons (hands over the net; with a burst when the
+ *  block won the point) - no emoji says it. */
+const img = (src: string) => <img className="stat-icon" src={src} alt="" />;
+
+const LABELS: Record<string, [React.ReactNode, string]> = {
   kill: ["💥", "Kill"],
   positive_attack: ["⚡", "Positive attack"],
   ace: ["🎯", "Ace"],
-  block_point: ["✋", "Block point"],
-  block: ["🧱", "Block"],
+  block_point: [img(blockPointPng), "Block point"],
+  block: [img(blockPng), "Block"],
   assist: ["🤝", "Assist"],
   perfect_pass: ["👌", "Perfect pass"],
   dig: ["🛡️", "Dig"],

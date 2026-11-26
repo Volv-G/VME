@@ -1029,7 +1029,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             playerActionButton("\uD83C\uDFAF Ace", EventType.Ace, BG_ATTACK),
             playerActionButton("\uD83D\uDCAA Pos. attack", EventType.PositiveAttack, BG_ATTACK),
             playerActionButton(LBL_BLOCK, EventType.Block, BG_DEFENCE)
-                .also { blockButton = it },
+                .also {
+                    blockButton = it
+                    it.text = iconLabel(LBL_BLOCK, works.vme.streamer.R.drawable.ic_block)
+                },
             playerActionButton("\uD83D\uDC4C Perfect pass", EventType.PerfectPass, BG_DEFENCE),
             playerActionButton("\uD83E\uDD32 Dig", EventType.Dig, BG_DEFENCE),
             playerActionButton("\uD83E\uDD3F Dive", EventType.Dive, BG_DEFENCE),
@@ -1084,7 +1087,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             killAt = null
             log("assist: none")
         } else {
-            log("cancelled: $armedLabel")
+            log("cancelled: ${armedLabel.removePrefix("￼ ")}")
         }
         disarm()
     }
@@ -1545,7 +1548,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         if (jersey == null) {
             // Empty slot cannot be credited with anything. Say so
             // rather than silently doing nothing.
-            log("$armedLabel: P$pos is empty")
+            log("${armedLabel.removePrefix("￼ ")}: P$pos is empty")
             return
         }
         // The assist prompt is dismissed by tapping the killer: they
@@ -1849,6 +1852,21 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * Ace is the exception: it is attributed automatically, because
      * by definition the server scored it.
      */
+    /**
+     * A label whose first character is drawn as an icon - the blocks, which
+     * no emoji shows (two hands over the net; with a burst for the block
+     * that won the point). Its text stays [label], so comparing it with
+     * armedLabel still works.
+     */
+    private fun iconLabel(label: String, icon: Int): CharSequence {
+        val d = getDrawable(icon) ?: return label
+        val size = (22 * resources.displayMetrics.density).toInt()
+        d.setBounds(0, 0, size, size)
+        return android.text.SpannableString(label).apply {
+            setSpan(android.text.style.ImageSpan(d, android.text.style.ImageSpan.ALIGN_BOTTOM), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+    }
+
     private fun playerActionButton(
         label: String, type: EventType, tint: Int = BG_ATTACK,
     ) = gated(Button(this).apply {
@@ -2961,7 +2979,11 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // of a lit Kill button that has already been recorded.
         killButton.text = if (armed == EventType.Assist) LBL_ASSIST else LBL_KILL
         // The same for Block, whose second stage is a yes/no.
-        blockButton.text = if (armed == EventType.BlockPoint) LBL_BLOCK_POINT else LBL_BLOCK
+        blockButton.text = if (armed == EventType.BlockPoint) {
+            iconLabel(LBL_BLOCK_POINT, works.vme.streamer.R.drawable.ic_block_point)
+        } else {
+            iconLabel(LBL_BLOCK, works.vme.streamer.R.drawable.ic_block)
+        }
         cancelActionButton.visibility = if (armed != null) View.VISIBLE else View.GONE
         cancelActionButton.text = when (armed) {
             EventType.Assist -> LBL_NO_ASSIST
@@ -2989,7 +3011,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                 tintButton(btn, if (filled) ARMED_SLOT_BG else ARMED_SLOT_EMPTY_BG)
             }
             for (b in actionButtons) {
-                if (b.text == armedLabel) {
+                // toString: the Block button's label carries its icon as a span.
+                if (b.text.toString() == armedLabel) {
                     b.isEnabled = true
                     b.alpha = 1.0f
                     tintButton(b, ARMED_SLOT_BG)
@@ -4533,10 +4556,11 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
          *  assist prompt, where cancelling means "unassisted". */
         private const val LBL_CANCEL = "\u2715 Cancel"
         private const val LBL_NO_ASSIST = "\u2715 No assist"
-        private const val LBL_BLOCK = "\ud83e\uddf1 Block"
+        /** U+FFFC is where [iconLabel] draws the block icon. */
+        private const val LBL_BLOCK = "\ufffc Block"
         /** The Block button while "did it win the point?" is open; the
          *  Cancel button says [LBL_JUST_BLOCK] then. */
-        private const val LBL_BLOCK_POINT = "\u270b Block point"
+        private const val LBL_BLOCK_POINT = "\ufffc Block point"
         private const val LBL_JUST_BLOCK = "\u2715 Just a block"
         private const val LBL_TIMEOUT = "\u23F1\uFE0F Timeout"
         private const val LBL_TIMEOUT_END = "\u23F1\uFE0F End Timeout"

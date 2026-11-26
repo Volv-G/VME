@@ -152,7 +152,7 @@ function StatsTable({ stats }: { stats: StatsDto }) {
               {th("name", "Player", "stats-name")}
               {stats.columns.map((c) => (
                 <Fragment key={c}>
-                  {th(`ev:${c}`, `${eventIcon(c)} ${LABELS[c] ?? c}`, undefined, LABELS[c] ?? c)}
+                  {th(`ev:${c}`, <>{eventIcon(c)} {LABELS[c] ?? c}</>, undefined, LABELS[c] ?? c)}
                 </Fragment>
               ))}
               {th(

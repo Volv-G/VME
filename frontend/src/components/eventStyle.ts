@@ -1,3 +1,7 @@
+import { createElement, type ReactNode } from "react";
+import blockPng from "../assets/block.png";
+import blockPointPng from "../assets/block_point.png";
+
 /**
  * Visual styling for match events: timeline marker colors and UI icons.
  *
@@ -155,7 +159,21 @@ export function eventColor(type: string): string {
   return EVENT_COLORS[type] ?? EVENT_COLORS.default;
 }
 
-/** Icon lookup with fallback. */
-export function eventIcon(type: string): string {
+/**
+ * Drawn icons for the types no emoji says well: a volleyball block (two
+ * hands over the net), and the block that won the point (the same, with
+ * an impact burst). Made with the image model on this PC; see
+ * assets/block*.png.
+ */
+const EVENT_IMAGES: Record<string, string> = {
+  block: blockPng,
+  block_point: blockPointPng,
+};
+
+/** Icon lookup with fallback: an emoji, or for the drawn ones an image
+ *  sized to the text around it. */
+export function eventIcon(type: string): ReactNode {
+  const src = EVENT_IMAGES[type];
+  if (src) return createElement("img", { src, alt: "", className: "event-icon-img", draggable: false });
   return EVENT_ICONS[type] ?? EVENT_ICONS.default;
 }
