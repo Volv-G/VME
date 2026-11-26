@@ -248,7 +248,7 @@ def google_start(request: Request, return_to: str = "/") -> dict:
         "client_id": cfg["client_id"],
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": " ".join(youtube.SCOPES),
+        "scope": " ".join(youtube.CONSENT_SCOPES),
         "state": state,
         # Both are required to get a refresh token back: without
         # `consent` Google returns only an access token when the user
@@ -309,20 +309,29 @@ def google_callback(
         #
         # Extra scopes are not a security problem here: what this token
         # may do is decided by what the user consented to, and the
-        # request itself asks for no more than YouTube.
+        # request itself asks for no more than YouTube and sending mail.
         os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
         flow = Flow.from_client_config(
-            {"web": cfg}, scopes=youtube.SCOPES, state=state
+            {"web": cfg}, scopes=youtube.CONSENT_SCOPES, state=state
         )
         flow.redirect_uri = pending.redirect_uri
-        flow.fetch_token(code=code)
+        token = flow.fetch_token(code=code)
         creds = flow.credentials
         if not creds.refresh_token:
             # Without one, uploads die in an hour and cannot recover.
             logger.error("google returned no refresh token")
             return back("no_refresh_token")
+        saved = json.loads(creds.to_json())
+        # Record what Google actually granted (each scope can be unticked
+        # on the consent screen), not what was asked for: granted_scopes()
+        # reads this, and the mail check (upload/gmail.py) relies on it.
+        granted = token.get("scope") if isinstance(token, dict) else None
+        if isinstance(granted, str):
+            granted = granted.split()
+        if granted:
+            saved["scopes"] = list(granted)
         youtube.token_path().parent.mkdir(parents=True, exist_ok=True)
-        youtube.token_path().write_text(creds.to_json(), encoding="utf-8")
+        youtube.token_path().write_text(json.dumps(saved), encoding="utf-8")
         logger.info("saved google token to %s", youtube.token_path())
     except Exception as exc:  # noqa: BLE001 - surfaced to the user as a status
         logger.exception("google token exchange failed: %s", exc)

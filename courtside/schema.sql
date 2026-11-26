@@ -114,3 +114,12 @@ CREATE TABLE IF NOT EXISTS phone_scores (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (team, id)
 );
+
+-- Emails waiting for VME to send (server/notices.ts): a join request for
+-- the admins, an approval for the person who asked. Deleted once sent.
+CREATE TABLE IF NOT EXISTS notices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,               -- request | approved
+  member_id INTEGER NOT NULL,       -- members.id
+  created_at INTEGER NOT NULL
+);

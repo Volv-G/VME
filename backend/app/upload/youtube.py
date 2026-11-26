@@ -137,6 +137,14 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube",
 ]
 
+# Mail, for the site's notices (publish/notify.py): asked for at sign-in
+# alongside YouTube, but deliberately NOT in [SCOPES], so the refresh
+# for uploads never demands it. A grant made before it was asked for,
+# or one where it was unticked on the consent screen, keeps uploading;
+# only the emails wait (upload/gmail.py checks [granted_scopes]).
+GMAIL_SEND = "https://www.googleapis.com/auth/gmail.send"
+CONSENT_SCOPES = SCOPES + [GMAIL_SEND]
+
 
 def granted_scopes() -> list[str]:
     """Scopes the saved token actually carries.

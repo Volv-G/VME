@@ -5,6 +5,7 @@ import type { AdminState, Decision, Invite, JoinTeam, Membership, Role } from ".
 import type { Viewer } from "./access";
 import { getDoc, Names } from "./content";
 import { HttpError, sameSecret } from "./http";
+import { queueNotice } from "./notices";
 
 const CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
 
@@ -81,6 +82,7 @@ export async function requestJoin(env: Env, v: Viewer, code: string, req: JoinRe
       )
         .bind(note, now, existing.id)
         .run();
+      await queueNotice(env, "request", existing.id);
       return { ...existing, status: "pending", note, requested_at: now, decided_at: null, decided_by: null };
     }
     return existing;
@@ -90,6 +92,7 @@ export async function requestJoin(env: Env, v: Viewer, code: string, req: JoinRe
   )
     .bind(v.email, team.slug, req.role, number, note, now)
     .first<Membership>();
+  await queueNotice(env, "request", row!.id);
   return row!;
 }
 
@@ -99,10 +102,14 @@ export async function decide(env: Env, id: number, action: Decision, by: string)
     return;
   }
   if (action !== "approve" && action !== "decline") throw new HttpError(400, "Unknown decision.");
-  const r = await env.DB.prepare("UPDATE members SET status = ?, decided_at = ?, decided_by = ? WHERE id = ?")
-    .bind(action === "approve" ? "approved" : "declined", Date.now(), by, id)
+  const before = await env.DB.prepare("SELECT status FROM members WHERE id = ?").bind(id).first<{ status: string }>();
+  if (!before) throw new HttpError(404, "No such request.");
+  const status = action === "approve" ? "approved" : "declined";
+  await env.DB.prepare("UPDATE members SET status = ?, decided_at = ?, decided_by = ? WHERE id = ?")
+    .bind(status, Date.now(), by, id)
     .run();
-  if (!r.meta.changes) throw new HttpError(404, "No such request.");
+  // Tell them they're in - once, not again for an approval repeated.
+  if (status === "approved" && before.status !== "approved") await queueNotice(env, "approved", id);
 }
 
 export async function pendingRequests(env: Env, names = new Names(env)) {

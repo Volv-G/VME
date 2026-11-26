@@ -15,6 +15,9 @@ What the site is asked for:
 - **schedule**: matches added, moved or taken off the schedule on the
   site or from the phone (library/schedule.py), applied and acked the
   same way.
+- **notices**: emails the site wants sent - a join request for the
+  admins, an approval for the person who asked - sent from Gmail
+  (publish/notify.py) and acked.
 
 The site keeps working with this PC off; edits and requests simply wait.
 """
@@ -33,7 +36,7 @@ import requests
 
 from ..config import MEDIA_ROOT
 from ..library import paths, scanner, schedule
-from . import site
+from . import notify, site
 from .site_watch import TreeWatch
 
 logger = logging.getLogger(__name__)
@@ -108,8 +111,10 @@ class SiteSync:
                     site.publish()
                 except Exception:
                     logger.warning("publish after schedule changes failed", exc_info=True)
+            emailed = notify.send_all(data, cfg["url"])
+            if applied or scheduled or emailed:
+                data = _call(cfg, {"ack": applied, "schedule_ack": scheduled, "notice_ack": emailed})
             if applied or scheduled:
-                data = _call(cfg, {"ack": applied, "schedule_ack": scheduled})
                 site.publish_soon(5.0)
             self.requests = data.get("requests", [])
             self.last_sync = time.time()

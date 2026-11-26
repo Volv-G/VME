@@ -22,7 +22,7 @@
  * And for VME, with its bearer token instead of a sign-in:
  *
  *   POST /api/publish                   replace what is published
- *   POST /api/publish/sync              decisions and acks in; requests and edits out
+ *   POST /api/publish/sync              decisions and acks in; requests, edits and emails out
  *   GET  /api/publish/videos?prefix=    the reel copies stored (server/videos.ts)
  *   PUT  /api/publish/video/<key>       store a reel copy or thumbnail (body: the MP4 / JPEG)
  *   DELETE /api/publish/video/<key>     drop a reel copy
@@ -32,7 +32,7 @@
  */
 import type { Env } from "../../shared/env";
 import type { Decision, Me } from "../../shared/api";
-import { canManageTeam, canSeeTeam, loadViewer, type Viewer } from "../../server/access";
+import { adminEmails, canManageTeam, canSeeTeam, loadViewer, type Viewer } from "../../server/access";
 import { canSeeImage, Names, readDoc } from "../../server/content";
 import { blobBytes, fromBase64, HttpError, json, readBody, sameSecret } from "../../server/http";
 import { adminState, decide, inviteCode, joinTeam, pendingRequests, requestJoin, type JoinRequest } from "../../server/members";
@@ -40,6 +40,7 @@ import { ackEdits, editPlayer, pendingEdits, playerInfo, type PlayerEdit } from 
 import { deleteVideo, listVideos, putVideo, serveVideo } from "../../server/videos";
 import { addReveals, listReveals } from "../../server/reveals";
 import { phoneRoute } from "../../server/phone";
+import { ackNotices, pendingNotices } from "../../server/notices";
 import { ackSchedule, pendingSchedule, queueScheduleEdit, type ScheduleEditIn } from "../../server/schedule";
 
 interface PublishBody {
@@ -60,6 +61,8 @@ interface SyncBody {
   decide?: { id: number; action: Decision }[];
   /** Schedule changes VME has applied. */
   schedule_ack?: number[];
+  /** Notices VME has emailed (server/notices.ts). */
+  notice_ack?: number[];
 }
 
 function checkToken(request: Request, env: Env): void {
@@ -103,11 +106,15 @@ async function sync(request: Request, env: Env): Promise<Response> {
   const body = await readBody<SyncBody>(request);
   await ackEdits(env, body.ack ?? []);
   await ackSchedule(env, body.schedule_ack ?? []);
+  await ackNotices(env, body.notice_ack ?? []);
   for (const d of body.decide ?? []) await decide(env, Number(d.id), d.action, "VME");
   return json({
     requests: await pendingRequests(env),
     edits: await pendingEdits(env),
     schedule: await pendingSchedule(env),
+    notices: await pendingNotices(env),
+    // Who "request" notices go to.
+    admins: adminEmails(env),
   });
 }
 

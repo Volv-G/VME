@@ -58,7 +58,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.upload.youtube import (  # noqa: E402
-    SCOPES,
+    CONSENT_SCOPES,
     client_secrets_path,
     token_path,
 )
@@ -147,7 +147,7 @@ def main() -> int:
     # returns every scope this account has granted the client, and
     # oauthlib rejects a token whose scopes differ from the request.
     os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
-    flow = InstalledAppFlow.from_client_secrets_file(str(cs), SCOPES)
+    flow = InstalledAppFlow.from_client_secrets_file(str(cs), CONSENT_SCOPES)
     creds = flow.run_local_server(port=0, prompt="consent")
     # `prompt="consent"` forces Google to issue a refresh_token even on
     # repeat authorizations; without it, second-time runs can get an

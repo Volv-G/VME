@@ -33,9 +33,16 @@ function returnHere(): string {
 }
 
 const PROVIDERS: { id: Provider; label: string; what: string }[] = [
-  { id: "google", label: "Google / YouTube", what: "Matches, reels and live streams." },
+  {
+    id: "google",
+    label: "Google / YouTube",
+    what: "Matches, reels and live streams; Gmail for the site's join-request emails.",
+  },
   { id: "microsoft", label: "Microsoft / OneDrive", what: "Anything set to OneDrive." },
 ];
+
+/** Asked for with YouTube; emails the site's notices (backend publish/notify.py). */
+const GMAIL_SEND = "https://www.googleapis.com/auth/gmail.send";
 
 const MESSAGES: Record<string, string> = {
   ok: "Connected.",
@@ -149,6 +156,12 @@ export function UploadConnections() {
                 <div className="muted" style={{ fontSize: 12 }}>
                   {s ? s.reason || what : "…"}
                 </div>
+                {id === "google" && s?.connected && !s.scopes.includes(GMAIL_SEND) && (
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    Can't send email yet: reconnect, and allow sending email, so the site's
+                    join requests and approvals are emailed.
+                  </div>
+                )}
               </div>
               {s?.connected ? (
                 <>
