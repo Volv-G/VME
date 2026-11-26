@@ -55,6 +55,14 @@ enum class EventType(val wire: String) {
     BlockPoint("block_point"),
     Dive("dive"),
     Dig("dig"),
+    /** A serve receive rated 3: the setter had every option. Stat
+     *  only, like Dig -- the rally goes on, so nothing on the
+     *  scoreboard moves. */
+    PerfectPass("perfect_pass"),
+    /** An attack that put the other side under pressure but came back
+     *  over: a kill that did not end the rally. Stat only, for the
+     *  same reason; the point, if it comes, is a separate event. */
+    PositiveAttack("positive_attack"),
     Highlight("highlight"),
 
     // Roster.

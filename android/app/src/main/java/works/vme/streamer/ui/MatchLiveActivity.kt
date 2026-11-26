@@ -69,6 +69,8 @@ import works.vme.streamer.data.Player
 import works.vme.streamer.data.Roster
 import works.vme.streamer.data.Settings
 import works.vme.streamer.data.Side
+import works.vme.streamer.data.SiteClient
+import works.vme.streamer.data.SiteLive
 import works.vme.streamer.data.StreamConfig
 import works.vme.streamer.data.StreamQuality
 import works.vme.streamer.data.TeamStore
@@ -436,6 +438,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // longer exists.
         runCatching { unregisterReceiver(usbWatcher) }
         StreamService.stop(this)
+        // The stream dies with the activity, so the site should hear
+        // so. A no-op unless this match is still the one announced
+        // (Stop has already cleared it on the usual route).
+        endOnSite()
         runCatching { if (stream.isStreaming) stream.stopStream() }
         runCatching { if (stream.isOnPreview) stream.stopPreview() }
         runCatching { stream.release() }
@@ -711,7 +717,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     private lateinit var awayCardView: View
     private lateinit var homeHeaderRow: View
     private lateinit var homeGrid: View
-    /** Kill, Ace, Dig, Dive, Block, Highlight - in reading order. */
+    /** Kill, Ace, Pos. attack, Block, Perfect pass, Dig, Dive,
+     *  Highlight - in reading order. */
     private lateinit var homeActionButtons: List<Button>
     private lateinit var matchHeader: View
     private lateinit var replayButton: Button
@@ -1000,14 +1007,30 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // what the eye lands on; the word is there for the tap after,
         // when the operator is checking rather than reaching. Colour
         // groups them: attack, defence, everything else.
+        //
+        // Laid out two to a row, so the order below IS the grid:
+        //   Kill          | Ace
+        //   Pos. attack   | Block
+        //   Perfect pass  | Dig
+        //   Dive          | Highlight
+        // The attack shades sit together at the top and the defence
+        // shades below them, so the colour bands read as groups rather
+        // than a checkerboard. Positive attack sits under Kill because
+        // it is the same judgement a moment later ("did it go down?"),
+        // and Perfect pass beside Dig because both are a first contact.
+        // "Pos. attack" is shortened on the button only -- the pop-up
+        // and the event say it in full -- so it stays on one line in
+        // landscape's narrower column.
         homeActionButtons = listOf(
             playerActionButton(LBL_KILL, EventType.Kill, BG_ATTACK)
                 .also { killButton = it },
             playerActionButton("\uD83C\uDFAF Ace", EventType.Ace, BG_ATTACK),
-            playerActionButton("\uD83E\uDD32 Dig", EventType.Dig, BG_DEFENCE),
-            playerActionButton("\uD83E\uDD3F Dive", EventType.Dive, BG_DEFENCE),
+            playerActionButton("\uD83D\uDCAA Pos. attack", EventType.PositiveAttack, BG_ATTACK),
             playerActionButton(LBL_BLOCK, EventType.Block, BG_DEFENCE)
                 .also { blockButton = it },
+            playerActionButton("\uD83D\uDC4C Perfect pass", EventType.PerfectPass, BG_DEFENCE),
+            playerActionButton("\uD83E\uDD32 Dig", EventType.Dig, BG_DEFENCE),
+            playerActionButton("\uD83E\uDD3F Dive", EventType.Dive, BG_DEFENCE),
             playerActionButton("\u2B50 Highlight", EventType.Highlight, BG_EXTRA),
         )
         buildCancelActionButton()
@@ -1832,7 +1855,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         background = buttonFill(tint)
         // Shorter than the stock 48dp: three rows of these at full
         // height pushed Game Start and End Set off the bottom of the
-        // screen. Still a full-width half-card target each.
+        // screen, and there are four rows now. Still a full-width
+        // half-card target each.
         val d = resources.displayMetrics.density
         minHeight = (ACTION_BUTTON_DP * d).toInt()
         minimumHeight = (ACTION_BUTTON_DP * d).toInt()
@@ -2622,6 +2646,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
      * | `block`           | Block    | `#NN Name`               |
      * | `dive`            | Dive     | `#NN Name`               |
      * | `dig`             | Dig      | `#NN Name`               |
+     * | `perfect_pass`    | Perfect pass | `#NN Name`           |
+     * | `positive_attack` | Positive attack | `#NN Name`        |
      * | `ball_served`     | Serving  | server at position 1     |
      * | `substitution`    | Sub      | `#OUT Name -> #IN Name`  |
      * | `score_correction`| Score Fix| deltas                   |
@@ -2698,6 +2724,8 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
             EventType.BlockPoint -> playerPopup("Block point")
             EventType.Dive   -> playerPopup("Dive")
             EventType.Dig    -> playerPopup("Dig")
+            EventType.PerfectPass    -> playerPopup("Perfect pass")
+            EventType.PositiveAttack -> playerPopup("Positive attack")
 
             // BallServedEvent.overlay_effect_for_state: the server is
             // whoever stands at position 1 of the serving team, so it
@@ -3473,6 +3501,12 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                 )
                 store.save(match)
 
+                // The site, for new and resumed broadcasts alike: after
+                // a battery swap the site has had no word for however
+                // long that took, and its LIVE badge should come back
+                // with the picture.
+                announceOnSite(title, broadcast.watchUrl)
+
                 // Only for a new broadcast: a resumed one already has
                 // this thumbnail, and thumbnails.set is 50 quota units
                 // and rate-limited per channel.
@@ -3608,6 +3642,51 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
     }
 
     /**
+     * Tell the public site this match is live, with the watch link.
+     *
+     * On its own thread: the go-live thread is about to start the
+     * encoder, and a slow or unreachable site must not hold that up by
+     * so much as a timeout. The announcement is remembered in
+     * [SiteLive] whether or not this first send lands, so the
+     * service's heartbeat (every 5 minutes, see StreamService) can
+     * still get it through once the gym's signal allows.
+     *
+     * `match_key` is VME's address for the fixture when the match came
+     * from VME, so the site can put the badge on the right schedule
+     * row; a match typed in on the phone has none and is announced on
+     * its own.
+     */
+    private fun announceOnSite(title: String, watchUrl: String) {
+        val origin = match.vmeOrigin
+        val announcement = SiteClient.LiveAnnouncement(
+            team = origin?.team ?: match.team,
+            id = match.slug,
+            matchKey = origin?.let { "${it.tournament}/${it.date}/${it.name}" },
+            opponent = match.opponent,
+            title = title,
+            url = watchUrl,
+        )
+        val app = applicationContext
+        Thread {
+            runCatching { SiteLive.start(app, announcement) }
+                .onSuccess { sent -> if (sent) log("site: announced live") }
+                .onFailure { log("site: live announce failed - ${it.message}") }
+        }.start()
+    }
+
+    /** Tell the site the stream is over. Best effort, like the start;
+     *  the site's 20-minute expiry covers a "not live" that is lost. */
+    private fun endOnSite() {
+        val app = applicationContext
+        val slug = match.slug
+        Thread {
+            runCatching { SiteLive.end(app, slug) }
+                .onSuccess { sent -> if (sent) log("site: announced not live") }
+                .onFailure { log("site: not-live announce failed - ${it.message}") }
+        }.start()
+    }
+
+    /**
      * Generate and attach the pre-roll thumbnail.
      *
      * Best effort, on the thread that is already doing YouTube work.
@@ -3646,6 +3725,10 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // not open on the last one's drops.
         runCatching { stream.getStreamClient().resetDroppedVideoFrames() }
         StreamService.stop(this)
+        // Before the YouTube end below, and independent of it: that
+        // needs a Google token and may fail, and the site should hear
+        // the stream has stopped either way.
+        endOnSite()
         runCatching { if (stream.isStreaming) stream.stopStream() }
             .onFailure { log("stopStream threw: $it") }
         runCatching { if (stream.isOnPreview) stream.stopPreview() }

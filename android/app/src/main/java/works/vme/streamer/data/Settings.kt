@@ -46,6 +46,9 @@ object Settings {
     private const val KEY_INPUT = "stream.input"
     private const val KEY_AUTO_BITRATE = "stream.auto_bitrate"
     private const val KEY_AUTO_DEFAULTED = "stream.auto_defaulted"
+    // Handed over by VME, never typed; see siteAccess().
+    private const val KEY_SITE_URL = "site.url"
+    private const val KEY_SITE_TOKEN = "site.token"
 
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -128,6 +131,30 @@ object Settings {
 
     fun setVideoInput(ctx: Context, input: VideoInput) {
         prefs(ctx).edit().putString(KEY_INPUT, input.key).apply()
+    }
+
+    /**
+     * The public site's address and this phone's token for it, or null
+     * until VME has handed them over (see
+     * [SiteClient.refreshAccessFromVme]).
+     *
+     * Kept here beside the VME address, same storage and same
+     * reasoning: app-private prefs are the boundary that matters on a
+     * kit-bag phone. Never shown or logged -- the settings screen shows
+     * only the host.
+     */
+    fun siteAccess(ctx: Context): SiteClient.Access? {
+        val p = prefs(ctx)
+        val url = p.getString(KEY_SITE_URL, "").orEmpty().trim().trimEnd('/')
+        val token = p.getString(KEY_SITE_TOKEN, "").orEmpty()
+        return if (url.isBlank() || token.isBlank()) null else SiteClient.Access(url, token)
+    }
+
+    fun setSiteAccess(ctx: Context, url: String, token: String) {
+        prefs(ctx).edit()
+            .putString(KEY_SITE_URL, url.trim().trimEnd('/'))
+            .putString(KEY_SITE_TOKEN, token)
+            .apply()
     }
 
     /** True once there is at least a URL to talk to. */

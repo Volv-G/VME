@@ -43,7 +43,8 @@ import works.vme.streamer.data.Side
  * rotation carries them to the front row is the caller's job (see
  * [frontRowLibero]), because that swap is a new event the operator
  * may need to be asked about.
- * - Everything else (Highlight, Assist, Block, Dig, Dive, Focus*,
+ * - Everything else (Highlight, Assist, Block, Dig, Dive, PerfectPass,
+ *   PositiveAttack, Focus*,
  *   Cut*, ClipTransition, Message) is state-neutral: it lives in the
  *   event log so a scoreboard-only operator can still surface it
  *   later, but it doesn't move the scoreboard.

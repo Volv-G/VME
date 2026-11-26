@@ -14,6 +14,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import works.vme.streamer.data.Settings
+import works.vme.streamer.data.SiteClient
 import works.vme.streamer.data.VmeClient
 
 /**
@@ -38,6 +39,7 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var userInput: EditText
     private lateinit var passInput: EditText
     private lateinit var statusView: TextView
+    private lateinit var siteView: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,7 +101,7 @@ class SettingsActivity : ComponentActivity() {
         }
         actions.addView(Button(this).apply {
             text = "Save"
-            setOnClickListener { save(); finish() }
+            setOnClickListener { saveAndLink(); finish() }
         }, rowParams())
         actions.addView(Button(this).apply {
             text = "Test"
@@ -115,6 +117,18 @@ class SettingsActivity : ComponentActivity() {
         }
         root.addView(statusView)
 
+        // The public site has no fields of its own: VME hands its
+        // address and this phone's token over on any successful call.
+        // So all there is to show is whether that has happened yet,
+        // and what to do if not.
+        root.addView(label("Courtside site"))
+        siteView = TextView(this).apply {
+            textSize = 13f
+            setPadding(0, 4, 0, 0)
+        }
+        root.addView(siteView)
+        refreshSiteLine()
+
         scroll.addView(root)
         return scroll
     }
@@ -128,6 +142,29 @@ class SettingsActivity : ComponentActivity() {
             userInput.text.toString(),
             passInput.text.toString(),
         )
+    }
+
+    /**
+     * Save, and try for the site link on the way out. Off the main
+     * thread and not waited on -- Save closes the screen, and the link
+     * is a bonus that a later import picks up anyway if this misses.
+     */
+    private fun saveAndLink() {
+        save()
+        if (!Settings.isConfigured(this)) return
+        val app = applicationContext
+        Thread { SiteClient.refreshAccessFromVme(app) }.start()
+    }
+
+    private fun refreshSiteLine() {
+        val access = Settings.siteAccess(this)
+        if (access != null) {
+            siteView.text = "Site: ${access.host} ✓"
+            siteView.setTextColor(OK)
+        } else {
+            siteView.text = "Site: not linked yet — import from VME once"
+            siteView.setTextColor(Color.parseColor("#9E9E9E"))
+        }
     }
 
     /**
@@ -155,6 +192,10 @@ class SettingsActivity : ComponentActivity() {
                         OK,
                     )
                 }
+                // The round trip worked, so the site link can come
+                // along with it; the line below then shows the result.
+                SiteClient.refreshAccessFromVme(applicationContext)
+                runOnUiThread { refreshSiteLine() }
             } catch (exc: Exception) {
                 runOnUiThread { status(explain(exc), ERROR) }
             }

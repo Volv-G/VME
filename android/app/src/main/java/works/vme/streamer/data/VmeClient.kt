@@ -115,11 +115,24 @@ object VmeClient {
         val name: String,
         val matchIndex: Int?,
         val opponent: String,
+        /** `HH:MM` start, or null when VME does not know it. */
+        val startTime: String? = null,
+        /** False for a fixture on the schedule that has no footage yet.
+         *  Defaults to true for a VME that predates the field, so an
+         *  older server's list keeps its old order. */
+        val played: Boolean = true,
     ) {
         /** "M2 vs Bellevue" / "vs Bellevue" for the only match of a day. */
         fun label(): String =
             (if (matchIndex != null && matchIndex > 0) "M$matchIndex " else "") +
                 "vs ${opponent.ifBlank { name }}"
+
+        /** The picker line: date, the start time for one still to be
+         *  played, then [label]. A played match's time is history and
+         *  only crowds the line. */
+        fun pickerLabel(): String =
+            date + (if (!played && startTime != null) "  $startTime" else "") +
+                "  " + label() + (if (!played) "  (upcoming)" else "")
     }
 
     /**
@@ -157,7 +170,15 @@ object VmeClient {
         }
     }
 
-    /** Matches in one tournament, newest first. */
+    /**
+     * Matches in one tournament: the ones still to be played first,
+     * soonest first, then the played ones newest first.
+     *
+     * Upcoming leads because a fixture is picked here to be streamed,
+     * and the match about to start is nearly always the one wanted --
+     * under newest-first it sat at the top only until the schedule ran
+     * further ahead than tonight.
+     */
     fun listMatches(
         baseUrl: String,
         teamSlug: String,
@@ -167,16 +188,26 @@ object VmeClient {
         val url = "${normalize(baseUrl)}/api/teams/${enc(teamSlug)}" +
             "/tournaments/${enc(tournament)}/matches"
         val arr = JSONArray(get(url, creds))
-        return (0 until arr.length()).map {
+        val all = (0 until arr.length()).map {
             val o = arr.getJSONObject(it)
             MatchSummary(
                 date = o.optString("date"),
                 name = o.optString("name"),
                 matchIndex = if (o.isNull("match_index")) null else o.optInt("match_index"),
                 opponent = o.optString("opponent"),
+                startTime = if (o.isNull("start_time")) null
+                    else o.optString("start_time").ifBlank { null },
+                played = o.optBoolean("played", true),
             )
-        }.sortedWith(compareByDescending<MatchSummary> { it.date }
-            .thenBy { it.matchIndex ?: 0 })
+        }
+        val (played, upcoming) = all.partition { it.played }
+        return upcoming.sortedWith(compareBy<MatchSummary> { it.date }
+            // No time sorts after a known one on the same day: "some
+            // time that day" is the less useful thing to offer first.
+            .thenBy { it.startTime ?: "99:99" }
+            .thenBy { it.matchIndex ?: 0 }) +
+            played.sortedWith(compareByDescending<MatchSummary> { it.date }
+                .thenBy { it.matchIndex ?: 0 })
     }
 
     /**
@@ -265,6 +296,26 @@ object VmeClient {
     }
 
     data class TeamSummary(val name: String, val hasRoster: Boolean)
+
+    /**
+     * GET `/api/site/phone` -- the public site's URL and the token this
+     * phone should use there. Throws on any failure, a 404 (VME has no
+     * site configured) included; the one caller,
+     * [SiteClient.refreshAccessFromVme], swallows them all.
+     *
+     * The token goes nowhere but the return value: the exception
+     * messages built by [get] carry the URL and status only, and the
+     * response body is not part of them on success.
+     */
+    fun fetchSiteAccess(baseUrl: String, creds: Credentials? = null): SiteClient.Access {
+        val o = JSONObject(get("${normalize(baseUrl)}/api/site/phone", creds))
+        val url = o.optString("url").trim()
+        val token = o.optString("token")
+        if (url.isBlank() || token.isBlank()) {
+            throw java.io.IOException("site access incomplete")
+        }
+        return SiteClient.Access(url, token)
+    }
 
     // ---- internals ---------------------------------------------------
 

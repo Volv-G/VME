@@ -13,6 +13,10 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
+import works.vme.streamer.data.SiteLive
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * Keeps the process alive and the CPU awake while a broadcast is
@@ -39,8 +43,9 @@ import android.util.Log
  * on `MatchLiveActivity`, which is where the surface, the overlays
  * and the event log already live; moving them here would be a much
  * larger change for no benefit while the activity is never finished
- * mid-broadcast. This service is a permission and lifetime holder,
- * nothing more.
+ * mid-broadcast. This service is a permission and lifetime holder --
+ * plus the site's "still live" heartbeat, which needs exactly that
+ * lifetime (see [startHeartbeat]).
  *
  * ### Service types
  *
@@ -54,6 +59,7 @@ import android.util.Log
 class StreamService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private var heartbeat: ScheduledExecutorService? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -62,6 +68,7 @@ class StreamService : Service() {
         val title = intent?.getStringExtra(EXTRA_TITLE) ?: "Streaming"
         startAsForeground(buildNotification(slug, title))
         acquireWakeLock()
+        startHeartbeat()
         // NOT sticky: if the system kills this, the encoder and the
         // USB device went with it, so a bare service restarting into
         // an empty process would only show a notification for a
@@ -70,8 +77,38 @@ class StreamService : Service() {
     }
 
     override fun onDestroy() {
+        heartbeat?.shutdownNow()
+        heartbeat = null
         releaseWakeLock()
         super.onDestroy()
+    }
+
+    // ---- site heartbeat -------------------------------------------
+
+    /**
+     * Repeat the site's "live" every few minutes while this runs.
+     *
+     * Here rather than in the activity because this is the one thing
+     * guaranteed to be running, CPU awake, for exactly as long as the
+     * stream is -- an activity timer would stop the moment the operator
+     * locked the phone in the tripod, and the site would take the LIVE
+     * badge down 20 minutes into the first set. What to announce comes
+     * from [SiteLive], set by the activity when the broadcast is bound;
+     * until then, and after Stop, a beat does nothing.
+     *
+     * Started once: [start] is called again when the camera input
+     * changes mid-stream, and a second timer would only double the
+     * traffic.
+     */
+    private fun startHeartbeat() {
+        if (heartbeat != null) return
+        val app = applicationContext
+        heartbeat = Executors.newSingleThreadScheduledExecutor().apply {
+            scheduleWithFixedDelay(
+                { runCatching { SiteLive.beat(app) } },
+                HEARTBEAT_MINUTES, HEARTBEAT_MINUTES, TimeUnit.MINUTES,
+            )
+        }
     }
 
     // ---- foreground -----------------------------------------------
@@ -178,6 +215,9 @@ class StreamService : Service() {
         private const val EXTRA_SLUG = "match_slug"
         private const val EXTRA_TITLE = "title"
         private const val LIVE_ACTIVITY = "works.vme.streamer.ui.MatchLiveActivity"
+        /** The site drops a stream 20 minutes after the last word, so
+         *  every 5 leaves room for three misses on a patchy uplink. */
+        private const val HEARTBEAT_MINUTES = 5L
 
         /** `FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE` is API 30+; the
          *  app installs to 24, so the constant is inlined rather than

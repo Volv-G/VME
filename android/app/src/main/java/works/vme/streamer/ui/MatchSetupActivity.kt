@@ -20,6 +20,7 @@ import works.vme.streamer.data.MatchStore
 import works.vme.streamer.data.PhotoCache
 import works.vme.streamer.data.Roster
 import works.vme.streamer.data.Settings
+import works.vme.streamer.data.SiteClient
 import works.vme.streamer.data.Team
 import works.vme.streamer.data.TeamStore
 import works.vme.streamer.data.VmeClient
@@ -343,6 +344,10 @@ class MatchSetupActivity : ComponentActivity() {
                     }
                 }.onFailure { toast("Could not reach VME: ${it.message}") }
             }
+            // VME is in reach, so pick up the site link while it is --
+            // after the pickers are on screen, so they do not wait on
+            // it. Quietly; see SiteClient.refreshAccessFromVme.
+            if (result.isSuccess) SiteClient.refreshAccessFromVme(applicationContext)
         }.start()
     }
 
@@ -379,7 +384,7 @@ class MatchSetupActivity : ComponentActivity() {
                         toast("No matches in $tournament.")
                     } else {
                         val labels = matches
-                            .map { "${it.date}  ${it.label()}" }
+                            .map { it.pickerLabel() }
                             .toTypedArray()
                         AlertDialog.Builder(this)
                             .setTitle(tournament)

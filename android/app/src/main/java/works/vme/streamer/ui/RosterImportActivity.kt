@@ -20,6 +20,7 @@ import works.vme.streamer.data.Roster
 import works.vme.streamer.data.Team
 import works.vme.streamer.data.TeamStore
 import works.vme.streamer.data.Settings
+import works.vme.streamer.data.SiteClient
 import works.vme.streamer.data.VmeClient
 
 /**
@@ -170,6 +171,7 @@ class RosterImportActivity : ComponentActivity() {
                         })
                     }
                 }
+                linkSite()
             } catch (exc: Exception) {
                 runOnUiThread { log("failed: ${exc.message ?: exc.toString()}") }
             }
@@ -234,6 +236,7 @@ class RosterImportActivity : ComponentActivity() {
                         "$fetched photo(s), " +
                         "${if (withLogo.localLogoPath != null) "logo" else "no logo"}.")
                 }
+                linkSite()
             } catch (exc: Exception) {
                 runOnUiThread { log("failed: ${exc.message ?: exc.toString()}") }
             }
@@ -241,6 +244,18 @@ class RosterImportActivity : ComponentActivity() {
     }
 
     // ---- helpers ---------------------------------------------------------
+
+    /**
+     * Pick up the public site's address and token from VME, on a thread
+     * that has just reached it. This is how a phone gets linked at all:
+     * nobody types a token, they import a roster as they always did.
+     * Silent on failure (see [SiteClient.refreshAccessFromVme]); one log
+     * line on success, host only -- the token is never shown.
+     */
+    private fun linkSite() {
+        SiteClient.refreshAccessFromVme(applicationContext)
+            ?.let { log("site: linked to ${it.host}") }
+    }
 
 
     private fun log(msg: String) {
