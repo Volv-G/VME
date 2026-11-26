@@ -13,11 +13,16 @@ interface Props {
   team: string;
 }
 
+/** A new row (number 0, not typed yet) stays at the end. */
+function byNumber(players: PlayerDto[]): PlayerDto[] {
+  return [...players].sort((a, b) => (a.number || 1e9) - (b.number || 1e9));
+}
+
 export function RosterEditor({ value, onSave, defaultName, team }: Props) {
   const [draft, setDraft] = useState<RosterDto>({
     team_name: value.team_name ?? defaultName ?? null,
     team_color: value.team_color ?? "#2d8a4e",
-    players: value.players,
+    players: byNumber(value.players),
   });
   const [saving, setSaving] = useState(false);
   // Logo uploads are immediate (they're files, not form state), so the
@@ -50,8 +55,12 @@ export function RosterEditor({ value, onSave, defaultName, team }: Props) {
   }
 
   async function save() {
+    // Players stay in the order typed while editing (rows jumping under
+    // the cursor is worse), and fall into number order on save.
+    const sorted = { ...draft, players: byNumber(draft.players) };
+    setDraft(sorted);
     setSaving(true);
-    try { await onSave(draft); } finally { setSaving(false); }
+    try { await onSave(sorted); } finally { setSaving(false); }
   }
 
   return (

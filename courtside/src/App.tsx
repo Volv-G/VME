@@ -1,6 +1,6 @@
 import { Link, Navigate, Route, Routes, useParams } from "react-router-dom";
 import type { MatchDoc, MatchSummary, TeamDoc, TeamsDoc, Video } from "../shared/docs";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Me } from "../shared/api";
 import { formatDate, imageUrl, MeContext, savedInvites, useApi, useDoc, useMe } from "./api";
 import { Crest, Gate, InviteButton, matchPath, playerPath, teamPath, TeamTheme } from "./common";
@@ -9,7 +9,11 @@ import { JoinPage } from "./Join";
 import { PlayerEditor } from "./PlayerEditor";
 import { StatsTable } from "./StatsTable";
 import { VideoTile, videoKey } from "./YouTube";
-import { loadReveals, matchSpoiler, seasonSpoiler, Spoiler, useRevealed, useReveals } from "./Spoilers";
+import { knownId, loadReveals, matchSpoiler, seasonSpoiler, seenId, Spoiler, useRevealed, useReveals } from "./Spoilers";
+import { LiveBanner, LiveChip, UpcomingSection } from "./Schedule";
+
+/** How often an open team or match page checks for a stream going live. */
+const LIVE_POLL_MS = 60_000;
 
 export function App() {
   const me = useApi<Me>("/api/me");
@@ -139,12 +143,62 @@ function Score({ m }: { m: MatchSummary }) {
         {m.home_sets}–{m.away_sets}
       </strong>
       {m.sets.length > 0 && <span className="muted sets">{m.sets.map(([h, a]) => `${h}-${a}`).join(", ")}</span>}
+      {m.current && (
+        <span className="now-score" title="This set, live from the court">
+          now {m.current[0]}-{m.current[1]}
+        </span>
+      )}
+      {m.score_source === "phone" && !m.current && (
+        <span className="muted small" title="Kept on the phone at the match; VME's own replaces it once the video is tagged">
+          (courtside)
+        </span>
+      )}
     </span>
   );
 }
 
-function SeasonSpoiler({ team, matches, children }: { team: string; matches: number; children: ReactNode }) {
-  const [revealed, reveal] = useRevealed(seasonSpoiler(team, matches));
+/**
+ * Per player, whether this viewer has watched their reel of the match:
+ * one chip per player for a family, a count for a coach's whole team.
+ */
+/** Videos added to a match since this person last looked at it; none
+ *  for a match they have never opened. */
+function newVideos(team: string, m: MatchSummary, revealed: (id: string) => boolean): Video[] {
+  const known = m.videos.map((v) => revealed(knownId(team, m.key, videoKey(v))));
+  return known.some(Boolean) ? m.videos.filter((_, i) => !known[i]) : [];
+}
+
+function SeenChips({ team, m, revealed }: { team: string; m: MatchSummary; revealed: (id: string) => boolean }) {
+  const fresh = newVideos(team, m, revealed).length;
+  const chip = fresh > 0 && <span className="new-chip">{fresh === 1 ? "1 new video" : `${fresh} new videos`}</span>;
+  const reels = m.videos.filter((v) => v.kind === "reel");
+  if (!reels.length) return chip ? <span className="seen-chips">{chip}</span> : null;
+  const seen = reels.map((v) => ({ v, seen: revealed(seenId(team, m.key, v.player_number)) }));
+  if (reels.length > 4) {
+    const n = seen.filter((s) => s.seen).length;
+    return (
+      <span className="seen-chips">
+        <span className={`seen-chip${n === reels.length ? " is-seen" : ""}`}>
+          {n === reels.length ? "✓ all reels seen" : `${n}/${reels.length} reels seen`}
+        </span>
+        {chip}
+      </span>
+    );
+  }
+  return (
+    <span className="seen-chips">
+      {seen.map(({ v, seen }) => (
+        <span key={videoKey(v)} className={`seen-chip${seen ? " is-seen" : ""}`} title={seen ? "You've watched this reel" : "Not watched yet"}>
+          {v.player_number != null ? `#${v.player_number}` : v.player_label || "Reel"} {seen ? "✓ seen" : "not seen"}
+        </span>
+      ))}
+      {chip}
+    </span>
+  );
+}
+
+function SeasonSpoiler({ t, children }: { t: TeamDoc; children: ReactNode }) {
+  const [revealed, reveal] = useRevealed(seasonSpoiler(t));
   return (
     <Spoiler revealed={revealed} onReveal={reveal} label="Show season stats" note="They include the latest matches.">
       {children}
@@ -155,7 +209,7 @@ function SeasonSpoiler({ team, matches, children }: { team: string; matches: num
 function TeamPage() {
   const { team = "" } = useParams();
   const { me } = useMe();
-  const res = useDoc<TeamDoc>(`team/${team}`);
+  const res = useDoc<TeamDoc>(`team/${team}`, LIVE_POLL_MS);
   const spoilers = useReveals();
   const manyTeams =
     !me || me.admin || new Set(me.memberships.filter((m) => m.status === "approved").map((m) => m.team)).size > 1;
@@ -164,11 +218,11 @@ function TeamPage() {
       {(t) => {
         const hidden = [
           ...t.tournaments.flatMap((tour) => tour.matches.map((m) => matchSpoiler(t.slug, m.key))),
-          seasonSpoiler(t.slug, t.stats.matches),
+          seasonSpoiler(t),
         ].filter((id) => !spoilers.revealed(id));
         return (
           <>
-            <TeamTheme color={t.color} logo={t.logo} />
+            <TeamTheme color={t.color} logo={t.watermark ?? t.logo} />
             <header className="team-head">
               {manyTeams && <Link to="/" className="muted back">← Teams</Link>}
               <div className="team-title">
@@ -177,22 +231,27 @@ function TeamPage() {
                 <InviteButton team={t.slug} teamName={t.name} />
               </div>
             </header>
+            <LiveBanner streams={t.live ?? []} teamName={t.name} />
+
+            <UpcomingSection t={t} onChanged={res.reload} />
 
             <section>
               <h2>
                 Matches
                 {hidden.length > 0 && (
                   <button type="button" className="reveal reveal-all" onClick={() => spoilers.reveal(...hidden)}>
-                    👁 Reveal all
+                    👁 Reveal all scores
                   </button>
                 )}
               </h2>
+              {t.tournaments.length === 0 && <p className="muted small">No matches yet.</p>}
               {t.tournaments.map((tour) => (
                 <div key={tour.slug} className="tournament">
                   <h3>{tour.name}</h3>
                   <div className="list">
                     {[...tour.matches].reverse().map((m) => {
                       const id = matchSpoiler(t.slug, m.key);
+                      const stream = t.live?.find((s) => s.match_key === m.key);
                       return (
                         <div key={m.key} className="row row-link">
                           <Crest src={m.opponent_logo} label={m.opponent} size={32} />
@@ -203,12 +262,14 @@ function TeamPage() {
                               {m.index ? ` · Match ${m.index}` : ""}
                               {m.videos.length ? ` · ${m.videos.length} video${m.videos.length === 1 ? "" : "s"}` : ""}
                             </span>
+                            <SeenChips team={t.slug} m={m} revealed={spoilers.revealed} />
                           </Link>
+                          {stream && <LiveChip stream={stream} />}
                           {spoilers.revealed(id) ? (
                             <Score m={m} />
                           ) : (
                             <button type="button" className="reveal reveal-row" onClick={() => spoilers.reveal(id)}>
-                              👁 Reveal
+                              👁 Reveal score
                             </button>
                           )}
                         </div>
@@ -219,13 +280,15 @@ function TeamPage() {
               ))}
             </section>
 
-            <section>
-              <h2>Season stats</h2>
-              <SeasonSpoiler team={t.slug} matches={t.stats.matches}>
-                <p className="muted small">{t.stats.matches} matches. Tap a column to sort.</p>
-                <StatsTable stats={t.stats} />
-              </SeasonSpoiler>
-            </section>
+            {t.stats.players.length > 0 && (
+              <section>
+                <h2>Season stats</h2>
+                <SeasonSpoiler t={t}>
+                  <p className="muted small">{t.stats.matches} matches. Tap a column to sort.</p>
+                  <StatsTable stats={t.stats} />
+                </SeasonSpoiler>
+              </section>
+            )}
 
             <section>
               <h2>Players</h2>
@@ -255,6 +318,7 @@ function PlayerPage() {
   const { team = "", number = "" } = useParams();
   const { me } = useMe();
   const res = useDoc<TeamDoc>(`team/${team}`);
+  const spoilers = useReveals();
   const n = Number(number);
   const canEdit =
     !!me &&
@@ -272,7 +336,7 @@ function PlayerPage() {
         reels.reverse();
         return (
           <>
-            <TeamTheme color={t.color} logo={t.logo} />
+            <TeamTheme color={t.color} logo={t.watermark ?? t.logo} />
             <header className="team-head">
               <Link to={teamPath(t.slug)} className="muted back">← {t.name}</Link>
               <div className="team-title">
@@ -286,7 +350,7 @@ function PlayerPage() {
             {line && (
               <section>
                 <h2>Season</h2>
-                <SeasonSpoiler team={t.slug} matches={t.stats.matches}>
+                <SeasonSpoiler t={t}>
                   <StatsTable stats={{ ...t.stats, players: [line], total: line }} total={false} />
                 </SeasonSpoiler>
               </section>
@@ -295,9 +359,19 @@ function PlayerPage() {
               <section>
                 <h2>Highlights</h2>
                 <div className="videos">
-                  {reels.map(({ m, v }) => (
-                    <VideoTile key={videoKey(v)} video={v} title={`${formatDate(m.date)} vs ${m.opponent}`} poster={m.opponent_logo} />
-                  ))}
+                  {reels.map(({ m, v }) => {
+                    const id = seenId(t.slug, m.key, v.player_number);
+                    return (
+                      <VideoTile
+                        key={videoKey(v)}
+                        video={v}
+                        title={`${formatDate(m.date)} vs ${m.opponent}`}
+                        poster={m.opponent_logo}
+                        seen={spoilers.revealed(id)}
+                        onWatch={() => spoilers.reveal(id, knownId(t.slug, m.key, videoKey(v)))}
+                      />
+                    );
+                  })}
                 </div>
               </section>
             )}
@@ -317,9 +391,23 @@ const VIDEO_TITLES: Record<Video["kind"], string> = {
 
 function MatchPage() {
   const { team = "", tournament = "", date = "", match = "" } = useParams();
-  const res = useDoc<MatchDoc>(`match/${team}/${tournament}/${date}/${match}`);
+  const res = useDoc<MatchDoc>(`match/${team}/${tournament}/${date}/${match}`, LIVE_POLL_MS);
   // Same id the team page checks: the match key is the URL tail.
-  const [revealed, reveal] = useRevealed(matchSpoiler(team, `${tournament}/${date}/${match}`));
+  const key = `${tournament}/${date}/${match}`;
+  const [revealed, reveal] = useRevealed(matchSpoiler(team, key));
+  const spoilers = useReveals();
+  // What was new when the page opened stays flagged while it is open;
+  // everything on it then counts as known for next time.
+  const [fresh, setFresh] = useState<Set<string>>(new Set());
+  const videoList = res.state === "ok" ? res.doc.videos.map(videoKey).join(" ") : "";
+  useEffect(() => {
+    if (res.state !== "ok") return;
+    const m = res.doc;
+    const added = newVideos(team, { ...m, key }, spoilers.revealed).map(videoKey);
+    if (added.length) setFresh((prev) => new Set([...prev, ...added]));
+    spoilers.reveal(...m.videos.map((v) => knownId(team, key, videoKey(v))));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoList]);
   return (
     <Gate res={res}>
       {(m) => {
@@ -327,7 +415,7 @@ function MatchPage() {
         const reels = m.videos.filter((v) => v.kind === "reel");
         return (
           <>
-            <TeamTheme color={m.team_color} logo={m.team_logo} />
+            <TeamTheme color={m.team_color} logo={m.team_watermark ?? m.team_logo} />
             <header className="team-head">
               <Link to={teamPath(m.team)} className="muted back">← {m.team_name}</Link>
               <h1>
@@ -341,11 +429,18 @@ function MatchPage() {
                 <Score m={m} />
               </Spoiler>
             </header>
+            <LiveBanner streams={m.live ? [m.live] : []} teamName={m.team_name} />
             {main.length > 0 && (
               <section>
                 <div className="videos videos-wide">
                   {main.map((v) => (
-                    <VideoTile key={videoKey(v)} video={v} title={VIDEO_TITLES[v.kind]} poster={m.opponent_logo} />
+                    <VideoTile
+                      key={videoKey(v)}
+                      video={v}
+                      title={v.stream ? "Live stream" : VIDEO_TITLES[v.kind]}
+                      poster={m.opponent_logo}
+                      isNew={fresh.has(videoKey(v))}
+                    />
                   ))}
                 </div>
               </section>
@@ -354,18 +449,31 @@ function MatchPage() {
               <section>
                 <h2>Player reels</h2>
                 <div className="videos">
-                  {reels.map((v) => (
-                    <VideoTile key={videoKey(v)} video={v} title={v.player_label || "Reel"} poster={m.team_logo} />
-                  ))}
+                  {reels.map((v) => {
+                    const id = seenId(m.team, key, v.player_number);
+                    return (
+                      <VideoTile
+                        key={videoKey(v)}
+                        video={v}
+                        title={v.player_label || "Reel"}
+                        poster={m.team_logo}
+                        seen={spoilers.revealed(id)}
+                        isNew={fresh.has(videoKey(v))}
+                        onWatch={() => spoilers.reveal(id)}
+                      />
+                    );
+                  })}
                 </div>
               </section>
             )}
-            <section>
-              <h2>Stats</h2>
-              <Spoiler revealed={revealed} onReveal={reveal} label="Reveal stats" note="Hidden so they don't give the result away.">
-                <StatsTable stats={m.stats} />
-              </Spoiler>
-            </section>
+            {m.played !== false && m.stats.players.length > 0 && (
+              <section>
+                <h2>Stats</h2>
+                <Spoiler revealed={revealed} onReveal={reveal} label="Reveal stats" note="Hidden so they don't give the result away.">
+                  <StatsTable stats={m.stats} />
+                </Spoiler>
+              </section>
+            )}
           </>
         );
       }}

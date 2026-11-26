@@ -9,6 +9,9 @@ Once a minute VME asks the site (`POST /api/publish/sync`) for:
   (or the admin). VME writes them into the team roster, tells the site
   they're applied (the site then forgets them) and republishes, which
   is when the site starts showing them.
+- **schedule**: matches added, moved or taken off the schedule on the
+  site or from the phone (library/schedule.py), applied and acked the
+  same way.
 
 The site keeps working with this PC off; edits and requests simply wait.
 """
@@ -25,7 +28,7 @@ from typing import Any, Optional
 
 import requests
 
-from ..library import paths, scanner
+from ..library import paths, scanner, schedule
 from . import site
 
 logger = logging.getLogger(__name__)
@@ -82,8 +85,16 @@ class SiteSync:
         with self._lock:
             data = _call(cfg, {"decide": decide or []})
             applied = [e["id"] for e in data.get("edits", []) if _apply_edit(e)]
-            if applied:
-                data = _call(cfg, {"ack": applied})
+            scheduled = [e["id"] for e in data.get("schedule", []) if schedule.apply_edit(e)]
+            if scheduled:
+                # Publish before the ack: until then the site shows the
+                # change as pending, so it never vanishes in between.
+                try:
+                    site.publish()
+                except Exception:
+                    logger.warning("publish after schedule changes failed", exc_info=True)
+            if applied or scheduled:
+                data = _call(cfg, {"ack": applied, "schedule_ack": scheduled})
                 site.publish_soon(5.0)
             self.requests = data.get("requests", [])
             self.last_sync = time.time()

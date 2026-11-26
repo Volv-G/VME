@@ -193,3 +193,38 @@ a.download { align-self: flex-start; display: inline-flex; align-items: center; 
 a.download:hover { background: var(--accent); color: #fff; }
 @media (prefers-color-scheme: dark) { a.download:hover { color: #111; } }
 .od-corner { position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 999px; background: rgba(0, 0, 0, .65); color: #fff; font-size: 12px; }
+
+/* Seen / not seen on a reel tile (top right; OneDrive's badge is top left). */
+.video-cell { position: relative; min-width: 0; }
+.tile-marks { position: absolute; top: 8px; right: 8px; z-index: 1; display: flex; gap: 6px; pointer-events: none; }
+.seen-mark, .new-mark { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.new-mark, .new-chip { background: #e0a100; color: #1a1300; }
+.new-chip { font-size: 11px; padding: 1px 6px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
+.now-score { font-size: 12px; font-weight: 700; color: #d0122b; white-space: nowrap; }
+.seen-mark.is-seen { background: color-mix(in srgb, var(--win) 85%, black); color: #fff; }
+.seen-mark.not-seen { background: rgba(0, 0, 0, .65); color: #fff; }
+.seen-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+.seen-chip { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--dim); white-space: nowrap; }
+.seen-chip.is-seen { border-color: color-mix(in srgb, var(--win) 60%, transparent); background: color-mix(in srgb, var(--win) 15%, transparent); color: var(--text); }
+
+/* Live now. */
+.live-banners { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 18px; }
+.live-banner { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-radius: 14px; background: linear-gradient(135deg, #d0122b, #8f0c1e); color: #fff; box-shadow: 0 6px 24px rgba(208, 18, 43, .35); }
+.live-banner:hover { filter: brightness(1.08); }
+.live-text { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 16px; }
+.live-text strong { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; opacity: .9; }
+.live-text span { font-size: 19px; font-weight: 700; overflow-wrap: anywhere; }
+.live-watch { padding: 8px 14px; border-radius: 999px; background: #fff; color: #b00f25; font-weight: 700; white-space: nowrap; }
+.live-dot { width: 14px; height: 14px; border-radius: 50%; background: #fff; flex: 0 0 auto; animation: live-pulse 1.4s ease-in-out infinite; }
+@keyframes live-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.75); } }
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+.live-chip { position: relative; z-index: 1; font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: #d0122b; color: #fff; white-space: nowrap; }
+.live-chip:hover { color: #fff; filter: brightness(1.1); }
+
+/* Upcoming matches and the schedule form. */
+.upcoming-row .chip { align-self: flex-start; margin-top: 4px; }
+button.small-action { margin-left: auto; font-size: 13px; padding: 4px 10px; font-weight: 600; }
+.schedule-form { border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin: 0 0 12px; background: var(--card); }
+.form-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.form-row > label { flex: 1 1 140px; }
+button.danger { color: var(--loss); border-color: color-mix(in srgb, var(--loss) 50%, transparent); }

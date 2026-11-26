@@ -5,6 +5,7 @@ import type { MatchSummary, OpponentDto, TournamentInfoDto } from "../types/api"
 import { Modal } from "../components/Modal";
 import { StatsButton } from "../components/StatsButton";
 import { displayName } from "../util/names";
+import { formatTime } from "../util/time";
 
 export function TournamentDashboardPage() {
   const { team = "", tournament = "" } = useParams();
@@ -28,6 +29,8 @@ export function TournamentDashboardPage() {
     opponent: "",
     date: "",
     match_index: "" as string,
+    // "HH:MM" or "": when it starts, for a match added ahead of time.
+    start_time: "",
   });
   // True after the user has manually edited the match-# field; we stop
   // auto-suggesting once they take over.
@@ -108,7 +111,7 @@ export function TournamentDashboardPage() {
   useEffect(() => { void load(); }, [load]);
 
   function openCreate() {
-    setNewMatch({ opponent: "", date: "", match_index: "" });
+    setNewMatch({ opponent: "", date: "", match_index: "", start_time: "" });
     setMatchIndexTouched(false);
     setReuse(null);
     setCreating(true);
@@ -136,6 +139,16 @@ export function TournamentDashboardPage() {
     if (picked) setNewMatch({ ...newMatch, opponent: picked.name });
   }
 
+  async function setStartTime(m: MatchSummary, value: string) {
+    if ((m.start_time ?? "") === value) return;
+    try {
+      await api.patchMatch(team, tournament, m.date, m.name, { start_time: value || null });
+      await load();
+    } catch (e) {
+      alert(`Couldn't save the time: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
   async function createMatch() {
     if (!newMatch.opponent.trim() || !newMatch.date.trim()) return;
     // 0 is a real choice ("the only match that day - don't number
@@ -151,8 +164,9 @@ export function TournamentDashboardPage() {
         opponent_from: reuse
           ? { tournament: reuse.tournament, date: reuse.date, match: reuse.match }
           : null,
+        start_time: newMatch.start_time || null,
       });
-      setNewMatch({ opponent: "", date: "", match_index: "" });
+      setNewMatch({ opponent: "", date: "", match_index: "", start_time: "" });
       setReuse(null);
       setMatchIndexTouched(false);
       setCreating(false);
@@ -273,14 +287,27 @@ export function TournamentDashboardPage() {
                 </div>
                 <div className="row-meta">
                   {m.date}
+                  {m.start_time ? ` ${formatTime(m.start_time)}` : ""}
                   {" – "}
                   {m.has_video
                     ? `${m.clip_count} clip${m.clip_count === 1 ? "" : "s"}`
-                    : "no video uploaded"}
+                    : m.played
+                      ? "no video uploaded"
+                      : "scheduled"}
                 </div>
               </div>
               <span className="muted">→</span>
             </Link>
+            {!m.played && (
+              <label className="muted" style={{ marginRight: 10, fontSize: 12 }} title="When the match starts (shown on the site and the phone)">
+                Starts{" "}
+                <input
+                  type="time"
+                  defaultValue={m.start_time ?? ""}
+                  onBlur={(e) => void setStartTime(m, e.target.value)}
+                />
+              </label>
+            )}
             {m.clip_count === 0 && (
               <button
                 className="danger"
@@ -359,6 +386,14 @@ export function TournamentDashboardPage() {
               type="date"
               value={newMatch.date}
               onChange={(e) => setNewMatch({ ...newMatch, date: e.target.value })}
+            />
+          </label>
+          <label style={{ flex: "0 0 120px" }} title="When it starts - for a match added ahead of time. Shown on the site and the phone.">
+            Time
+            <input
+              type="time"
+              value={newMatch.start_time}
+              onChange={(e) => setNewMatch({ ...newMatch, start_time: e.target.value })}
             />
           </label>
           <label style={{ flex: "0 0 110px" }}>

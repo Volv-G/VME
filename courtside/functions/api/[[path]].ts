@@ -10,8 +10,9 @@
  *   POST /api/join/<code>               ask to be that team's player or coach
  *   GET  /api/invite/<team>             the team's invite link (its members and the admin)
  *   GET  /api/video/<key>               a reel's web copy or thumbnail (Range supported)
- *   GET  /api/reveals                   scores/stats you chose to see (no spoilers)
+ *   GET  /api/reveals                   scores/stats you chose to see, reels you watched
  *   POST /api/reveals                   {ids} more of them
+ *   POST /api/schedule/<team>           add / move / cancel an upcoming match (coaches, admin)
  *   GET  /api/player/<team>/<n>         a player's details, for editing
  *   POST /api/player/<team>/<n>         change a player's name or photo
  *   GET  /api/admin                     requests, members, each team's invite link (admin)
@@ -25,16 +26,21 @@
  *   GET  /api/publish/videos?prefix=    the reel copies stored (server/videos.ts)
  *   PUT  /api/publish/video/<key>       store a reel copy or thumbnail (body: the MP4 / JPEG)
  *   DELETE /api/publish/video/<key>     drop a reel copy
+ *
+ * And for the streaming phone, with its own token: /api/publish/phone/*
+ * (server/phone.ts).
  */
 import type { Env } from "../../shared/env";
 import type { Decision, Me } from "../../shared/api";
-import { canSeeTeam, loadViewer, type Viewer } from "../../server/access";
+import { canManageTeam, canSeeTeam, loadViewer, type Viewer } from "../../server/access";
 import { canSeeImage, Names, readDoc } from "../../server/content";
 import { blobBytes, fromBase64, HttpError, json, readBody, sameSecret } from "../../server/http";
 import { adminState, decide, inviteCode, joinTeam, pendingRequests, requestJoin, type JoinRequest } from "../../server/members";
 import { ackEdits, editPlayer, pendingEdits, playerInfo, type PlayerEdit } from "../../server/players";
 import { deleteVideo, listVideos, putVideo, serveVideo } from "../../server/videos";
 import { addReveals, listReveals } from "../../server/reveals";
+import { phoneRoute } from "../../server/phone";
+import { ackSchedule, pendingSchedule, queueScheduleEdit, type ScheduleEditIn } from "../../server/schedule";
 
 interface PublishBody {
   /** Keys whose prefix is listed here are deleted before the docs below
@@ -43,6 +49,8 @@ interface PublishBody {
   replace_prefixes?: string[];
   docs?: { key: string; json: unknown }[];
   images?: { key: string; mime: string; base64: string }[];
+  /** Hash of the streaming phone's token (server/phone.ts). */
+  phone_token_sha256?: string;
 }
 
 interface SyncBody {
@@ -50,6 +58,8 @@ interface SyncBody {
   ack?: number[];
   /** Requests decided in VME. */
   decide?: { id: number; action: Decision }[];
+  /** Schedule changes VME has applied. */
+  schedule_ack?: number[];
 }
 
 function checkToken(request: Request, env: Env): void {
@@ -80,6 +90,11 @@ async function publish(request: Request, env: Env): Promise<Response> {
         .bind(img.key, img.mime, fromBase64(img.base64), now)
     );
   }
+  if (body.phone_token_sha256 && /^[a-f0-9]{64}$/.test(body.phone_token_sha256)) {
+    stmts.push(
+      env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('phone_token_sha256', ?)").bind(body.phone_token_sha256)
+    );
+  }
   if (stmts.length) await env.DB.batch(stmts);
   return json({ ok: true, docs: body.docs?.length ?? 0, images: body.images?.length ?? 0 });
 }
@@ -87,8 +102,13 @@ async function publish(request: Request, env: Env): Promise<Response> {
 async function sync(request: Request, env: Env): Promise<Response> {
   const body = await readBody<SyncBody>(request);
   await ackEdits(env, body.ack ?? []);
+  await ackSchedule(env, body.schedule_ack ?? []);
   for (const d of body.decide ?? []) await decide(env, Number(d.id), d.action, "VME");
-  return json({ requests: await pendingRequests(env), edits: await pendingEdits(env) });
+  return json({
+    requests: await pendingRequests(env),
+    edits: await pendingEdits(env),
+    schedule: await pendingSchedule(env),
+  });
 }
 
 function requireAdmin(v: Viewer): void {
@@ -101,6 +121,7 @@ async function route(ctx: EventContext<Env, string, Record<string, unknown>>): P
   const path = decodeURIComponent(url.pathname.replace(/^\/api\/?/, ""));
   const method = request.method;
 
+  if (path.startsWith("publish/phone/")) return phoneRoute(path, request, env);
   if (path === "publish" || path.startsWith("publish/")) {
     checkToken(request, env);
     if (path === "publish" && method === "POST") return publish(request, env);
@@ -158,6 +179,13 @@ async function route(ctx: EventContext<Env, string, Record<string, unknown>>): P
       await addReveals(env, v, (await readBody<{ ids: unknown }>(request)).ids);
       return json({ ok: true });
     }
+  }
+
+  if (parts[0] === "schedule" && parts.length === 2 && method === "POST") {
+    if (!canManageTeam(v, parts[1])) throw new HttpError(403, "Only the team's coaches can change the schedule.");
+    if (!(await new Names(env).team(parts[1]))) throw new HttpError(404, "No such team.");
+    const id = await queueScheduleEdit(env, parts[1], await readBody<ScheduleEditIn>(request), v.email);
+    return json({ ok: true, id });
   }
 
   if (parts[0] === "invite" && parts.length === 2 && method === "GET") {

@@ -6,6 +6,7 @@ import type {
   FullRenderDto,
   MatchDto,
   MatchSummary,
+  UpcomingMatchDto,
   OpponentDto,
   QueueLane,
   QueueStateDto,
@@ -437,6 +438,9 @@ export const api = {
       `/teams/${enc(team)}/tournaments/${enc(tournament)}/matches`
     );
   },
+  async listUpcoming(team: string): Promise<UpcomingMatchDto[]> {
+    return fetchJson<UpcomingMatchDto[]>(`/teams/${enc(team)}/upcoming`);
+  },
   async listOpponents(team: string): Promise<OpponentDto[]> {
     return fetchJson<OpponentDto[]>(`/teams/${enc(team)}/opponents`);
   },
@@ -450,6 +454,8 @@ export const api = {
       /** An earlier match to copy the opponent's roster, colour and
        *  badge from. */
       opponent_from?: { tournament: string; date: string; match: string } | null;
+      /** Scheduled start, "HH:MM" local. */
+      start_time?: string | null;
     }
   ): Promise<MatchDto> {
     return fetchJson<MatchDto>(

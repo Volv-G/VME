@@ -133,6 +133,11 @@ class MatchSummary:
     clip_count: int
     has_match_json: bool
     has_video: bool
+    # Scheduled start, "HH:MM" local (Match.start_time).
+    start_time: str | None = None
+    # Has footage or tagged events: False for a match that is only on
+    # the schedule so far.
+    played: bool = False
 
 
 @dataclass
@@ -218,10 +223,14 @@ def list_matches(team: str, tournament: str) -> list[MatchSummary]:
             match_json = d / "match.json"
             idx, opponent_part = paths.parse_match_folder(d.name)
             opponent = opponent_part  # default: from folder name
+            start_time = None
+            has_events = False
             if match_json.exists():
                 try:
                     m = Match.load(match_json)
                     opponent = m.opponent or opponent
+                    start_time = m.start_time
+                    has_events = bool(m.events)
                 except Exception as exc:
                     logger.warning("failed to load %s: %s", match_json, exc)
             summaries.append(
@@ -235,6 +244,8 @@ def list_matches(team: str, tournament: str) -> list[MatchSummary]:
                     clip_count=len(videos),
                     has_match_json=match_json.exists(),
                     has_video=bool(videos),
+                    start_time=start_time,
+                    played=bool(videos) or has_events,
                 )
             )
     return summaries

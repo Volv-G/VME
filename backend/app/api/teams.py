@@ -19,6 +19,7 @@ from ..domain.roster import (
 )
 from ..jobs.manager import JOBS, JobStatus
 from ..library import paths, scanner
+from ..publish import site
 from ..upload import thumbnail_sync
 from .schemas import (
     EditingConfigOut,
@@ -51,6 +52,7 @@ def create_team(name: str) -> TeamSummaryOut:
     if not name.strip():
         raise HTTPException(400, "Team name is required")
     scanner.create_team(name)
+    site.publish_soon(10.0)
     return next(
         (
             TeamSummaryOut(
@@ -160,6 +162,8 @@ def put_roster(team: str, roster: RosterOut) -> RosterOut:
         ],
     )
     scanner.save_team_roster(team, r)
+    # Names, numbers, colour: all on the site.
+    site.publish_soon()
     return _serialize_roster(r)
 
 

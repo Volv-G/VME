@@ -28,7 +28,9 @@ export interface Stats {
   matches: number;
   columns: string[];
   players: StatsLine[];
-  total: StatsLine;
+  /** The whole team. Only coaches and the admin get it (and every
+   *  player's line); a family gets their own player's lines and null. */
+  total: StatsLine | null;
 }
 
 /** A video on YouTube (`youtube_id`) or, for reels VME uploads to
@@ -36,6 +38,8 @@ export interface Stats {
  *  frame, `onedrive_url` opens OneDrive's own page. */
 export interface Video {
   kind: "full" | "condensed" | "reel" | "season";
+  /** The phone's live stream, standing in for the full video until VME has one. */
+  stream?: boolean;
   youtube_id?: string;
   onedrive_embed?: string;
   onedrive_url?: string;
@@ -64,6 +68,51 @@ export interface MatchSummary {
   /** "W" / "L" once the match is over, else null. */
   result: "W" | "L" | null;
   videos: Video[];
+  /** Scheduled start, "HH:MM" local, when known. */
+  time?: string | null;
+  /** Has footage or events; false = only on the schedule so far. */
+  played?: boolean;
+  /** Tagged in VME: the score is VME's own. */
+  scored?: boolean;
+  /** Added by the site when read: the score is the phone's (VME hasn't
+   *  tagged the match yet), and the current set's points while it's on. */
+  score_source?: "phone";
+  current?: [number, number] | null;
+}
+
+/** A match on the schedule that hasn't been played yet. */
+export interface UpcomingMatch {
+  key: string;
+  tournament: string;
+  tournament_name: string;
+  date: string;
+  time: string | null;
+  index: number | null;
+  opponent: string;
+}
+
+/** A change to the schedule left here, waiting for VME to apply it. */
+export interface ScheduleChange {
+  id: number;
+  action: "add" | "update" | "delete";
+  key: string | null;
+  tournament: string | null;
+  date: string | null;
+  time: string | null;
+  opponent: string | null;
+  submitted_by: string;
+  submitted_at: number;
+}
+
+/** A stream the phone says is on now (server/schedule.ts). */
+export interface LiveStream {
+  team: string;
+  id: string;
+  match_key: string | null;
+  opponent: string;
+  title: string;
+  url: string;
+  started_at: number;
 }
 
 export interface TeamDoc {
@@ -71,10 +120,22 @@ export interface TeamDoc {
   name: string;
   color: string;
   logo: string | null;
+  /** The crest made for the faint page background (no white disc behind it). */
+  watermark?: string | null;
   players: { number: number; name: string; photo: string | null }[];
   stats: Stats;
   tournaments: { slug: string; name: string; matches: MatchSummary[] }[];
+  /** Scheduled, not played yet, soonest first. */
+  upcoming?: UpcomingMatch[];
+  /** Every tournament folder, for picking one when adding a match. */
+  tournament_names?: { slug: string; name: string }[];
   published_at: number;
+  /** Added by the site when read, not published by VME: */
+  live?: LiveStream[];
+  /** Coaches and the admin: schedule changes VME hasn't applied yet. */
+  pending_schedule?: ScheduleChange[];
+  /** May this viewer change the schedule (and see every player's stats)? */
+  can_manage?: boolean;
 }
 
 export interface MatchDoc extends MatchSummary {
@@ -82,8 +143,11 @@ export interface MatchDoc extends MatchSummary {
   team_name: string;
   team_color?: string;
   team_logo?: string | null;
+  team_watermark?: string | null;
   tournament: string;
   tournament_name: string;
   stats: Stats;
   published_at: number;
+  /** Added by the site when read: this match streaming now. */
+  live?: LiveStream | null;
 }

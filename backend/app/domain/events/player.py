@@ -1,4 +1,5 @@
-"""Player events: kills, aces, assists, blocks, dives, digs, highlights."""
+"""Player events: kills, aces, assists, blocks, dives, digs, perfect passes,
+positive attacks, highlights."""
 
 from __future__ import annotations
 
@@ -140,3 +141,24 @@ class HighlightEvent(StatPlayerEvent):
     @property
     def overlay_effect(self) -> Optional[OverlayEffect]:
         return None
+
+
+@register_event
+@dataclass
+class PerfectPassEvent(StatPlayerEvent):
+    """A perfect pass: a serve receive the setter can run anything off
+    (a "3" on the 0-3 passing scale, DataVolley's `#` reception)."""
+
+    type_name: ClassVar[str] = "perfect_pass"
+    action_label: ClassVar[str] = "Perfect pass"
+
+
+@register_event
+@dataclass
+class PositiveAttackEvent(StatPlayerEvent):
+    """A positive attack: a hard swing the other side kept in play but
+    could do little with (DataVolley's `+` attack) - a kill in all but
+    the outcome. No score change: the rally goes on."""
+
+    type_name: ClassVar[str] = "positive_attack"
+    action_label: ClassVar[str] = "Positive attack"

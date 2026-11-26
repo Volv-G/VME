@@ -13,11 +13,14 @@ load. The frontend gets the same effect just by refetching the match.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..domain.player import Player
 from ..domain.roster import Roster
-from ..library import paths, scanner
+from ..library import paths, scanner, schedule
+from ..publish import site
 from .locks import match_lock_dep
 from .helpers import load_match_or_404, save_match, serialize_match
 from .schemas import (
@@ -32,6 +35,17 @@ from .schemas import (
 list_router = APIRouter(
     prefix="/teams/{team}/tournaments/{tournament}/matches", tags=["matches"]
 )
+
+# What's coming up for a team, across tournaments (library/schedule.py).
+upcoming_router = APIRouter(prefix="/teams/{team}/upcoming", tags=["matches"])
+
+
+@upcoming_router.get("")
+def list_upcoming(team: str) -> list[dict]:
+    if not paths.team_dir(team).exists():
+        raise HTTPException(404, "Team not found")
+    return schedule.upcoming(team)
+
 
 # Per-match operations: identified by (date, name).
 router = APIRouter(
@@ -79,7 +93,18 @@ def create_match(team: str, tournament: str, body: CreateMatchIn) -> MatchOut:
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if body.start_time:
+        m.start_time = _start_time(body.start_time)
+        save_match(team, tournament, body.date.strip(), match_name, m)
+    site.publish_soon()
     return serialize_match(team, tournament, body.date.strip(), match_name, m)
+
+
+def _start_time(value: Optional[str]) -> Optional[str]:
+    try:
+        return schedule.normalize_time(value)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/{match}", response_model=MatchOut)
@@ -131,6 +156,9 @@ def patch_match(
         m.playhead_frame = max(0, int(body.playhead_frame))
     if body.sides_swapped is not None:
         m.sides_swapped = bool(body.sides_swapped)
+    if "start_time" in body.model_fields_set:
+        m.start_time = _start_time(body.start_time)
+        site.publish_soon()
     if body.liberos is not None:
         # Order-preserving dedupe; a jersey need not be on the roster
         # (the phone adds ad-hoc jerseys), it just has to be a number.
@@ -163,6 +191,7 @@ def delete_match(
         scanner.delete_match(team, tournament, date, match)
     except scanner.MatchHasClips as exc:
         raise HTTPException(409, f"Only a match with no clips can be deleted: {exc}")
+    site.publish_soon()
     return {"deleted": True}
 
 

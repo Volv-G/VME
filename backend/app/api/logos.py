@@ -29,6 +29,7 @@ from fastapi.responses import FileResponse
 from dataclasses import replace
 
 from ..library import paths, scanner
+from ..publish import site
 from .locks import match_lock_dep
 from .helpers import load_match_or_404, save_match
 
@@ -137,6 +138,7 @@ def put_team_logo(team: str, file: UploadFile = File(...)) -> dict:
     name = _save_logo(paths.team_dir(team), paths.TEAM_LOGO_STEM, file)
     roster.team_logo_path = name
     scanner.save_team_roster(team, roster)
+    site.publish_soon()
     return {"team_logo_path": name}
 
 
@@ -148,6 +150,7 @@ def delete_team_logo(team: str) -> dict:
     )
     roster.team_logo_path = None
     scanner.save_team_roster(team, roster)
+    site.publish_soon()
     return {"deleted": removed}
 
 
@@ -198,6 +201,7 @@ def put_player_photo(
     rel = f"{paths.PLAYER_PHOTO_SUBDIR}/{name}"
     _save_player_photo_path(roster, number, rel)
     scanner.save_team_roster(team, roster)
+    site.publish_soon()
     return {"profile_pic_path": rel}
 
 
@@ -211,6 +215,7 @@ def delete_player_photo(team: str, number: int) -> dict:
     )
     _save_player_photo_path(roster, number, None)
     scanner.save_team_roster(team, roster)
+    site.publish_soon()
     return {"deleted": removed}
 
 
@@ -256,6 +261,7 @@ def put_opponent_logo(
     )
     m.opponent_roster.team_logo_path = name
     save_match(team, tournament, date, match, m)
+    site.publish_soon()
     return {"team_logo_path": name}
 
 
@@ -275,4 +281,5 @@ def delete_opponent_logo(
     )
     m.opponent_roster.team_logo_path = None
     save_match(team, tournament, date, match, m)
+    site.publish_soon()
     return {"deleted": removed}

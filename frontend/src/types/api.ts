@@ -216,6 +216,21 @@ export interface MatchSummary {
   clip_count: number;
   has_match_json: boolean;
   has_video: boolean;
+  /** Scheduled start, "HH:MM" local; null when not known. */
+  start_time?: string | null;
+  /** Footage or events exist; false = only on the schedule so far. */
+  played?: boolean;
+}
+
+/** A match on the schedule, not played yet (GET /teams/{team}/upcoming). */
+export interface UpcomingMatchDto {
+  key: string;
+  tournament: string;
+  tournament_name: string;
+  date: string;
+  time: string | null;
+  index: number | null;
+  opponent: string;
 }
 
 /** An opponent the team has played, and the match that knows them best
@@ -315,6 +330,8 @@ export interface MatchDto {
   playhead_frame: number;
   /** Scoreboard drawn with the away team on the left. */
   sides_swapped: boolean;
+  /** Scheduled start, "HH:MM" local on `date`. */
+  start_time?: string | null;
   /** The team's editing defaults - here because `home_roster` comes
    *  without its admin blocks. */
   editing: EditingConfigDto;
@@ -548,6 +565,8 @@ export const EVENT_TYPES = [
   "block_point",
   "dive",
   "dig",
+  "perfect_pass",
+  "positive_attack",
   "highlight",
   "substitution",
   "libero_rotation",

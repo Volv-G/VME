@@ -34,6 +34,8 @@ export function EventForm({ clips, currentFrame, onCreate }: Props) {
       case "block":
       case "dive":
       case "dig":
+      case "perfect_pass":
+      case "positive_attack":
       case "highlight":
       case "focus_in":
         return { team, player_number: playerNumber };
@@ -78,8 +80,8 @@ export function EventForm({ clips, currentFrame, onCreate }: Props) {
     }
   }
 
-  const showTeam = ["score", "first_serve", "kill", "ace", "assist", "block", "dive", "dig", "highlight", "substitution", "focus_in"].includes(type);
-  const showPlayer = ["kill", "ace", "assist", "block", "dive", "dig", "highlight", "substitution", "focus_in"].includes(type);
+  const showTeam = ["score", "first_serve", "kill", "ace", "assist", "block", "dive", "dig", "perfect_pass", "positive_attack", "highlight", "substitution", "focus_in"].includes(type);
+  const showPlayer = ["kill", "ace", "assist", "block", "dive", "dig", "perfect_pass", "positive_attack", "highlight", "substitution", "focus_in"].includes(type);
   const showPosition = type === "substitution";
   const showCorrection = type === "score_correction";
   const showText = type === "message";

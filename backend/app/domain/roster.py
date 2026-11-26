@@ -410,6 +410,10 @@ class UploadConfig:
         )
 
 
+def _by_number(players: list[Player]) -> list[Player]:
+    return sorted(players, key=lambda p: (p.number is None, p.number or 0))
+
+
 @dataclass
 class Roster:
     """A list of players belonging to a team.
@@ -446,6 +450,13 @@ class Roster:
     # What counts as dead space, and how much of it a cut keeps.
     # Admin-only like the rest: an opponent does not edit your video.
     editing: EditingConfig = field(default_factory=EditingConfig)
+
+    def __post_init__(self) -> None:
+        # By jersey number, always: every list of players anyone reads -
+        # settings, the editor's pickers, the phone, the site - comes from
+        # here, and a roster in the order it happened to be typed is one
+        # nobody can scan.
+        self.players = _by_number(self.players)
 
     def __iter__(self) -> Iterator[Player]:
         return iter(self.players)
@@ -496,7 +507,7 @@ class Roster:
             out["media_server"] = self.media_server.to_dict()
             out["upload"] = self.upload.to_dict()
             out["editing"] = self.editing.to_dict()
-        out["players"] = [p.to_dict() for p in self.players]
+        out["players"] = [p.to_dict() for p in _by_number(self.players)]
         return out
 
     @classmethod

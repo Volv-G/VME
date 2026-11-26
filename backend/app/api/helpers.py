@@ -110,6 +110,7 @@ def serialize_match(
         timeline_anchor_frame=m.timeline_anchor_frame,
         playhead_frame=m.playhead_frame,
         sides_swapped=m.sides_swapped,
+        start_time=m.start_time,
         editing=EditingConfigOut(**home.editing.to_dict()),
     )
 

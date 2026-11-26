@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { RosterDto, TournamentSummary } from "../types/api";
+import type { RosterDto, TournamentSummary, UpcomingMatchDto } from "../types/api";
 import { Modal } from "../components/Modal";
 import { StatsButton } from "../components/StatsButton";
 import { SitePublishButton } from "../components/SitePublishButton";
@@ -10,11 +10,13 @@ import { TeamFullRendersPanel } from "../components/TeamFullRendersPanel";
 import { TeamSeasonReelsPanel } from "../components/TeamSeasonReelsPanel";
 import { TeamStoragePanel } from "../components/TeamStoragePanel";
 import { displayName } from "../util/names";
+import { formatTime } from "../util/time";
 
 export function TeamDashboardPage() {
   const { team = "" } = useParams();
   const [tournaments, setTournaments] = useState<TournamentSummary[]>([]);
   const [roster, setRoster] = useState<RosterDto | null>(null);
+  const [upcoming, setUpcoming] = useState<UpcomingMatchDto[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   // New-tournament form. `name` is the folder slug (URL identifier);
@@ -30,6 +32,8 @@ export function TeamDashboardPage() {
       setError(null);
       const [t, r] = await Promise.all([api.listTournaments(team), api.getRoster(team)]);
       setTournaments(t);
+      // Matches put on the schedule here, on the site or from the phone.
+      api.listUpcoming(team).then(setUpcoming).catch(() => setUpcoming([]));
       setRoster(r);
     } catch (e) {
       setError(String(e));
@@ -96,6 +100,36 @@ export function TeamDashboardPage() {
         </div>
         {error && <div className="error">{error}</div>}
       </div>
+
+      {upcoming.length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <h2>Upcoming</h2>
+            <span className="row-meta">Added here, on the site or from the phone. Add one from a tournament's page.</span>
+          </div>
+          <div className="list">
+            {upcoming.map((m) => {
+              const [tour, date, name] = m.key.split("/");
+              return (
+                <Link
+                  key={m.key}
+                  to={`/teams/${encodeURIComponent(team)}/tournaments/${encodeURIComponent(tour)}/dates/${encodeURIComponent(date)}/matches/${encodeURIComponent(name)}`}
+                  className="list-row"
+                >
+                  <div>
+                    <div>vs {m.opponent}</div>
+                    <div className="row-meta">
+                      {m.date}
+                      {m.time ? ` ${formatTime(m.time)}` : ""} – {m.tournament_name}
+                    </div>
+                  </div>
+                  <span className="muted">→</span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-header">

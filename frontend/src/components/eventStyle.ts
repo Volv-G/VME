@@ -16,12 +16,12 @@
  *   Family                  Hue   Members
  *   ----------------------- ----- ----------------------------------------
  *   Cuts (red)              ~5    cut_start, cut_end, timeout_start/_end
- *   Offense (orange/gold)   ~30   kill, ace, assist
+ *   Offense (orange/gold)   ~30   kill, positive_attack, ace, assist
  *   Set boundary (gold)     ~45   set_end
  *   Lifecycle (green)       ~130  game_start, game_end
  *   Substitution (teal)     ~170  substitution
  *   Serve flow (cyan)       ~185  first_serve, ball_served, replay
- *   Defense (blue)          ~215  block, dig, dive
+ *   Defense (blue)          ~215  block, perfect_pass, dig, dive
  *   Score (indigo)          ~255  score, score_correction
  *   Focus (purple)          ~275  focus_in, focus_out
  *   Highlight (pink)        ~330  highlight
@@ -42,6 +42,7 @@ export const EVENT_COLORS: Record<string, string> = {
 
   // --- Player offense (orange -> gold) ---
   kill: "#f78166",
+  positive_attack: "#f0a07a",
   ace: "#ffa657",
   assist: "#ffd33d",
 
@@ -66,6 +67,7 @@ export const EVENT_COLORS: Record<string, string> = {
   // --- Player defense (blue) ---
   block: "#1f6feb",
   block_point: "#1f6feb",
+  perfect_pass: "#3b8eea",
   dig: "#58a6ff",
   dive: "#79c0ff",
 
@@ -99,12 +101,14 @@ export const EVENT_COLORS: Record<string, string> = {
 export const EVENT_ICONS: Record<string, string> = {
   // Player offense
   kill: "💥",
+  positive_attack: "⚡",
   ace: "🎯",
   assist: "🤝",
 
   // Player defense
   block: "🧱",
-  block_point: "🧱",
+  block_point: "✋",
+  perfect_pass: "👌",
   dig: "🛡️",
   dive: "🤿",
 

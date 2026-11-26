@@ -20,6 +20,23 @@ def site_status() -> dict:
     return {"configured": cfg is not None, "url": cfg["url"] if cfg else None}
 
 
+@router.get("/phone")
+def site_phone() -> dict:
+    """The site's address and the phone's own token, for the streaming
+    app: with them it reads and adds to the schedule and says when a
+    match goes live, from anywhere (see courtside/server/phone.ts). The
+    token can do nothing else on the site."""
+    cfg = site.load_config()
+    if cfg is None:
+        raise HTTPException(404, "Site publishing is not configured.")
+    new = not cfg.get("phone_token")
+    token = site.phone_token(cfg)
+    if new:
+        # The site learns a token from a publish; make that now.
+        site.publish_soon(5.0)
+    return {"url": cfg["url"], "token": token}
+
+
 @router.post("/publish")
 def site_publish() -> dict:
     try:

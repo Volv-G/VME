@@ -35,9 +35,19 @@ export function useApi<T>(path: string | null): Loaded<T> & { reload: () => void
   return { ...res, reload };
 }
 
-/** One published document, by key (see shared/docs.ts). */
-export function useDoc<T>(key: string): Loaded<T> {
-  return useApi<T>(docPath(key));
+/** One published document, by key (see shared/docs.ts). `everyMs`
+ *  reloads it on a timer while the page is open (live streams). */
+export function useDoc<T>(key: string, everyMs?: number): Loaded<T> & { reload: () => void } {
+  const res = useApi<T>(docPath(key));
+  const { reload } = res;
+  useEffect(() => {
+    if (!everyMs) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") reload();
+    }, everyMs);
+    return () => clearInterval(timer);
+  }, [everyMs, reload]);
+  return res;
 }
 
 export async function post<T = unknown>(path: string, body: unknown): Promise<T> {
@@ -83,6 +93,14 @@ export function formatDate(iso: string): string {
   return isNaN(d.getTime())
     ? iso
     : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+/** "18:30" -> "6:30 PM" (or however this device writes times). */
+export function formatTime(hhmm: string | null | undefined): string {
+  if (!hhmm) return "";
+  const [h, m] = hhmm.split(":").map(Number);
+  const d = new Date(2000, 0, 1, h, m);
+  return isNaN(d.getTime()) ? hhmm : d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
 export function formatWhen(ms: number): string {

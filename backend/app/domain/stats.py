@@ -4,7 +4,8 @@ Counted from the event log as it stands, so a stat is exactly as good as
 the tagging behind it:
 
 - Every player event credited to one of OUR players (kill, ace, block,
-  block point, dig, dive, assist, highlight) counts once for that player.
+  block point, perfect pass, positive attack, dig, dive, assist, highlight)
+  counts once for that player.
   The opponent's credited events are not ours to report.
 - A serve is a rally that ended in a point while we were serving, and is
   credited to whoever stood at position 1 at the time - the same rule the
@@ -32,7 +33,8 @@ from .team import Team
 
 # Display order of the per-type columns; types not listed sort after.
 EVENT_ORDER = (
-    "kill", "ace", "block_point", "block", "assist", "dig", "dive", "highlight",
+    "kill", "positive_attack", "ace", "block_point", "block", "assist",
+    "perfect_pass", "dig", "dive", "highlight",
 )
 
 

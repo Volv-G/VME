@@ -2,8 +2,8 @@
  * Who may see and change what.
  *
  *   admin   (ADMIN_EMAILS)  everything, every team; approves requests
- *   coach   (of a team)     the team's videos, stats and every reel
- *   player  (of a team)     the team's videos and stats, the reels of the
+ *   coach   (of a team)     the team's videos, all stats, every reel, the schedule
+ *   player  (of a team)     the team's videos, the stats and reels of the
  *                           claimed player only, and editing that player
  *
  * Signing in proves an email and nothing more: anyone can sign in, and
@@ -47,6 +47,12 @@ export function reelFilter(v: Viewer, team: string): (n: number | null | undefin
   if (v.admin || mine.some((m) => m.role === "coach")) return () => true;
   const numbers = new Set(mine.map((m) => m.number));
   return (n) => n != null && numbers.has(n);
+}
+
+/** Coaches and the admin: every player's stats, the team's totals, and
+ *  changing the schedule. */
+export function canManageTeam(v: Viewer, team: string): boolean {
+  return v.admin || approved(v, team).some((m) => m.role === "coach");
 }
 
 export function canEditPlayer(v: Viewer, team: string, number: number): boolean {

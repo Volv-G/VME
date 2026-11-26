@@ -19,14 +19,19 @@ What goes out, and what deliberately does not:
 - No footage or files: the site embeds YouTube and OneDrive.
 
 Configured by `<data dir>/site.json`: `{"url": ..., "token": ...}`, plus
-optionally `"teams": [...]` to publish only some teams.
+optionally `"teams": [...]` to publish only some teams. VME adds
+`"phone_token"` the first time the streaming app asks for it
+(`phone_token`); the site is sent only its hash.
 """
 
 from __future__ import annotations
 
 import base64
+import datetime as dt
+import hashlib
 import io
 import json
+import secrets
 import logging
 import threading
 import time
@@ -39,8 +44,8 @@ from ..config import DATA_DIR, MEDIA_ROOT
 from ..domain.match import Match
 from ..domain.roster import Roster
 from ..domain.stats import Stats
-from ..library import paths, scanner
-from . import site_video
+from ..library import paths, scanner, schedule
+from . import site_images, site_video
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +63,26 @@ def load_config() -> Optional[dict]:
     except (OSError, ValueError):
         return None
     return cfg if cfg.get("url") and cfg.get("token") else None
+
+
+_config_lock = threading.Lock()
+
+
+def phone_token(cfg: dict) -> str:
+    """The streaming app's token for the site, made on first use and kept
+    in site.json. Separate from the publish token, and the site lets it do
+    only the phone's few things (courtside/server/phone.ts): a lost phone
+    can't rewrite the site."""
+    with _config_lock:
+        if cfg.get("phone_token"):
+            return cfg["phone_token"]
+        path = _config_path()
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        if not stored.get("phone_token"):
+            stored["phone_token"] = secrets.token_urlsafe(32)
+            path.write_text(json.dumps(stored, indent=2), encoding="utf-8")
+        cfg["phone_token"] = stored["phone_token"]
+        return cfg["phone_token"]
 
 
 def _short_name(p) -> str:
@@ -96,6 +121,22 @@ def _image(path: Optional[str | Path], px: int, *, crop: bool) -> Optional[dict]
         return {"mime": mime, "base64": base64.b64encode(buf.getvalue()).decode("ascii")}
     except Exception:
         logger.warning("site publish: could not read image %s", path, exc_info=True)
+        return None
+
+
+def _watermark(path: Optional[str | Path]) -> Optional[dict]:
+    """The crest as the faint page background (site_images.watermark), PNG."""
+    if not path:
+        return None
+    try:
+        im = site_images.watermark(path)
+        if im is None:
+            return None
+        buf = io.BytesIO()
+        im.save(buf, "PNG", optimize=True)
+        return {"mime": "image/png", "base64": base64.b64encode(buf.getvalue()).decode("ascii")}
+    except Exception:
+        logger.warning("site publish: could not make a background from %s", path, exc_info=True)
         return None
 
 
@@ -208,10 +249,9 @@ def build(team: str, web: Optional["site_video.TeamCopies"] = None) -> tuple[dic
 
     team_name = roster.team_name or team.replace("_", " ")
     color = roster.team_color or "#2d8a4e"
-    logo = add_image(
-        f"img/{team}/logo",
-        _image(_resolve_logo(paths.team_dir(team), roster.team_logo_path, paths.TEAM_LOGO_STEM), LOGO_PX, crop=False),
-    )
+    logo_path = _resolve_logo(paths.team_dir(team), roster.team_logo_path, paths.TEAM_LOGO_STEM)
+    logo = add_image(f"img/{team}/logo", _image(logo_path, LOGO_PX, crop=False))
+    watermark = add_image(f"img/{team}/watermark", _watermark(logo_path))
     players = [
         {
             "number": p.number,
@@ -227,9 +267,12 @@ def build(team: str, web: Optional["site_video.TeamCopies"] = None) -> tuple[dic
     videos = _videos(team, web)
     season = Stats()
     tournaments = []
+    tournament_names = []
+    today = dt.date.today().isoformat()
     for d in paths.iter_tournament_dirs(team):
         info = scanner.load_tournament_info(team, d.name)
         t_name = info.full_name or info.abbreviation or d.name.replace("_", " ")
+        tournament_names.append({"slug": d.name, "name": t_name})
         matches = []
         for s in scanner.list_matches(team, d.name):
             if not s.has_match_json:
@@ -243,7 +286,8 @@ def build(team: str, web: Optional["site_video.TeamCopies"] = None) -> tuple[dic
             state = _final_state(m)
             one = Stats()
             _add_match(one, path, roster)
-            season.add(one)
+            if s.played:
+                season.add(one)
             key = f"{d.name}/{s.date}/{s.name}"
             result = None
             if state.game_ended and state.home_sets != state.away_sets:
@@ -267,8 +311,16 @@ def build(team: str, web: Optional["site_video.TeamCopies"] = None) -> tuple[dic
                 "away_sets": state.away_sets,
                 "result": result,
                 "videos": videos.get(key, []),
+                "time": s.start_time,
+                "played": s.played,
+                # Tagged in VME: its score stands. Until then the site may
+                # show the score the phone kept (courtside/server/schedule.ts).
+                "scored": bool(m.events),
             }
-            matches.append(summary)
+            # Not played yet and still to come: listed under `upcoming`
+            # instead (its doc still goes out, for a live link to land on).
+            if s.played or s.date < today:
+                matches.append(summary)
             docs.append({
                 "key": f"match/{team}/{key}",
                 "json": {
@@ -277,6 +329,7 @@ def build(team: str, web: Optional["site_video.TeamCopies"] = None) -> tuple[dic
                     "team_name": team_name,
                     "team_color": color,
                     "team_logo": logo,
+                    "team_watermark": watermark,
                     "tournament": d.name,
                     "tournament_name": t_name,
                     "stats": _stats_out(one, names),
@@ -293,9 +346,12 @@ def build(team: str, web: Optional["site_video.TeamCopies"] = None) -> tuple[dic
         "name": team_name,
         "color": color,
         "logo": logo,
+        "watermark": watermark,
         "players": players,
         "stats": _stats_out(season, names),
         "tournaments": tournaments,
+        "upcoming": schedule.upcoming(team),
+        "tournament_names": tournament_names,
         "published_at": now,
     }
     docs.append({"key": f"team/{team}", "json": team_doc})
@@ -340,6 +396,8 @@ def publish(teams: Optional[list[str]] = None, *, upload_in_background: bool = T
         "docs": docs,
         "images": images,
     }
+    if cfg.get("phone_token"):
+        body["phone_token_sha256"] = hashlib.sha256(cfg["phone_token"].encode()).hexdigest()
     r = requests.post(
         cfg["url"].rstrip("/") + "/api/publish",
         json=body,

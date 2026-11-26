@@ -1,13 +1,15 @@
 /**
  * No-spoiler reveals, per person: which matches' scores (and which
- * seasons' stats) someone chose to see, so their phone and laptop agree.
+ * seasons' stats) someone chose to see, and which reels they have
+ * watched ("seen:<team>/<match key>/<number>") and the videos they have
+ * come across ("known:...", to flag one added later), so their phone and laptop agree.
  * The ids are made by the app (src/Spoilers.tsx); the site only stores them.
  */
 import type { Env } from "../shared/env";
 import type { Viewer } from "./access";
 import { HttpError } from "./http";
 
-const ID = /^(match|season):[^\s]{1,300}$/;
+const ID = /^(match|season|seen|known):[^\x00-\x1f]{1,300}$/;
 const MAX_PER_CALL = 500;
 
 export async function listReveals(env: Env, v: Viewer): Promise<string[]> {

@@ -134,6 +134,10 @@ class MatchSummaryOut(BaseModel):
     clip_count: int
     has_match_json: bool
     has_video: bool
+    # Scheduled start, "HH:MM" local; None when not known.
+    start_time: Optional[str] = None
+    # Footage or events exist; False = only on the schedule so far.
+    played: bool = False
 
 
 class FullRenderOut(BaseModel):
@@ -303,6 +307,8 @@ class MatchOut(BaseModel):
     playhead_frame: int = 0
     # Scoreboard drawn away-team-left. See `Match.sides_swapped`.
     sides_swapped: bool = False
+    # Scheduled start, "HH:MM" local on `date`. See `Match.start_time`.
+    start_time: Optional[str] = None
     # The team's editing defaults, carried here because the editor gets
     # the home roster WITHOUT its admin blocks and needs these two.
     editing: EditingConfigOut = Field(default_factory=EditingConfigOut)
@@ -366,6 +372,8 @@ class CreateMatchIn(BaseModel):
     # An earlier match to copy the opponent from - roster, colour and
     # badge. Omitted for an opponent met for the first time.
     opponent_from: Optional[MatchRefIn] = None
+    # Scheduled start, "HH:MM" local, for a match added ahead of time.
+    start_time: Optional[str] = None
 
 
 class OpponentOut(BaseModel):
@@ -401,6 +409,8 @@ class UpdateMatchIn(BaseModel):
     timeline_anchor_frame: Optional[int] = None
     playhead_frame: Optional[int] = None
     sides_swapped: Optional[bool] = None
+    # "HH:MM"; an explicit null clears it.
+    start_time: Optional[str] = None
 
 
 class ReorderClipsIn(BaseModel):

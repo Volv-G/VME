@@ -6,10 +6,12 @@ import { Modal } from "./Modal";
 
 const LABELS: Record<string, string> = {
   kill: "Kill",
+  positive_attack: "Pos. attack",
   ace: "Ace",
   block_point: "Block pt",
   block: "Block",
   assist: "Assist",
+  perfect_pass: "Perfect pass",
   dig: "Dig",
   dive: "Dive",
   highlight: "Highlight",

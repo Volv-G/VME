@@ -126,6 +126,8 @@ export function summarizeEvent(
     case "block_point":
     case "dive":
     case "dig":
+    case "perfect_pass":
+    case "positive_attack":
     case "highlight":
     case "focus_in": {
       const team = String(p.team || "home");
@@ -188,6 +190,8 @@ const TYPE_VERB: Record<string, string> = {
   block: "Block",
   dive: "Dive",
   dig: "Dig",
+  perfect_pass: "Perfect pass",
+  positive_attack: "Positive attack",
   highlight: "Highlight",
   focus_in: "Focus on",
 };

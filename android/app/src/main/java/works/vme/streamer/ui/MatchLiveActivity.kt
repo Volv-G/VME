@@ -4536,7 +4536,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         private const val LBL_BLOCK = "\ud83e\uddf1 Block"
         /** The Block button while "did it win the point?" is open; the
          *  Cancel button says [LBL_JUST_BLOCK] then. */
-        private const val LBL_BLOCK_POINT = "\ud83e\uddf1 Block point"
+        private const val LBL_BLOCK_POINT = "\u270b Block point"
         private const val LBL_JUST_BLOCK = "\u2715 Just a block"
         private const val LBL_TIMEOUT = "\u23F1\uFE0F Timeout"
         private const val LBL_TIMEOUT_END = "\u23F1\uFE0F End Timeout"

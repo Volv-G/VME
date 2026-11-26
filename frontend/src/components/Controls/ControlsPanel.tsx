@@ -102,6 +102,10 @@ const PLAYER_ACTIONS: ActionDef[] = [
   // the fact where the kill is already in the log.
   { type: "assist", label: "Assist", needsPlayer: true },
   { type: "ace", label: "Ace", needsPlayer: false },
+  // A kill in all but the outcome: the other side kept it up.
+  { type: "positive_attack", label: "Pos. Attack", needsPlayer: true },
+  // A serve receive the setter can run anything off (a "3").
+  { type: "perfect_pass", label: "Perfect Pass", needsPlayer: true },
   { type: "dig", label: "Dig", needsPlayer: true },
   { type: "dive", label: "Dive", needsPlayer: true },
   { type: "block", label: "Block", needsPlayer: true },

@@ -1,5 +1,6 @@
 import { useSyncExternalStore, type ReactNode } from "react";
 import { post } from "./api";
+import type { TeamDoc } from "../shared/docs";
 
 /**
  * No spoilers: scores and stats stay hidden until the viewer asks, so
@@ -87,8 +88,32 @@ export function useRevealed(id: string): [boolean, () => void] {
 }
 
 export const matchSpoiler = (team: string, key: string) => `match:${team}/${key}`;
-/** Season totals move with every match, so a new match hides them again. */
-export const seasonSpoiler = (team: string, matches: number) => `season:${team}:${matches}`;
+/** A reel this person has started watching, kept the same way as reveals. */
+export const seenId = (team: string, matchKey: string, number: number | null | undefined) =>
+  `seen:${team}/${matchKey}/${number ?? "team"}`;
+/**
+ * Season totals move with every match, so any change to the list - a new
+ * match, one the phone scored, VME taking over a phone score with its own -
+ * hides them again: the id is a fingerprint of the list.
+ */
+export function seasonSpoiler(t: TeamDoc): string {
+  const parts = t.tournaments.flatMap((x) => x.matches.map((m) => `${m.key}:${m.scored ? "v" : m.score_source ?? "-"}`));
+  return `season:${t.slug}:${hash(parts.sort().join("|"))}`;
+}
+
+/** Short, stable, not secret (djb2, base 36). */
+export function hash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * Which of a match's videos this person has already come across (opened
+ * the match, or played it anywhere), so one added later can be flagged
+ * "New" on a match they have seen. One id per video.
+ */
+export const knownId = (team: string, matchKey: string, video: string) => `known:${team}/${matchKey}/${hash(video)}`;
 
 /** `children` once revealed; until then a button that reveals them. */
 export function Spoiler({
