@@ -1,8 +1,8 @@
 /**
  * No-spoiler reveals, per person: which matches' scores (and which
- * seasons' stats) someone chose to see, and which reels they have
- * watched ("seen:<team>/<match key>/<number>") and the videos they have
- * come across ("known:...", to flag one added later), so their phone and laptop agree.
+ * seasons' stats) someone chose to see, which matches they have opened
+ * ("seen:<team>/<match key>") and which videos were there when they did
+ * ("known:...", to flag one added later), so their phone and laptop agree.
  * The ids are made by the app (src/Spoilers.tsx); the site only stores them.
  */
 import type { Env } from "../shared/env";

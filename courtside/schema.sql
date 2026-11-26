@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS player_edits (
 );
 
 -- What someone chose to see (src/Spoilers.tsx ids such as
--- "match:<team>/<key>") and the reels they have watched ("seen:..."),
+-- "match:<team>/<key>") and the matches they have opened ("seen:..."),
 -- kept per person so every device agrees.
 CREATE TABLE IF NOT EXISTS reveals (
   email TEXT NOT NULL,

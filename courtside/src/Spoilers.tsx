@@ -88,9 +88,8 @@ export function useRevealed(id: string): [boolean, () => void] {
 }
 
 export const matchSpoiler = (team: string, key: string) => `match:${team}/${key}`;
-/** A reel this person has started watching, kept the same way as reveals. */
-export const seenId = (team: string, matchKey: string, number: number | null | undefined) =>
-  `seen:${team}/${matchKey}/${number ?? "team"}`;
+/** A match this person has opened, kept the same way as reveals. */
+export const seenId = (team: string, matchKey: string) => `seen:${team}/${matchKey}`;
 /**
  * Season totals move with every match, so any change to the list - a new
  * match, one the phone scored, VME taking over a phone score with its own -
@@ -109,9 +108,8 @@ export function hash(s: string): string {
 }
 
 /**
- * Which of a match's videos this person has already come across (opened
- * the match, or played it anywhere), so one added later can be flagged
- * "New" on a match they have seen. One id per video.
+ * Which of a match's videos were there the last time this person opened
+ * it, so one added later flags the match "New videos". One id per video.
  */
 export const knownId = (team: string, matchKey: string, video: string) => `known:${team}/${matchKey}/${hash(video)}`;
 

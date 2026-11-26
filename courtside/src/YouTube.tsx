@@ -16,45 +16,37 @@ export const videoKey = (v: Video) => v.youtube_id || v.web || v.onedrive_url ||
  * files to anonymous players. `poster` is an image key - an opponent's
  * crest, a player's photo - for tiles that have no thumbnail.
  *
- * `seen` (when given) puts a "Seen" / "Not seen" mark on the tile, and
- * `onWatch` is told when the viewer starts it, opens it on OneDrive or
- * downloads it.
+ * `isNew` puts a "New" mark on the tile.
  */
 export function VideoTile(props: {
   video: Video;
   title: string;
   poster?: string | null;
-  seen?: boolean;
-  /** Added since this person last looked at the match. */
+  /** Added since this person last opened the match. */
   isNew?: boolean;
-  onWatch?: () => void;
 }) {
-  const { seen, isNew } = props;
   return (
     <div className="video-cell">
       <Tile {...props} />
-      {(seen !== undefined || isNew) && (
+      {props.isNew && (
         <span className="tile-marks">
-          {isNew && <span className="new-mark">New</span>}
-          {seen !== undefined && (
-            <span className={`seen-mark ${seen ? "is-seen" : "not-seen"}`}>{seen ? "✓ Seen" : "Not seen"}</span>
-          )}
+          <span className="new-mark">New</span>
         </span>
       )}
     </div>
   );
 }
 
-function Tile({ video, title, poster, onWatch }: { video: Video; title: string; poster?: string | null; onWatch?: () => void }) {
-  if (video.youtube_id) return <YouTube id={video.youtube_id} title={title} onPlay={onWatch} />;
+function Tile({ video, title, poster }: { video: Video; title: string; poster?: string | null }) {
+  if (video.youtube_id) return <YouTube id={video.youtube_id} title={title} />;
   const thumb = video.web_poster ? videoUrl(video.web_poster) : null;
   const original = video.onedrive_url || video.onedrive_embed;
   if (video.web) {
     return (
       <div className="video-item">
-        <WebVideo src={videoUrl(video.web)} thumb={thumb} title={title} poster={poster} onPlay={onWatch} />
+        <WebVideo src={videoUrl(video.web)} thumb={thumb} title={title} poster={poster} />
         {original && (
-          <a className="download" href={original} target="_blank" rel="noreferrer" onClick={onWatch}>
+          <a className="download" href={original} target="_blank" rel="noreferrer">
             ⬇ Download full HD from OneDrive
           </a>
         )}
@@ -68,7 +60,6 @@ function Tile({ video, title, poster, onWatch }: { video: Video; title: string; 
       href={original}
       target="_blank"
       rel="noreferrer"
-      onClick={onWatch}
       aria-label={`Watch ${title} on OneDrive`}
     >
       <Picture thumb={thumb} poster={poster} />
@@ -100,13 +91,11 @@ function WebVideo({
   thumb,
   title,
   poster,
-  onPlay,
 }: {
   src: string;
   thumb: string | null;
   title: string;
   poster?: string | null;
-  onPlay?: () => void;
 }) {
   const [playing, setPlaying] = useState(false);
   if (playing) {
@@ -119,10 +108,7 @@ function WebVideo({
   return (
     <button
       className={`yt yt-poster${thumb ? "" : " od-poster"}`}
-      onClick={() => {
-        setPlaying(true);
-        onPlay?.();
-      }}
+      onClick={() => setPlaying(true)}
       aria-label={`Play ${title}`}
     >
       <Picture thumb={thumb} poster={poster} />
@@ -132,7 +118,7 @@ function WebVideo({
   );
 }
 
-export function YouTube({ id, title, onPlay }: { id: string; title: string; onPlay?: () => void }) {
+export function YouTube({ id, title }: { id: string; title: string }) {
   const [playing, setPlaying] = useState(false);
   if (playing) {
     return (
@@ -149,10 +135,7 @@ export function YouTube({ id, title, onPlay }: { id: string; title: string; onPl
   return (
     <button
       className="yt yt-poster"
-      onClick={() => {
-        setPlaying(true);
-        onPlay?.();
-      }}
+      onClick={() => setPlaying(true)}
       aria-label={`Play ${title}`}
     >
       <img src={`https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`} alt="" loading="lazy" />

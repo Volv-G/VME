@@ -157,42 +157,29 @@ function Score({ m }: { m: MatchSummary }) {
   );
 }
 
-/**
- * Per player, whether this viewer has watched their reel of the match:
- * one chip per player for a family, a count for a coach's whole team.
- */
-/** Videos added to a match since this person last looked at it; none
- *  for a match they have never opened. */
-function newVideos(team: string, m: MatchSummary, revealed: (id: string) => boolean): Video[] {
-  const known = m.videos.map((v) => revealed(knownId(team, m.key, videoKey(v))));
-  return known.some(Boolean) ? m.videos.filter((_, i) => !known[i]) : [];
+type Revealed = (id: string) => boolean;
+
+/** Whether this person has opened the match page. (Before matches were
+ *  marked, opening one marked its videos known; that counts too.) */
+function matchSeen(team: string, m: MatchSummary, revealed: Revealed): boolean {
+  return revealed(seenId(team, m.key)) || m.videos.some((v) => revealed(knownId(team, m.key, videoKey(v))));
 }
 
-function SeenChips({ team, m, revealed }: { team: string; m: MatchSummary; revealed: (id: string) => boolean }) {
-  const fresh = newVideos(team, m, revealed).length;
-  const chip = fresh > 0 && <span className="new-chip">{fresh === 1 ? "1 new video" : `${fresh} new videos`}</span>;
-  const reels = m.videos.filter((v) => v.kind === "reel");
-  if (!reels.length) return chip ? <span className="seen-chips">{chip}</span> : null;
-  const seen = reels.map((v) => ({ v, seen: revealed(seenId(team, m.key, v.player_number)) }));
-  if (reels.length > 4) {
-    const n = seen.filter((s) => s.seen).length;
-    return (
-      <span className="seen-chips">
-        <span className={`seen-chip${n === reels.length ? " is-seen" : ""}`}>
-          {n === reels.length ? "✓ all reels seen" : `${n}/${reels.length} reels seen`}
-        </span>
-        {chip}
-      </span>
-    );
-  }
+/** Videos added since this person last opened the match; none for a
+ *  match they have never opened (all of it is new then). */
+function newVideos(team: string, m: MatchSummary, revealed: Revealed): Video[] {
+  if (!matchSeen(team, m, revealed)) return [];
+  return m.videos.filter((v) => !revealed(knownId(team, m.key, videoKey(v))));
+}
+
+/** Two yes/no marks per match, both cleared by opening it: seen or not,
+ *  and whether videos came since. */
+function SeenChips({ team, m, revealed }: { team: string; m: MatchSummary; revealed: Revealed }) {
+  const seen = matchSeen(team, m, revealed);
   return (
     <span className="seen-chips">
-      {seen.map(({ v, seen }) => (
-        <span key={videoKey(v)} className={`seen-chip${seen ? " is-seen" : ""}`} title={seen ? "You've watched this reel" : "Not watched yet"}>
-          {v.player_number != null ? `#${v.player_number}` : v.player_label || "Reel"} {seen ? "✓ seen" : "not seen"}
-        </span>
-      ))}
-      {chip}
+      <span className={`seen-chip${seen ? " is-seen" : ""}`}>{seen ? "✓ Seen" : "Not seen"}</span>
+      {newVideos(team, m, revealed).length > 0 && <span className="new-chip">New videos</span>}
     </span>
   );
 }
@@ -318,7 +305,6 @@ function PlayerPage() {
   const { team = "", number = "" } = useParams();
   const { me } = useMe();
   const res = useDoc<TeamDoc>(`team/${team}`);
-  const spoilers = useReveals();
   const n = Number(number);
   const canEdit =
     !!me &&
@@ -359,19 +345,14 @@ function PlayerPage() {
               <section>
                 <h2>Highlights</h2>
                 <div className="videos">
-                  {reels.map(({ m, v }) => {
-                    const id = seenId(t.slug, m.key, v.player_number);
-                    return (
-                      <VideoTile
-                        key={videoKey(v)}
-                        video={v}
-                        title={`${formatDate(m.date)} vs ${m.opponent}`}
-                        poster={m.opponent_logo}
-                        seen={spoilers.revealed(id)}
-                        onWatch={() => spoilers.reveal(id, knownId(t.slug, m.key, videoKey(v)))}
-                      />
-                    );
-                  })}
+                  {reels.map(({ m, v }) => (
+                    <VideoTile
+                      key={videoKey(v)}
+                      video={v}
+                      title={`${formatDate(m.date)} vs ${m.opponent}`}
+                      poster={m.opponent_logo}
+                    />
+                  ))}
                 </div>
               </section>
             )}
@@ -396,8 +377,9 @@ function MatchPage() {
   const key = `${tournament}/${date}/${match}`;
   const [revealed, reveal] = useRevealed(matchSpoiler(team, key));
   const spoilers = useReveals();
-  // What was new when the page opened stays flagged while it is open;
-  // everything on it then counts as known for next time.
+  // Opening the page is what counts: the match is seen and its videos
+  // known from now on. What was new when it opened stays flagged on the
+  // tiles while the page is open.
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   const videoList = res.state === "ok" ? res.doc.videos.map(videoKey).join(" ") : "";
   useEffect(() => {
@@ -405,7 +387,7 @@ function MatchPage() {
     const m = res.doc;
     const added = newVideos(team, { ...m, key }, spoilers.revealed).map(videoKey);
     if (added.length) setFresh((prev) => new Set([...prev, ...added]));
-    spoilers.reveal(...m.videos.map((v) => knownId(team, key, videoKey(v))));
+    spoilers.reveal(seenId(team, key), ...m.videos.map((v) => knownId(team, key, videoKey(v))));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoList]);
   return (
@@ -449,20 +431,15 @@ function MatchPage() {
               <section>
                 <h2>Player reels</h2>
                 <div className="videos">
-                  {reels.map((v) => {
-                    const id = seenId(m.team, key, v.player_number);
-                    return (
-                      <VideoTile
-                        key={videoKey(v)}
-                        video={v}
-                        title={v.player_label || "Reel"}
-                        poster={m.team_logo}
-                        seen={spoilers.revealed(id)}
-                        isNew={fresh.has(videoKey(v))}
-                        onWatch={() => spoilers.reveal(id)}
-                      />
-                    );
-                  })}
+                  {reels.map((v) => (
+                    <VideoTile
+                      key={videoKey(v)}
+                      video={v}
+                      title={v.player_label || "Reel"}
+                      poster={m.team_logo}
+                      isNew={fresh.has(videoKey(v))}
+                    />
+                  ))}
                 </div>
               </section>
             )}

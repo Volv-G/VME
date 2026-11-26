@@ -194,15 +194,14 @@ a.download:hover { background: var(--accent); color: #fff; }
 @media (prefers-color-scheme: dark) { a.download:hover { color: #111; } }
 .od-corner { position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 999px; background: rgba(0, 0, 0, .65); color: #fff; font-size: 12px; }
 
-/* Seen / not seen on a reel tile (top right; OneDrive's badge is top left). */
+/* "New" on a video tile (top right; OneDrive's badge is top left), and a
+   match's Seen / New videos chips on the team page. */
 .video-cell { position: relative; min-width: 0; }
 .tile-marks { position: absolute; top: 8px; right: 8px; z-index: 1; display: flex; gap: 6px; pointer-events: none; }
-.seen-mark, .new-mark { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.new-mark { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
 .new-mark, .new-chip { background: #e0a100; color: #1a1300; }
 .new-chip { font-size: 11px; padding: 1px 6px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
 .now-score { font-size: 12px; font-weight: 700; color: #d0122b; white-space: nowrap; }
-.seen-mark.is-seen { background: color-mix(in srgb, var(--win) 85%, black); color: #fff; }
-.seen-mark.not-seen { background: rgba(0, 0, 0, .65); color: #fff; }
 .seen-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
 .seen-chip { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--dim); white-space: nowrap; }
 .seen-chip.is-seen { border-color: color-mix(in srgb, var(--win) 60%, transparent); background: color-mix(in srgb, var(--win) 15%, transparent); color: var(--text); }
