@@ -205,7 +205,9 @@ object SiteClient {
         val url: String,
     )
 
-    fun announceLive(access: Access, a: LiveAnnouncement, live: Boolean) {
+    /** [score], when given, rides along so a heartbeat also brings the
+     *  site's score up to date after a [sendScore] that did not land. */
+    fun announceLive(access: Access, a: LiveAnnouncement, live: Boolean, score: Score? = null) {
         val body = JSONObject()
             .put("team", a.team)
             .put("id", a.id)
@@ -214,7 +216,60 @@ object SiteClient {
             .put("title", a.title)
             .put("url", a.url)
             .put("live", live)
+        if (score != null) body.put("score", score.toJson())
         request(access, "POST", "/api/publish/phone/live", body)
+    }
+
+    // ---- score -------------------------------------------------------
+
+    /**
+     * The scoreboard, and nothing else: sets won, finished sets, the
+     * running set, whether it is over. Ours (home) first throughout,
+     * whichever way round the stream draws the teams.
+     *
+     * Deliberately no stats. Who killed what is the editor's to publish
+     * once the footage is cut; the site only needs to answer "what's
+     * the score?" for a parent who could not get to the gym.
+     */
+    data class Score(
+        val homeSets: Int,
+        val awaySets: Int,
+        /** Finished sets as home to away. */
+        val sets: List<Pair<Int, Int>>,
+        val home: Int,
+        val away: Int,
+        val ended: Boolean,
+    ) {
+        fun toJson(): JSONObject = JSONObject()
+            .put("home_sets", homeSets)
+            .put("away_sets", awaySets)
+            .put("sets", JSONArray().apply {
+                sets.forEach { (h, a) -> put(JSONArray().put(h).put(a)) }
+            })
+            .put("home", home)
+            .put("away", away)
+            .put("ended", ended)
+    }
+
+    /** Which match a score belongs to. */
+    data class ScoreTarget(
+        val team: String,
+        /** The phone match's slug. */
+        val id: String,
+        val matchKey: String?,
+        val opponent: String,
+        val date: String,
+    )
+
+    fun sendScore(access: Access, target: ScoreTarget, score: Score) {
+        val body = JSONObject()
+            .put("team", target.team)
+            .put("id", target.id)
+            .put("match_key", target.matchKey ?: JSONObject.NULL)
+            .put("opponent", target.opponent)
+            .put("date", target.date)
+            .put("score", score.toJson())
+        request(access, "POST", "/api/publish/phone/score", body)
     }
 
     // ---- linking -----------------------------------------------------
@@ -358,7 +413,7 @@ object SiteLive {
         if (previous != null && previous.id != a.id) {
             runCatching { SiteClient.announceLive(access, previous, live = false) }
         }
-        SiteClient.announceLive(access, a, live = true)
+        SiteClient.announceLive(access, a, live = true, SiteScore.latestFor(a.id))
         return true
     }
 
@@ -368,8 +423,9 @@ object SiteLive {
     fun beat(ctx: Context) {
         val a = current ?: return
         val access = Settings.siteAccess(ctx) ?: return
-        runCatching { SiteClient.announceLive(access, a, live = true) }
-            .onSuccess { Log.i(TAG, "live heartbeat sent") }
+        val score = SiteScore.latestFor(a.id)
+        runCatching { SiteClient.announceLive(access, a, live = true, score) }
+            .onSuccess { Log.i(TAG, "live heartbeat sent"); if (score != null) SiteScore.markSent(a.id, score) }
             .onFailure { Log.w(TAG, "live heartbeat failed: ${it.message}") }
     }
 
@@ -383,7 +439,84 @@ object SiteLive {
         if (slug != null && a.id != slug) return false
         current = null
         val access = Settings.siteAccess(ctx) ?: return false
-        SiteClient.announceLive(access, a, live = false)
+        SiteClient.announceLive(access, a, live = false, SiteScore.latestFor(a.id))
         return true
+    }
+}
+
+/**
+ * Keeps the site's copy of the score up to date with the phone's.
+ *
+ * Every point calls [post], but a send per tap would be a request per
+ * second during a busy stretch of corrections and Undo -- so the latest
+ * state is held for [DEBOUNCE_MS] and only that is sent: two quick taps
+ * and an Undo become one request carrying where the score ended up.
+ *
+ * Its own single background thread, never the main one: scoring must
+ * not wait on a gym's uplink. Best effort throughout. A failed send is
+ * not retried on a timer; the next change re-sends the whole state
+ * anyway, and while streaming the live heartbeat carries it too (see
+ * [SiteLive.beat]), so a match that goes quiet still catches up.
+ *
+ * Sent whether or not the match is streamed: a parent following from
+ * home wants the score of a match nobody filmed just as much.
+ */
+object SiteScore {
+    private const val DEBOUNCE_MS = 2_000L
+    /** At most one failure line per this long, or a match played with
+     *  no signal fills the operator's log with the same sentence. */
+    private const val FAIL_LOG_EVERY_MS = 60_000L
+
+    private val executor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+    private var pending: java.util.concurrent.ScheduledFuture<*>? = null
+
+    @Volatile private var latest: Pair<SiteClient.ScoreTarget, SiteClient.Score>? = null
+    @Volatile private var lastSent: Pair<String, SiteClient.Score>? = null
+    @Volatile private var lastFailLogAt = 0L
+
+    /** The newest score known for match [id], or null. */
+    fun latestFor(id: String): SiteClient.Score? =
+        latest?.takeIf { it.first.id == id }?.second
+
+    /** Note that the site has [score] for [id] by some other route. */
+    fun markSent(id: String, score: SiteClient.Score) {
+        lastSent = id to score
+    }
+
+    /**
+     * Queue [score] for [target]; it goes [DEBOUNCE_MS] after the last
+     * call, unless the site already has exactly that. [log] gets a
+     * failure line, rate-limited. A phone with no site linked keeps
+     * the state (a link made later picks it up on the next change)
+     * but sends nothing.
+     */
+    @Synchronized
+    fun post(
+        ctx: Context,
+        target: SiteClient.ScoreTarget,
+        score: SiteClient.Score,
+        log: (String) -> Unit,
+    ) {
+        latest = target to score
+        if (lastSent == target.id to score) return
+        pending?.cancel(false)
+        val app = ctx.applicationContext
+        pending = executor.schedule({ flush(app, log) }, DEBOUNCE_MS,
+            java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
+    private fun flush(ctx: Context, log: (String) -> Unit) {
+        val (target, score) = latest ?: return
+        if (lastSent == target.id to score) return
+        val access = Settings.siteAccess(ctx) ?: return
+        runCatching { SiteClient.sendScore(access, target, score) }
+            .onSuccess { lastSent = target.id to score }
+            .onFailure {
+                val now = System.currentTimeMillis()
+                if (now - lastFailLogAt >= FAIL_LOG_EVERY_MS) {
+                    lastFailLogAt = now
+                    log("site: score update failed - ${it.message}")
+                }
+            }
     }
 }

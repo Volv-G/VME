@@ -72,6 +72,7 @@ import works.vme.streamer.data.Settings
 import works.vme.streamer.data.Side
 import works.vme.streamer.data.SiteClient
 import works.vme.streamer.data.SiteLive
+import works.vme.streamer.data.SiteScore
 import works.vme.streamer.data.StreamConfig
 import works.vme.streamer.data.StreamQuality
 import works.vme.streamer.data.TeamStore
@@ -2806,9 +2807,47 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         null -> ""
     }
 
+    /**
+     * Hand the score to [SiteScore] for the public site.
+     *
+     * Called from [refreshAllViews] because that is the one place every
+     * score change already passes through -- a point, a set or game
+     * end, a correction, an Undo -- so hooking each of those separately
+     * would only be a list of places to forget the next one. Repaints
+     * that do not move the score cost a comparison: SiteScore drops a
+     * state the site already has.
+     *
+     * Nothing before the first serve of a match nobody has scored: a
+     * match opened to check the line-up is not news.
+     */
+    private fun pushScoreToSite(s: GameState) {
+        if (!s.gameStarted && s.homeScore == 0 && s.awayScore == 0 && s.setScores.isEmpty()) return
+        val origin = match.vmeOrigin
+        SiteScore.post(
+            this,
+            SiteClient.ScoreTarget(
+                team = origin?.team ?: match.team,
+                id = match.slug,
+                matchKey = origin?.let { "${it.tournament}/${it.date}/${it.name}" },
+                opponent = match.opponent,
+                date = match.date,
+            ),
+            SiteClient.Score(
+                homeSets = s.homeSets,
+                awaySets = s.awaySets,
+                sets = s.setScores,
+                home = s.homeScore,
+                away = s.awayScore,
+                ended = s.gameEnded,
+            ),
+            ::log,
+        )
+    }
+
     /** Repaint every view that depends on `gameState` or `match`. */
     private fun refreshAllViews() {
         val s = gameState
+        pushScoreToSite(s)
         val lineup = lineupState
         scoreHomeBig.text = s.homeScore.toString()
         scoreAwayBig.text = s.awayScore.toString()
