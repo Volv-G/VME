@@ -100,9 +100,9 @@ data class Roster(
  * import and editable on the phone afterwards, because the name is
  * wanted at the gym and the server is not always reachable from one.
  *
- * `announceTo` has no VME counterpart: it is the phone that knows a
- * broadcast has started, and it is the only moment the announcement is
- * worth sending.
+ * The announcement settings (email and WhatsApp) have no VME
+ * counterpart: it is the phone that knows a broadcast has started, and
+ * it is the only moment the announcement is worth sending.
  */
 data class StreamConfig(
     /** Title template. Placeholders: `{team}`, `{opponent}`, `{date}`,
@@ -124,6 +124,16 @@ data class StreamConfig(
     val emailSubjectTemplate: String = DEFAULT_EMAIL_SUBJECT,
     /** Body of that email. Same placeholders as the subject. */
     val emailBodyTemplate: String = DEFAULT_EMAIL_BODY,
+    /**
+     * The team's WhatsApp group, by name. WhatsApp lets no app post to
+     * a group by itself, so this is a reminder rather than an address:
+     * when a broadcast starts the phone offers a notification that opens
+     * WhatsApp with [whatsappTemplate] filled in, ready to send to this
+     * group. Blank = no WhatsApp step.
+     */
+    val whatsappGroup: String = "",
+    /** That WhatsApp message. Same placeholders as the email. */
+    val whatsappTemplate: String = DEFAULT_WHATSAPP,
 ) {
     /**
      * Fill the placeholders. Unknown ones are left alone rather than
@@ -153,6 +163,8 @@ data class StreamConfig(
             "Tournament: {tournament}\n" +
             "Date: {date}\n\n" +
             "Watch: {url}\n"
+        /** Short, for a chat: the link previews itself. */
+        const val DEFAULT_WHATSAPP = "🔴 LIVE now: {team} vs {opponent} ({tournament})\n{url}"
 
         /**
          * Placeholder values for one fixture.

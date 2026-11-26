@@ -44,6 +44,8 @@ class TeamSettingsActivity : ComponentActivity() {
     private lateinit var descriptionInput: EditText
     private lateinit var playlistInput: EditText
     private lateinit var announceInput: EditText
+    private lateinit var whatsappInput: EditText
+    private lateinit var whatsappMessageInput: EditText
     private lateinit var subjectInput: EditText
     private lateinit var bodyInput: EditText
     private lateinit var preview: TextView
@@ -104,18 +106,34 @@ class TeamSettingsActivity : ComponentActivity() {
         bodyInput = field(cfg.emailBodyTemplate, lines = 5)
         root.addView(bodyInput)
         root.addView(hint(
-            "These two additionally take {title} - the stream title " +
-            "rendered above - and {url}, the YouTube watch link."
+            "These two, and the WhatsApp message below, additionally " +
+            "take {title} - the stream title rendered above - and {url}, " +
+            "the YouTube watch link."
         ))
 
-        root.addView(label("Announce to"))
-        announceInput = field(cfg.announceTo, lines = 3)
+        root.addView(label("Email group"))
+        announceInput = field(cfg.announceTo, lines = 2)
         root.addView(announceInput)
         root.addView(hint(
-            "One address per line, emailed by VME when the broadcast " +
-            "starts. A Google Group works best here: membership is then " +
-            "managed in Google rather than on this phone."
+            "Emailed from this phone, on the Google account that runs " +
+            "the stream, when a new broadcast starts. A Google Group " +
+            "address works best: membership is then managed in Google " +
+            "rather than on this phone. More than one: one per line."
         ))
+
+        root.addView(label("WhatsApp group"))
+        whatsappInput = field(cfg.whatsappGroup, lines = 1)
+        root.addView(whatsappInput)
+        root.addView(hint(
+            "The group's name. WhatsApp does not let apps post to a " +
+            "group on their own, so when a new broadcast starts a " +
+            "notification offers the message below; tap it, pick this " +
+            "group and send. Leave blank for none."
+        ))
+
+        root.addView(label("WhatsApp message"))
+        whatsappMessageInput = field(cfg.whatsappTemplate, lines = 3)
+        root.addView(whatsappMessageInput)
 
         root.addView(View(this), LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 24,
@@ -191,6 +209,9 @@ class TeamSettingsActivity : ComponentActivity() {
                 .ifBlank { StreamConfig.DEFAULT_EMAIL_SUBJECT },
             emailBodyTemplate = bodyInput.text.toString().trim()
                 .ifBlank { StreamConfig.DEFAULT_EMAIL_BODY },
+            whatsappGroup = whatsappInput.text.toString().trim(),
+            whatsappTemplate = whatsappMessageInput.text.toString().trim()
+                .ifBlank { StreamConfig.DEFAULT_WHATSAPP },
         )
         store.save(team.copy(stream = cfg))
         Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show()

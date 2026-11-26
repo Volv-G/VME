@@ -63,11 +63,15 @@ object VmeClient {
     }
 
     /** GET `/api/teams/{team}/roster` — the roster itself, parsed into
-     *  the local shape. Throws if the server returns 4xx/5xx or if the
-     *  JSON does not have the expected keys. */
-    fun fetchRoster(baseUrl: String, teamSlug: String, creds: Credentials? = null): Roster {
+     *  the local shape, and the stream naming from its `youtube` block.
+     *  Throws if the server returns 4xx/5xx or if the JSON does not have
+     *  the expected keys. */
+    fun fetchRoster(
+        baseUrl: String, teamSlug: String, creds: Credentials? = null,
+    ): Pair<Roster, StreamConfig> {
         val body = get("${normalize(baseUrl)}/api/teams/$teamSlug/roster", creds)
-        return JSONObject(body).toRoster()
+        val obj = JSONObject(body)
+        return obj.toRoster() to obj.toStreamConfig()
     }
 
     /**

@@ -15,6 +15,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
 import android.text.SpannableStringBuilder
 import android.text.Spanned
@@ -56,6 +57,7 @@ import works.vme.streamer.BuildConfig
 import works.vme.streamer.StreamService
 import works.vme.streamer.UvcVideoSource
 import works.vme.streamer.Mail
+import works.vme.streamer.WhatsAppShare
 import works.vme.streamer.YouTubeAuth
 import works.vme.streamer.YouTubeLive
 import works.vme.streamer.data.EventType
@@ -420,10 +422,16 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         refreshAllViews()
         log("match: ${match.name} vs ${match.opponent} on ${match.date}")
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
+        // The mic for the stream; notifications for the live badge and
+        // the WhatsApp announcement (a runtime grant since Android 13).
+        val wanted = buildList {
+            add(Manifest.permission.RECORD_AUDIO)
+            if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+        }.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (wanted.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, wanted.toTypedArray(), 1)
         }
         window.decorView.postDelayed(fpsTicker, 1000)
         window.decorView.postDelayed(rallyTicker, 250)
@@ -3581,6 +3589,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                     uploadThumbnail(token, broadcast.id)
                     filePlaylist(token, cfg, broadcast.id)
                     announceLive(token, cfg, title, broadcast.watchUrl)
+                    offerWhatsApp(cfg, title, broadcast.watchUrl)
                 }
 
                 val url = "${YouTubeLive.INGEST_PRIMARY}/${chosen.key}"
@@ -3686,11 +3695,7 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
         // `title` and `url` exist only once the broadcast does, which
         // is why the email templates take a fuller set of placeholders
         // than the ones that produce the title itself.
-        val vars = StreamConfig.vars(
-            match.homeRoster.teamName.ifBlank { match.team },
-            match.opponent, match.date, match.tournament,
-            title = title, url = watchUrl,
-        )
+        val vars = announceVars(title, watchUrl)
         val subject = cfg.render(cfg.emailSubjectTemplate, vars)
         val body = cfg.render(cfg.emailBodyTemplate, vars)
         Thread {
@@ -3706,6 +3711,26 @@ class MatchLiveActivity : ComponentActivity(), ConnectChecker {
                 for (f in failures) log("live: announce failed for $f")
             }
         }.start()
+    }
+
+    /** Placeholder values for the announcements (email and WhatsApp). */
+    private fun announceVars(title: String, watchUrl: String) = StreamConfig.vars(
+        match.homeRoster.teamName.ifBlank { match.team },
+        match.opponent, match.date, match.tournament,
+        title = title, url = watchUrl,
+    )
+
+    /**
+     * Offer the WhatsApp announcement: a notification that opens
+     * WhatsApp with the message written, for the operator to send to
+     * the team's group (see [works.vme.streamer.WhatsAppShare] for why
+     * it cannot be sent outright).
+     */
+    private fun offerWhatsApp(cfg: StreamConfig, title: String, watchUrl: String) {
+        if (cfg.whatsappGroup.isBlank()) return
+        val text = cfg.render(cfg.whatsappTemplate, announceVars(title, watchUrl))
+        WhatsAppShare.offer(applicationContext, cfg.whatsappGroup, text)
+        log("live: WhatsApp message ready in the notifications")
     }
 
     /**

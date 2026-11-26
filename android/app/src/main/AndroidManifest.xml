@@ -13,9 +13,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
-    <!-- Only to show the "VME is live" notification. Denying it costs
-         the notification, not the broadcast. -->
+    <!-- For the "VME is live" notification and the WhatsApp announcement
+         offer. Denying it costs the notifications, not the broadcast. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- To find WhatsApp (or WhatsApp Business) for the live announcement
+         (WhatsAppShare.kt); apps are invisible otherwise since Android 11. -->
+    <queries>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
+    </queries>
     <!-- UVCAndroid talks to the adapter through UsbManager, not the
          platform camera service, but it still declares the camera
          permission internally. -->

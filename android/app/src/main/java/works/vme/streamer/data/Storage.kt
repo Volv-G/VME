@@ -117,9 +117,10 @@ fun JSONObject.toRoster(): Roster {
  *
  * The keys are VME's, so a roster fetched straight from the server
  * arrives already configured -- the phone does not have to be told the
- * naming a team already uses for its uploads. `_announce_to` is the one
- * addition, underscored because VME has no notion of it and its
- * importer ignores unknown underscore-prefixed keys.
+ * naming a team already uses for its uploads. The announcement keys
+ * (`_announce_to`, `_email_*`, `_whatsapp_*`) are the additions,
+ * underscored because VME has no notion of them and its importer
+ * ignores unknown underscore-prefixed keys.
  */
 fun JSONObject.toStreamConfig(): StreamConfig {
     val yt = optJSONObject("youtube") ?: JSONObject()
@@ -134,6 +135,9 @@ fun JSONObject.toStreamConfig(): StreamConfig {
             .ifBlank { StreamConfig.DEFAULT_EMAIL_SUBJECT },
         emailBodyTemplate = yt.optString("_email_body")
             .ifBlank { StreamConfig.DEFAULT_EMAIL_BODY },
+        whatsappGroup = yt.optString("_whatsapp_group"),
+        whatsappTemplate = yt.optString("_whatsapp_message")
+            .ifBlank { StreamConfig.DEFAULT_WHATSAPP },
     )
 }
 
@@ -144,6 +148,8 @@ fun StreamConfig.toJson(): JSONObject = JSONObject()
     .put("_announce_to", announceTo)
     .put("_email_subject", emailSubjectTemplate)
     .put("_email_body", emailBodyTemplate)
+    .put("_whatsapp_group", whatsappGroup)
+    .put("_whatsapp_message", whatsappTemplate)
 
 fun Roster.toJson(): JSONObject {
     val obj = JSONObject()

@@ -183,7 +183,12 @@ class RosterImportActivity : ComponentActivity() {
         log("GET $base/api/teams/$teamSlug/roster ...")
         Thread {
             try {
-                val roster: Roster = VmeClient.fetchRoster(base, teamSlug, creds)
+                val (roster: Roster, vmeStream) = VmeClient.fetchRoster(base, teamSlug, creds)
+                // The stream settings are VME's naming on a first import,
+                // and whatever this phone has on a re-import: they are
+                // edited here (and the announcement lists exist only here),
+                // so a roster refresh must not reset them.
+                val stream = store.load(teamSlug)?.stream ?: vmeStream
                 // If the server left `team_name` blank (older exports),
                 // fall back to the slug — the user can rename on
                 // re-import if they care.
@@ -228,6 +233,7 @@ class RosterImportActivity : ComponentActivity() {
                 store.save(Team(
                     slug = teamSlug,
                     roster = withLogo,
+                    stream = stream,
                     sourceUrl = base,
                     importedAt = System.currentTimeMillis() / 1000L,
                 ))
