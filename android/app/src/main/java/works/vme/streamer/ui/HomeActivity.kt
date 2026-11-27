@@ -6,6 +6,8 @@ import android.app.TimePickerDialog
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -19,6 +21,7 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 
 import androidx.core.content.FileProvider
+import works.vme.streamer.RequestAlerts
 import works.vme.streamer.data.Match
 import works.vme.streamer.data.MatchStore
 import works.vme.streamer.data.PhotoCache
@@ -68,6 +71,13 @@ class HomeActivity : ComponentActivity() {
         val root = buildUi()
         setContentView(root)
         root.applySystemBarInsets()
+        // Join requests arrive as notifications (RequestAlerts), so ask
+        // here rather than only when a match first goes live.
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 41)
+        }
     }
 
     /** onResume — not onCreate — because a returning trip from the
@@ -77,6 +87,18 @@ class HomeActivity : ComponentActivity() {
         refresh()
         refreshServerHint()
         refreshSchedule()
+        checkRequests()
+    }
+
+    /** Make sure the 15-minute check is scheduled, and check now. */
+    private fun checkRequests() {
+        if (Settings.siteAccess(this) == null) return
+        RequestAlerts.schedule(this)
+        val app = applicationContext
+        Thread {
+            runCatching { RequestAlerts.check(app) }
+                .onFailure { android.util.Log.i("VMERequests", "check failed: ${it.message}") }
+        }.start()
     }
 
     private fun refreshServerHint() {

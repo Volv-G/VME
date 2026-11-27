@@ -13,9 +13,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
-    <!-- For the "VME is live" notification and the WhatsApp announcement
-         offer. Denying it costs the notifications, not the broadcast. -->
+    <!-- For the "VME is live" notification, the WhatsApp announcement
+         offer and join requests. Denying it costs the notifications,
+         not the broadcast. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Keeps the join-request check (RequestAlerts) scheduled across
+         a reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- To find WhatsApp (or WhatsApp Business) for the live announcement
          (WhatsAppShare.kt); apps are invisible otherwise since Android 11. -->
@@ -116,6 +120,11 @@
             android:exported="false"
             android:screenOrientation="fullUser"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
+
+        <service
+            android:name=".RequestAlertJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <service
             android:name=".StreamService"

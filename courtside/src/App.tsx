@@ -2,7 +2,7 @@ import { Link, Navigate, Route, Routes, useParams } from "react-router-dom";
 import type { MatchDoc, MatchSummary, TeamDoc, TeamsDoc, Video } from "../shared/docs";
 import { useEffect, useState, type ReactNode } from "react";
 import type { Me } from "../shared/api";
-import { formatDate, imageUrl, MeContext, savedInvites, useApi, useDoc, useMe } from "./api";
+import { formatDate, imageUrl, MeContext, onRefresh, savedInvites, startAutoRefresh, useApi, useDoc, useMe } from "./api";
 import { Crest, Gate, InviteButton, matchPath, playerPath, teamPath, TeamTheme } from "./common";
 import { AdminPage } from "./Admin";
 import { JoinPage } from "./Join";
@@ -12,14 +12,18 @@ import { VideoTile, videoKey } from "./YouTube";
 import { knownId, loadReveals, matchSpoiler, seasonSpoiler, seenId, Spoiler, useRevealed, useReveals } from "./Spoilers";
 import { LiveBanner, LiveChip, UpcomingSection } from "./Schedule";
 
-/** How often an open team or match page checks for a stream going live. */
-const LIVE_POLL_MS = 60_000;
-
 export function App() {
   const me = useApi<Me>("/api/me");
   const value = { me: me.state === "ok" ? me.doc : null, reload: me.reload };
   useEffect(() => {
     void loadReveals();
+    // Reveals made on another device come over with each refresh too.
+    const off = onRefresh(() => void loadReveals());
+    const stop = startAutoRefresh();
+    return () => {
+      off();
+      stop();
+    };
   }, []);
   return (
     <MeContext.Provider value={value}>
@@ -196,7 +200,7 @@ function SeasonSpoiler({ t, children }: { t: TeamDoc; children: ReactNode }) {
 function TeamPage() {
   const { team = "" } = useParams();
   const { me } = useMe();
-  const res = useDoc<TeamDoc>(`team/${team}`, LIVE_POLL_MS);
+  const res = useDoc<TeamDoc>(`team/${team}`);
   const spoilers = useReveals();
   const manyTeams =
     !me || me.admin || new Set(me.memberships.filter((m) => m.status === "approved").map((m) => m.team)).size > 1;
@@ -372,7 +376,7 @@ const VIDEO_TITLES: Record<Video["kind"], string> = {
 
 function MatchPage() {
   const { team = "", tournament = "", date = "", match = "" } = useParams();
-  const res = useDoc<MatchDoc>(`match/${team}/${tournament}/${date}/${match}`, LIVE_POLL_MS);
+  const res = useDoc<MatchDoc>(`match/${team}/${tournament}/${date}/${match}`);
   // Same id the team page checks: the match key is the URL tail.
   const key = `${tournament}/${date}/${match}`;
   const [revealed, reveal] = useRevealed(matchSpoiler(team, key));

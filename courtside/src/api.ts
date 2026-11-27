@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { Me } from "../shared/api";
 
 export const imageUrl = (key: string) => `/api/image/${key.split("/").map(encodeURIComponent).join("/")}`;
@@ -9,25 +9,88 @@ export type Loaded<T> =
   | { state: "error"; status: number; message: string }
   | { state: "ok"; doc: T };
 
-/** Any GET under /api, reloadable. `path` null = don't load (yet). */
+/**
+ * Open pages keep themselves current: every view loaded with useApi or
+ * useDoc fetches again each minute while the tab is visible, and at once
+ * when the tab comes back to the front or the network returns. New
+ * matches, videos, scores, streams and join requests show up without a
+ * reload.
+ */
+const REFRESH_MS = 60_000;
+/** Coming back sooner than this after the last round doesn't refetch. */
+const WAKE_GAP_MS = 10_000;
+const refreshers = new Set<() => void>();
+let lastRefresh = Date.now();
+
+function refreshAll() {
+  lastRefresh = Date.now();
+  refreshers.forEach((f) => f());
+}
+
+/** Something else to redo on each round (App: the spoiler reveals). */
+export function onRefresh(f: () => void): () => void {
+  refreshers.add(f);
+  return () => {
+    refreshers.delete(f);
+  };
+}
+
+/** Started once, by App. */
+export function startAutoRefresh(): () => void {
+  const visible = () => document.visibilityState === "visible";
+  const timer = setInterval(() => visible() && refreshAll(), REFRESH_MS);
+  const wake = () => {
+    if (visible() && Date.now() - lastRefresh > WAKE_GAP_MS) refreshAll();
+  };
+  document.addEventListener("visibilitychange", wake);
+  window.addEventListener("online", wake);
+  window.addEventListener("focus", wake);
+  return () => {
+    clearInterval(timer);
+    document.removeEventListener("visibilitychange", wake);
+    window.removeEventListener("online", wake);
+    window.removeEventListener("focus", wake);
+  };
+}
+
+/**
+ * Any GET under /api, reloadable. `path` null = don't load (yet).
+ *
+ * An automatic refresh is quiet: when it fails (a blip, the Access
+ * session lapsing) the page keeps what it shows rather than turning into
+ * an error, and when nothing changed nothing re-renders.
+ */
 export function useApi<T>(path: string | null): Loaded<T> & { reload: () => void } {
   const [res, setRes] = useState<Loaded<T>>({ state: "loading" });
-  const [tick, setTick] = useState(0);
-  const reload = useCallback(() => setTick((t) => t + 1), []);
+  const [tick, setTick] = useState({ n: 0, quiet: false });
+  const reload = useCallback(() => setTick((t) => ({ n: t.n + 1, quiet: false })), []);
+  useEffect(() => onRefresh(() => setTick((t) => ({ n: t.n + 1, quiet: true }))), []);
+  // The body last shown, and for which path.
+  const shown = useRef<{ path: string; text: string } | null>(null);
   useEffect(() => {
     if (path === null) return;
     let live = true;
+    const quiet = tick.quiet && shown.current?.path === path;
+    const fail = (status: number, message: string) => {
+      if (!live || quiet) return;
+      shown.current = null;
+      setRes({ state: "error", status, message });
+    };
     fetch(path, { credentials: "same-origin" })
       .then(async (r) => {
         if (!live) return;
         if (!r.ok) {
           const body = await r.json().catch(() => ({}));
-          setRes({ state: "error", status: r.status, message: body.error || r.statusText });
+          fail(r.status, body.error || r.statusText);
           return;
         }
-        setRes({ state: "ok", doc: (await r.json()) as T });
+        const text = await r.text();
+        if (!live || (shown.current?.path === path && shown.current.text === text)) return;
+        const doc = JSON.parse(text) as T;
+        shown.current = { path, text };
+        setRes({ state: "ok", doc });
       })
-      .catch((e) => live && setRes({ state: "error", status: 0, message: String(e) }));
+      .catch((e) => fail(0, String(e)));
     return () => {
       live = false;
     };
@@ -35,19 +98,10 @@ export function useApi<T>(path: string | null): Loaded<T> & { reload: () => void
   return { ...res, reload };
 }
 
-/** One published document, by key (see shared/docs.ts). `everyMs`
- *  reloads it on a timer while the page is open (live streams). */
-export function useDoc<T>(key: string, everyMs?: number): Loaded<T> & { reload: () => void } {
-  const res = useApi<T>(docPath(key));
-  const { reload } = res;
-  useEffect(() => {
-    if (!everyMs) return;
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible") reload();
-    }, everyMs);
-    return () => clearInterval(timer);
-  }, [everyMs, reload]);
-  return res;
+/** One published document, by key (see shared/docs.ts). Refreshed
+ *  like everything else (see REFRESH_MS). */
+export function useDoc<T>(key: string): Loaded<T> & { reload: () => void } {
+  return useApi<T>(docPath(key));
 }
 
 export async function post<T = unknown>(path: string, body: unknown): Promise<T> {

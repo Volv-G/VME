@@ -272,6 +272,38 @@ object SiteClient {
         request(access, "POST", "/api/publish/phone/score", body)
     }
 
+    // ---- join requests -----------------------------------------------
+
+    /** Someone waiting for the admin to let them into a team. */
+    data class JoinRequest(
+        val id: Long,
+        val email: String,
+        val teamName: String,
+        /** `player` or `coach`. */
+        val role: String,
+        /** "#6 Claire C"; blank for a coach. */
+        val playerName: String,
+        val note: String,
+        /** Changes when someone asks again after a decline, so the
+         *  second ask is notified like the first. */
+        val requestedAt: Long,
+    )
+
+    fun fetchRequests(access: Access): List<JoinRequest> {
+        val o = JSONObject(request(access, "GET", "/api/publish/phone/requests", null))
+        return o.optJSONArray("requests").objects().map {
+            JoinRequest(
+                id = it.optLong("id"),
+                email = it.optString("email"),
+                teamName = it.optString("team_name").ifBlank { it.optString("team") },
+                role = it.optString("role"),
+                playerName = it.optString("player_name"),
+                note = it.optString("note"),
+                requestedAt = it.optLong("requested_at"),
+            )
+        }
+    }
+
     // ---- linking -----------------------------------------------------
 
     /**

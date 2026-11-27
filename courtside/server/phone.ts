@@ -4,17 +4,20 @@
  * bearer token. VME makes the token, hands it to the phone and publishes
  * only its SHA-256 here (settings `phone_token_sha256`), so the site
  * never holds the token itself. It can read the schedule, leave changes
- * to it and say a stream is live - nothing else.
+ * to it, say a stream is live and see who is waiting to join - nothing
+ * else.
  *
  *   GET  /api/publish/phone/schedule   every team's upcoming matches, pending changes, live streams
  *   POST /api/publish/phone/schedule   {team, action, key?, tournament?, date?, time?, opponent?}
  *   POST /api/publish/phone/live       {team, id, match_key?, opponent, title, url, live, score?}
  *   POST /api/publish/phone/score      {team, id, match_key?, opponent, date, score}
+ *   GET  /api/publish/phone/requests   join requests waiting for the admin (the phone notifies)
  */
 import type { Env } from "../shared/env";
 import type { TeamDoc, TeamsDoc } from "../shared/docs";
 import { getDoc } from "./content";
 import { HttpError, json, readBody, sameSecret } from "./http";
+import { pendingRequests } from "./members";
 import { liveNow, pendingSchedule, queueScheduleEdit, reportLive, reportScore, type LiveIn, type ScheduleEditIn, type ScoreIn } from "./schedule";
 
 async function sha256Hex(s: string): Promise<string> {
@@ -58,6 +61,12 @@ export async function phoneRoute(path: string, request: Request, env: Env): Prom
       });
     }
     return json({ teams, live: await liveNow(env) });
+  }
+
+  // The phone is the admin's: it polls this and puts each new request
+  // up as a notification, which an email to oneself never gets.
+  if (path === "publish/phone/requests" && method === "GET") {
+    return json({ requests: await pendingRequests(env) });
   }
 
   if (path === "publish/phone/schedule" && method === "POST") {

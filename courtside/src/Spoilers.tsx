@@ -43,7 +43,7 @@ function send(ids: string[]) {
   }
 }
 
-/** Once per visit: merge the site's reveals with this browser's. */
+/** On each visit and refresh: merge the site's reveals with this browser's. */
 export async function loadReveals(): Promise<void> {
   try {
     const r = await fetch("/api/reveals", { credentials: "same-origin" });
@@ -51,8 +51,10 @@ export async function loadReveals(): Promise<void> {
     const { ids } = (await r.json()) as { ids: string[] };
     const server = new Set(ids);
     const onlyHere = [...revealedIds].filter((id) => !server.has(id));
+    const before = revealedIds.size;
     ids.forEach((id) => revealedIds.add(id));
-    changed();
+    // Most refreshes bring nothing new; don't redraw for those.
+    if (revealedIds.size !== before) changed();
     if (onlyHere.length) send(onlyHere);
   } catch {
     /* the browser's copy will do */
