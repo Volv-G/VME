@@ -374,6 +374,10 @@ class CreateMatchIn(BaseModel):
     opponent_from: Optional[MatchRefIn] = None
     # Scheduled start, "HH:MM" local, for a match added ahead of time.
     start_time: Optional[str] = None
+    # A club (library/clubs.py) to take the opponent's colour and badge
+    # from; `opponent_color` is the colour picked, else the club's first.
+    club: Optional[str] = None
+    opponent_color: Optional[str] = None
 
 
 class OpponentOut(BaseModel):

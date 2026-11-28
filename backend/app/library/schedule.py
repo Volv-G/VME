@@ -9,6 +9,9 @@ Three places can put a match on the schedule, and VME stays the one
 that keeps it:
 
 - VME itself (the new-match form takes a time).
+
+Wherever it is added, a match can name a club (library/clubs.py): the
+opponent then gets the club's colour - or the one picked - and badge.
 - The site, by a coach or the admin, and the phone at the gym. Neither
   can reach this PC, so they leave a change with the site and VME
   fetches it on its next sync (publish/site_sync.py) and applies it
@@ -28,7 +31,7 @@ from typing import Any, Optional
 
 from ..domain.match import Match
 from ..domain.tournament import Tournament
-from . import paths, scanner
+from . import clubs, paths, scanner
 
 logger = logging.getLogger(__name__)
 
@@ -113,41 +116,72 @@ def _played(team: str, where: tuple[str, str, str], m: Match) -> bool:
     return bool(m.events or m.clips or scanner.match_video(paths.match_dir(team, *where)))
 
 
-def add(team: str, tournament: str, date: str, opponent: str, time: Optional[str]) -> str:
-    """Put a match on the schedule; returns its key."""
-    opponent = (opponent or "").strip()
+def _club(typed: Optional[str]) -> Optional[clubs.Club]:
+    """The club a change names, if VME has it. One deleted meanwhile
+    costs the colour and badge, not the match."""
+    club = clubs.find(typed)
+    if typed and club is None:
+        logger.warning("schedule: no club %r; the match goes on without it", typed)
+    return club
+
+
+def _dress(team: str, where: tuple[str, str, str], m: Match, club: Optional[clubs.Club], color: Optional[str]) -> None:
+    if club is not None:
+        clubs.dress(paths.match_dir(team, *where), m, club, color)
+    elif color:
+        m.opponent_roster.team_name = m.opponent_roster.team_name or m.opponent
+        m.opponent_roster.team_color = clubs.normalize_color(color)
+
+
+def add(team: str, tournament: str, date: str, opponent: str, time: Optional[str],
+        club: Optional[str] = None, color: Optional[str] = None) -> str:
+    """Put a match on the schedule; returns its key. With a `club`, the
+    opponent gets its colour (or `color`) and badge, and its name when
+    none is typed."""
+    picked = _club(club)
+    opponent = (opponent or "").strip() or (picked.name if picked else "")
     if not opponent:
         raise ValueError("Opponent is required")
     date = normalize_date(date)
     time = normalize_time(time)
+    color = clubs.normalize_color(color)
     folder = _tournament(team, tournament)
     name, m = scanner.create_match(team, folder, date, opponent)
     m.start_time = time
+    _dress(team, (folder, date, name), m, picked, color)
     m.save(paths.match_json_path(team, folder, date, name))
     return f"{folder}/{date}/{name}"
 
 
-def update(team: str, key: str, *, date: Optional[str], time: Optional[str], opponent: Optional[str]) -> str:
-    """Change an unplayed match's day, time or opponent; returns its key
-    (a new day or opponent means a new folder, so a new key)."""
+def update(team: str, key: str, *, date: Optional[str], time: Optional[str], opponent: Optional[str],
+           club: Optional[str] = None, color: Optional[str] = None) -> str:
+    """Change an unplayed match's day, time or opponent - or its club or
+    colour; returns its key (a new day or opponent means a new folder,
+    so a new key)."""
     where, m = _load(team, key)
     if _played(team, where, m):
         raise ValueError(f"{key} has been played; change it in VME")
+    picked = _club(club)
+    color = clubs.normalize_color(color)
     new_date = normalize_date(date) if date else where[1]
     new_opponent = (opponent or "").strip() or m.opponent
     if new_date != where[1] or new_opponent != m.opponent:
         # Recreate rather than rename: the folder name carries the date
         # and the opponent, and create_match picks a free match number
-        # on the new day. The opponent's roster and badge come along.
+        # on the new day. The opponent's roster and badge come along
+        # when it is the same opponent.
         new_name, fresh = scanner.create_match(
             team, where[0], new_date, new_opponent,
             opponent_from=where if new_opponent == m.opponent else None,
         )
         fresh.start_time = normalize_time(time)
-        fresh.save(paths.match_json_path(team, where[0], new_date, new_name))
+        new_where = (where[0], new_date, new_name)
+        _dress(team, new_where, fresh, picked, color)
+        fresh.save(paths.match_json_path(team, *new_where))
         scanner.delete_match(team, *where)
         return f"{where[0]}/{new_date}/{new_name}"
     m.start_time = normalize_time(time)
+    _dress(team, where, m, picked, color)
     m.save(paths.match_json_path(team, *where))
     return key
 
@@ -171,10 +205,12 @@ def apply_edit(edit: dict) -> bool:
     try:
         if action == "add":
             key = add(team, edit.get("tournament") or "", edit.get("date") or "",
-                      edit.get("opponent") or "", edit.get("time"))
+                      edit.get("opponent") or "", edit.get("time"),
+                      club=edit.get("club"), color=edit.get("color"))
         elif action == "update":
             key = update(team, edit.get("key") or "", date=edit.get("date"),
-                         time=edit.get("time"), opponent=edit.get("opponent"))
+                         time=edit.get("time"), opponent=edit.get("opponent"),
+                         club=edit.get("club"), color=edit.get("color"))
         elif action == "delete":
             remove(team, edit.get("key") or "")
             key = edit.get("key")

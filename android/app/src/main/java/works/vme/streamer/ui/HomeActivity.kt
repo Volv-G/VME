@@ -948,7 +948,37 @@ class HomeActivity : ComponentActivity() {
             setSingleLine()
             setText(existing?.opponent.orEmpty())
         }
-        form.addView(opponentInput)
+        // A club set up in VME fills the name in - still editable, "NW
+        // Jrs. Grey" - and VME gives the match its colour and badge.
+        var club: works.vme.streamer.data.ClubStore.Club? = null
+        var clubColor: String? = null
+        val clubNote = TextView(this).apply { textSize = 11f; visibility = View.GONE }
+        val opponentRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        opponentRow.addView(opponentInput, LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+        ))
+        opponentRow.addView(Button(this).apply {
+            text = "Club"
+            setOnClickListener {
+                ClubPicker.pick(this@HomeActivity) { picked, color ->
+                    val typed = opponentInput.text.toString().trim()
+                    val previous = listOfNotNull(club?.name, existing?.opponent)
+                    if (typed.isBlank() || previous.any { it.equals(typed, ignoreCase = true) }) {
+                        opponentInput.setText(picked.name)
+                    }
+                    club = picked
+                    clubColor = color
+                    clubNote.text = "Club: ${picked.name}" + (color?.let { " · colour $it" } ?: "") +
+                        (if (picked.logo != null) " · badge" else "")
+                    clubNote.visibility = View.VISIBLE
+                }
+            }
+        })
+        form.addView(opponentRow)
+        form.addView(clubNote)
 
         val dialog = AlertDialog.Builder(this)
             .setTitle(if (existing == null) "Schedule a match" else "Edit match")
@@ -975,6 +1005,7 @@ class HomeActivity : ComponentActivity() {
                 submitSchedule(
                     team.slug, if (existing == null) "add" else "update",
                     existing?.key, tournament, date, time, opponent, access,
+                    club?.id, clubColor,
                 )
             }
         }
@@ -985,11 +1016,12 @@ class HomeActivity : ComponentActivity() {
         team: String, action: String, key: String?,
         tournament: String, date: String, time: String?, opponent: String,
         access: SiteClient.Access? = Settings.siteAccess(this),
+        club: String? = null, clubColor: String? = null,
     ) {
         if (access == null) { toast("Not linked to the site - see Settings"); return }
         Thread {
             val r = runCatching {
-                SiteClient.submitSchedule(access, team, action, key, tournament, date, time, opponent)
+                SiteClient.submitSchedule(access, team, action, key, tournament, date, time, opponent, club, clubColor)
             }
             runOnUiThread {
                 r.onSuccess {

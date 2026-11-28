@@ -39,9 +39,14 @@ export function TeamSelectPage() {
           {/* The accounts VME uploads with are server-wide, so this is
               the one page that is always a sensible place to reach
               them from - a first-run visitor has no team to go via. */}
-          <Link to="/settings" className="button-like">
-            Server settings
-          </Link>
+          <span className="toolbar">
+            <Link to="/clubs" className="button-like" title="Opponents' clubs and schools: name, colours, badge">
+              Clubs
+            </Link>
+            <Link to="/settings" className="button-like">
+              Server settings
+            </Link>
+          </span>
         </div>
         {error && <div className="error">{error}</div>}
         {teams.length === 0 && !error && (

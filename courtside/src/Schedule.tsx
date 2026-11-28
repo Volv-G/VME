@@ -1,6 +1,7 @@
 import { useState } from "react";
-import type { LiveStream, ScheduleChange, TeamDoc, UpcomingMatch } from "../shared/docs";
-import { formatDate, formatTime, post } from "./api";
+import type { ClubsDoc, LiveStream, ScheduleChange, TeamDoc, UpcomingMatch } from "../shared/docs";
+import { formatDate, formatTime, imageUrl, post, useApi } from "./api";
+import { Crest } from "./common";
 
 /**
  * What's coming up, and what's on now.
@@ -9,7 +10,13 @@ import { formatDate, formatTime, post } from "./api";
  * move or cancel one, and the phone at the gym can too. Those changes
  * wait on the site until VME picks them up (within a minute while its PC
  * is on), so until then they're listed as "waiting for VME".
+ *
+ * Adding one, a club set up in VME can be picked: it fills in the
+ * opponent's name (which can then be made particular, "NW Jrs. Grey")
+ * and the colour, and VME gives the match the club's badge.
  */
+
+type Club = ClubsDoc["clubs"][number];
 
 const today = () => {
   const d = new Date();
@@ -51,6 +58,8 @@ export function LiveChip({ stream }: { stream: LiveStream }) {
 
 export function UpcomingSection({ t, onChanged }: { t: TeamDoc; onChanged: () => void }) {
   const [editing, setEditing] = useState<UpcomingMatch | "new" | null>(null);
+  const clubsDoc = useApi<ClubsDoc>(t.can_manage ? "/api/doc/clubs" : null);
+  const clubs = clubsDoc.state === "ok" ? clubsDoc.doc.clubs : [];
   const upcoming = (t.upcoming ?? []).filter((m) => m.date >= today());
   const pending = t.pending_schedule ?? [];
   const live = t.live ?? [];
@@ -68,7 +77,7 @@ export function UpcomingSection({ t, onChanged }: { t: TeamDoc; onChanged: () =>
         )}
       </h2>
       {editing === "new" && (
-        <ScheduleForm t={t} onDone={(changed) => (setEditing(null), changed && onChanged())} />
+        <ScheduleForm t={t} clubs={clubs} onDone={(changed) => (setEditing(null), changed && onChanged())} />
       )}
       {upcoming.length === 0 && added.length === 0 && editing !== "new" && (
         <p className="muted small">Nothing scheduled.</p>
@@ -79,10 +88,13 @@ export function UpcomingSection({ t, onChanged }: { t: TeamDoc; onChanged: () =>
             const waiting = pendingFor(m.key);
             const stream = live.find((s) => s.match_key === m.key);
             if (editing !== "new" && editing?.key === m.key) {
-              return <ScheduleForm key={m.key} t={t} match={m} onDone={(changed) => (setEditing(null), changed && onChanged())} />;
+              return <ScheduleForm key={m.key} t={t} clubs={clubs} match={m} onDone={(changed) => (setEditing(null), changed && onChanged())} />;
             }
             return (
               <div key={m.key} className="row upcoming-row">
+                {(m.opponent_logo || m.opponent_color) && (
+                  <Crest src={m.opponent_logo ?? null} color={m.opponent_color ?? undefined} label={m.opponent} size={32} />
+                )}
                 <span className="row-main">
                   <span>vs {m.opponent}</span>
                   <span className="muted small">
@@ -106,7 +118,7 @@ export function UpcomingSection({ t, onChanged }: { t: TeamDoc; onChanged: () =>
           {added.map((p) => (
             <div key={p.id} className="row upcoming-row">
               <span className="row-main">
-                <span>vs {p.opponent}</span>
+                <span>vs {p.opponent || clubs.find((c) => c.id === p.club)?.name || p.club}</span>
                 <span className="muted small">
                   {when(p.date, p.time)} · {p.tournament}
                 </span>
@@ -127,13 +139,25 @@ function describe(p: ScheduleChange): string {
 }
 
 /** Add a match, or change / cancel `match`. */
-function ScheduleForm({ t, match, onDone }: { t: TeamDoc; match?: UpcomingMatch; onDone: (changed: boolean) => void }) {
+function ScheduleForm({ t, clubs, match, onDone }: { t: TeamDoc; clubs: Club[]; match?: UpcomingMatch; onDone: (changed: boolean) => void }) {
   const names = t.tournament_names ?? t.tournaments.map((x) => ({ slug: x.slug, name: x.name }));
   const [tournament, setTournament] = useState(match?.tournament_name ?? t.tournaments[0]?.name ?? names[0]?.name ?? "");
   const [date, setDate] = useState(match?.date ?? today());
   const [time, setTime] = useState(match?.time ?? "");
   const [opponent, setOpponent] = useState(match?.opponent ?? "");
+  const [club, setClub] = useState<Club | null>(null);
+  const [color, setColor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  /** The club's name goes in unless another was typed, and its main colour. */
+  function pickClub(id: string) {
+    const picked = clubs.find((c) => c.id === id) ?? null;
+    const typed = opponent.trim().toLowerCase();
+    const replaceable = !typed || (club && typed === club.name.toLowerCase()) || (match && typed === match.opponent.toLowerCase());
+    if (picked && replaceable) setOpponent(picked.name);
+    setClub(picked);
+    setColor(picked?.colors[0] ?? null);
+  }
   const [error, setError] = useState<string | null>(null);
 
   async function send(body: Record<string, unknown>) {
@@ -150,12 +174,13 @@ function ScheduleForm({ t, match, onDone }: { t: TeamDoc; match?: UpcomingMatch;
 
   function save(e: React.FormEvent) {
     e.preventDefault();
+    const dress = club ? { club: club.id, color } : {};
     if (match) {
-      void send({ action: "update", key: match.key, date, time: time || null, opponent: opponent.trim() });
+      void send({ action: "update", key: match.key, date, time: time || null, opponent: opponent.trim(), ...dress });
     } else {
       // The folder name when the typed name is one VME already has.
       const known = names.find((n) => n.name.toLowerCase() === tournament.trim().toLowerCase());
-      void send({ action: "add", tournament: known?.slug ?? tournament.trim(), date, time: time || null, opponent: opponent.trim() });
+      void send({ action: "add", tournament: known?.slug ?? tournament.trim(), date, time: time || null, opponent: opponent.trim(), ...dress });
     }
   }
 
@@ -172,9 +197,40 @@ function ScheduleForm({ t, match, onDone }: { t: TeamDoc; match?: UpcomingMatch;
           </datalist>
         </label>
       )}
+      {clubs.length > 0 && (
+        <label>
+          <span>Club <span className="muted small">(fills in the name, colour and badge)</span></span>
+          <select className="select" value={club?.id ?? ""} onChange={(e) => pickClub(e.target.value)}>
+            <option value="">{match ? "Unchanged" : "None"}</option>
+            {clubs.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {club && (
+        <div className="club-colors">
+          {club.logo && <img className="crest" src={imageUrl(club.logo)} alt="" width={28} height={28} />}
+          <span className="muted small">Colour</span>
+          {club.colors.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className={`swatch${color === c ? " picked" : ""}`}
+              style={{ background: c }}
+              title={c}
+              aria-label={`Colour ${c}`}
+              onClick={() => setColor(c)}
+            />
+          ))}
+          <input type="color" value={color ?? "#888888"} onChange={(e) => setColor(e.target.value)} title="Another colour" />
+        </div>
+      )}
       <label>
         Opponent
-        <input value={opponent} onChange={(e) => setOpponent(e.target.value)} required maxLength={120} />
+        <input value={opponent} onChange={(e) => setOpponent(e.target.value)} required={!club} maxLength={120} placeholder={club?.name} />
       </label>
       <div className="form-row">
         <label>
@@ -182,7 +238,7 @@ function ScheduleForm({ t, match, onDone }: { t: TeamDoc; match?: UpcomingMatch;
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
         </label>
         <label>
-          Time <span className="muted small">(optional)</span>
+          <span>Time <span className="muted small">(optional)</span></span>
           <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
         </label>
       </div>

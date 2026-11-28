@@ -2,7 +2,7 @@
 import type { Env } from "../shared/env";
 import type { TeamDoc, TeamsDoc } from "../shared/docs";
 import type { AdminState, Decision, Invite, JoinTeam, Membership, Role } from "../shared/api";
-import type { Viewer } from "./access";
+import { addedAdmins, adminEmails, type Viewer } from "./access";
 import { getDoc, Names } from "./content";
 import { HttpError, sameSecret } from "./http";
 import { queueNotice } from "./notices";
@@ -118,6 +118,22 @@ export async function pendingRequests(env: Env, names = new Names(env)) {
   return names.describeAll(results);
 }
 
+/** Make someone an admin, or not. Only people already approved on some
+ *  team can be made one (a typo can't hand out the site); the owners in
+ *  ADMIN_EMAILS stay admins whatever is done here. */
+export async function setAdmin(env: Env, email: unknown, admin: boolean, by: string): Promise<void> {
+  const e = String(email || "").trim().toLowerCase();
+  if (!e) throw new HttpError(400, "Whose?");
+  if (adminEmails(env).includes(e)) throw new HttpError(400, "That's an owner (ADMIN_EMAILS); change it in Cloudflare.");
+  if (!admin) {
+    await env.DB.prepare("DELETE FROM admins WHERE email = ?").bind(e).run();
+    return;
+  }
+  const member = await env.DB.prepare("SELECT 1 AS x FROM members WHERE email = ? AND status = 'approved'").bind(e).first();
+  if (!member) throw new HttpError(400, "Only someone already approved on a team can be made an admin.");
+  await env.DB.prepare("INSERT OR IGNORE INTO admins (email, added_at, added_by) VALUES (?, ?, ?)").bind(e, Date.now(), by).run();
+}
+
 export async function adminState(env: Env): Promise<AdminState> {
   const names = new Names(env);
   const approved = await env.DB.prepare("SELECT * FROM members WHERE status = 'approved' ORDER BY team, role, number, email")
@@ -129,6 +145,8 @@ export async function adminState(env: Env): Promise<AdminState> {
   const invites: Invite[] = [];
   for (const t of teams) invites.push({ team: t.slug, team_name: t.name, code: await inviteCode(env, t.slug) });
   return {
+    owners: adminEmails(env),
+    admins: await addedAdmins(env),
     invites,
     requests: await pendingRequests(env, names),
     members: await names.describeAll(approved.results),

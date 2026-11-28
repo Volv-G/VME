@@ -29,9 +29,16 @@ VME's header.
 
 | | Team videos, stats | Reels | Edit a player |
 |---|---|---|---|
-| Admin (`ADMIN_EMAILS`) | every team | all | any |
+| Admin (`ADMIN_EMAILS`, or made one on `/admin`) | every team | all | any |
 | Coach | their team | all of the team's | - |
 | Player / parent | their team | the claimed player's | the claimed player: name, photo |
+
+The owners in `ADMIN_EMAILS` can make anyone already approved (a coach,
+a parent) an admin from `/admin` - *Make admin* in *Who has access* - and
+any admin can take that back; the owners themselves can only be changed
+in Cloudflare. Admins and coaches can add a match to a team's schedule
+(*＋ Add match* under *Upcoming*), picking one of the clubs set up in VME
+for the opponent's name, colour and badge.
 
 Rules live in `server/access.ts`; documents are trimmed per person in
 `server/content.ts`. Player edits wait in `player_edits` until VME
@@ -57,6 +64,7 @@ cd courtside
 npm install
 npx wrangler login            # once
 npm run db:schema             # after schema.sql changes (idempotent)
+npx wrangler d1 execute vme-site --remote --file=migrations/2026-11-clubs.sql   # once, for clubs
 npx wrangler r2 bucket create courtside-videos   # once (R2 enabled in the dashboard)
 npm run deploy                # build + wrangler pages deploy
 ```
@@ -70,7 +78,8 @@ Set `CLOUDFLARE_ACCOUNT_ID` if wrangler asks which account to use.
   set, every API read answers 503.
 - Secret `PUBLISH_TOKEN` (`wrangler pages secret put PUBLISH_TOKEN`): the
   same value as `token` in VME's `site.json`.
-- Secret `ADMIN_EMAILS`: comma-separated emails with the admin role.
+- Secret `ADMIN_EMAILS`: comma-separated emails of the owners, admins who
+  can't be removed on the site (others are made admins on `/admin`).
 - Access: the site's application allows **Everyone** (any signed-in
   email) - the site decides the rest. A second, **Bypass** application
   covers `courtside-vb.pages.dev/api/publish` (and everything under it)

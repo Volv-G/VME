@@ -44,7 +44,7 @@ from ..config import DATA_DIR, MEDIA_ROOT
 from ..domain.match import Match
 from ..domain.roster import Roster
 from ..domain.stats import Stats
-from ..library import paths, scanner, schedule
+from ..library import clubs, paths, scanner, schedule
 from . import site_images, site_video
 
 logger = logging.getLogger(__name__)
@@ -268,6 +268,8 @@ def build(team: str, web: Optional["site_video.TeamCopies"] = None) -> tuple[dic
     season = Stats()
     tournaments = []
     tournament_names = []
+    # Match key -> the opponent's badge and colour, for `upcoming`.
+    opponents: dict[str, dict] = {}
     today = dt.date.today().isoformat()
     for d in paths.iter_tournament_dirs(team):
         info = scanner.load_tournament_info(team, d.name)
@@ -317,6 +319,10 @@ def build(team: str, web: Optional["site_video.TeamCopies"] = None) -> tuple[dic
                 # show the score the phone kept (courtside/server/schedule.ts).
                 "scored": bool(m.events),
             }
+            opponents[key] = {
+                "opponent_logo": summary["opponent_logo"],
+                "opponent_color": m.opponent_roster.team_color or None,
+            }
             # Not played yet and still to come: listed under `upcoming`
             # instead (its doc still goes out, for a live link to land on).
             if s.played or s.date < today:
@@ -350,7 +356,7 @@ def build(team: str, web: Optional["site_video.TeamCopies"] = None) -> tuple[dic
         "players": players,
         "stats": _stats_out(season, names),
         "tournaments": tournaments,
-        "upcoming": schedule.upcoming(team),
+        "upcoming": [{**u, **opponents.get(u["key"], {})} for u in schedule.upcoming(team)],
         "tournament_names": tournament_names,
         "published_at": now,
     }
@@ -368,6 +374,18 @@ def build(team: str, web: Optional["site_video.TeamCopies"] = None) -> tuple[dic
         },
     })
     return team_doc, docs, images
+
+
+def build_clubs() -> tuple[dict, list[dict]]:
+    """(clubs doc, images): the clubs to pick from when a match is added
+    on the site, each badge as `club/<id>`."""
+    out, images = [], []
+    for c in clubs.list_clubs():
+        img = _image(clubs.logo_file(c), LOGO_PX, crop=False)
+        if img is not None:
+            images.append({"key": f"club/{c.id}", **img})
+        out.append({"id": c.id, "name": c.name, "colors": c.colors, "logo": f"club/{c.id}" if img else None})
+    return {"clubs": out, "published_at": int(time.time())}, images
 
 
 def publish(teams: Optional[list[str]] = None, *, upload_in_background: bool = True) -> dict:
@@ -389,10 +407,13 @@ def publish(teams: Optional[list[str]] = None, *, upload_in_background: bool = T
         images += team_images
         listing.append({k: team_doc[k] for k in ("slug", "name", "color", "logo")})
     docs.append({"key": "teams", "json": {"teams": listing, "published_at": int(time.time())}})
+    club_doc, club_images = build_clubs()
+    docs.append({"key": "clubs", "json": club_doc})
+    images += club_images
     body = {
         # Everything is replaced in one transaction, so a match deleted in
         # VME disappears from the site instead of lingering.
-        "replace_prefixes": ["team/", "match/", "img/", "private/"],
+        "replace_prefixes": ["team/", "match/", "img/", "private/", "club/"],
         "docs": docs,
         "images": images,
     }

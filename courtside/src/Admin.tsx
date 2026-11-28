@@ -8,10 +8,11 @@ function who(m: MembershipOut) {
   return m.role === "coach" ? "Coach" : m.player_name;
 }
 
-/** Requests to approve, who has access, and each team's invite link. */
+/** Requests to approve, who has access, who else is an admin, and each
+ *  team's invite link. */
 export function AdminPage() {
   const res = useApi<AdminState>("/api/admin");
-  const { reload: reloadMe } = useMe();
+  const { me, reload: reloadMe } = useMe();
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -29,6 +30,15 @@ export function AdminPage() {
     if (action === "remove" && !confirm(`Remove ${m.email} from ${m.team_name}?`)) return;
     void act(`/api/admin/members/${m.id}`, { action });
   };
+  const makeAdmin = (email: string) => {
+    if (!confirm(`Make ${email} an admin?\n\nThey'll see every team, approve requests, change any schedule and make others admins.`)) return;
+    void act("/api/admin/admins", { email, admin: true });
+  };
+  const unmakeAdmin = (email: string) => {
+    const self = email === me?.email;
+    if (!confirm(self ? "Stop being an admin yourself? Someone else will have to make you one again." : `Stop ${email} being an admin?`)) return;
+    void act("/api/admin/admins", { email, admin: false });
+  };
 
   return (
     <>
@@ -41,6 +51,7 @@ export function AdminPage() {
         {(s) => {
           const byTeam = new Map<string, MembershipOut[]>();
           for (const m of s.members) byTeam.set(m.team_name, [...(byTeam.get(m.team_name) ?? []), m]);
+          const isAdmin = (email: string) => s.owners.includes(email) || s.admins.some((a) => a.email === email);
           return (
             <>
               <section>
@@ -68,6 +79,39 @@ export function AdminPage() {
                     ))}
                   </div>
                 )}
+              </section>
+
+              <section>
+                <h2>Admins</h2>
+                <p className="muted small">
+                  Admins see every team, approve requests and change any schedule. Make someone one from{" "}
+                  <em>Who has access</em> below.
+                </p>
+                <div className="list">
+                  {s.owners.map((email) => (
+                    <div key={email} className="row">
+                      <span className="row-main">
+                        <span>
+                          <strong>{email}</strong>
+                        </span>
+                        <span className="muted small">Owner - set in Cloudflare (ADMIN_EMAILS)</span>
+                      </span>
+                    </div>
+                  ))}
+                  {s.admins.map((a) => (
+                    <div key={a.email} className="row">
+                      <span className="row-main">
+                        <span>
+                          <strong>{a.email}</strong>
+                        </span>
+                        <span className="muted small">
+                          Made admin by {a.added_by} · {formatWhen(a.added_at)}
+                        </span>
+                      </span>
+                      <button onClick={() => unmakeAdmin(a.email)}>Remove admin</button>
+                    </div>
+                  ))}
+                </div>
               </section>
 
               <section>
@@ -121,10 +165,14 @@ export function AdminPage() {
                           <span className="row-main">
                             <span>
                               <strong>{who(m)}</strong> · {m.email}
+                              {isAdmin(m.email) && <span className="chip chip-approved admin-chip">Admin</span>}
                             </span>
                             {m.note && <span className="muted small">{m.note}</span>}
                           </span>
-                          <button onClick={() => decide(m, "remove")}>Remove</button>
+                          <span className="actions">
+                            {!isAdmin(m.email) && <button onClick={() => makeAdmin(m.email)}>Make admin</button>}
+                            <button onClick={() => decide(m, "remove")}>Remove</button>
+                          </span>
                         </div>
                       ))}
                     </div>

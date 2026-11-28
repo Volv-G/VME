@@ -179,6 +179,8 @@ object SiteClient {
         date: String,
         time: String?,
         opponent: String,
+        club: String? = null,
+        color: String? = null,
     ): Long {
         val body = JSONObject()
             .put("team", team)
@@ -188,6 +190,8 @@ object SiteClient {
             .put("date", date)
             .put("time", time ?: JSONObject.NULL)
             .put("opponent", opponent)
+        // A club set up in VME: the match gets its colour and badge there.
+        if (club != null) body.put("club", club).put("color", color ?: JSONObject.NULL)
         val resp = JSONObject(request(access, "POST", "/api/publish/phone/schedule", body))
         return resp.optLong("id")
     }

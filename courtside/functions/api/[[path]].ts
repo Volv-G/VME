@@ -18,6 +18,7 @@
  *   GET  /api/admin                     requests, members, each team's invite link (admin)
  *   POST /api/admin/invite              a team's new invite link; the old one stops working
  *   POST /api/admin/members/<id>        approve / decline / remove
+ *   POST /api/admin/admins              {email, admin: true|false}: make an approved person an admin, or not
  *
  * And for VME, with its bearer token instead of a sign-in:
  *
@@ -32,10 +33,10 @@
  */
 import type { Env } from "../../shared/env";
 import type { Decision, Me } from "../../shared/api";
-import { adminEmails, canManageTeam, canSeeTeam, loadViewer, type Viewer } from "../../server/access";
+import { allAdmins, canManageTeam, canSeeTeam, loadViewer, type Viewer } from "../../server/access";
 import { canSeeImage, Names, readDoc } from "../../server/content";
 import { blobBytes, fromBase64, HttpError, json, readBody, sameSecret } from "../../server/http";
-import { adminState, decide, inviteCode, joinTeam, pendingRequests, requestJoin, type JoinRequest } from "../../server/members";
+import { adminState, decide, inviteCode, joinTeam, pendingRequests, requestJoin, setAdmin, type JoinRequest } from "../../server/members";
 import { ackEdits, editPlayer, pendingEdits, playerInfo, type PlayerEdit } from "../../server/players";
 import { deleteVideo, listVideos, putVideo, serveVideo } from "../../server/videos";
 import { addReveals, listReveals } from "../../server/reveals";
@@ -113,8 +114,8 @@ async function sync(request: Request, env: Env): Promise<Response> {
     edits: await pendingEdits(env),
     schedule: await pendingSchedule(env),
     notices: await pendingNotices(env),
-    // Who "request" notices go to.
-    admins: adminEmails(env),
+    // Who "request" notices go to: the owners and the admins added here.
+    admins: await allAdmins(env),
   });
 }
 
@@ -152,6 +153,7 @@ async function route(ctx: EventContext<Env, string, Record<string, unknown>>): P
     const me: Me = {
       email: v.email,
       admin: v.admin,
+      owner: v.owner,
       memberships: await new Names(env).describeAll(v.memberships),
       pending,
     };
@@ -225,6 +227,11 @@ async function route(ctx: EventContext<Env, string, Record<string, unknown>>): P
       const { team } = await readBody<{ team: string }>(request);
       if (!(await new Names(env).team(String(team || "")))) throw new HttpError(400, "No such team.");
       return json({ code: await inviteCode(env, team, true) });
+    }
+    if (path === "admin/admins" && method === "POST") {
+      const { email, admin } = await readBody<{ email: string; admin: boolean }>(request);
+      await setAdmin(env, email, admin === true, v.email);
+      return json({ ok: true });
     }
     if (parts[1] === "members" && parts.length === 3 && method === "POST") {
       const { action } = await readBody<{ action: Decision }>(request);

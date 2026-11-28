@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { MatchSummary, OpponentDto, TournamentInfoDto } from "../types/api";
+import type { ClubDto, MatchSummary, OpponentDto, TournamentInfoDto } from "../types/api";
+import { ColorPicker } from "../components/ColorPicker";
 import { Modal } from "../components/Modal";
 import { StatsButton } from "../components/StatsButton";
 import { displayName } from "../util/names";
@@ -39,6 +40,11 @@ export function TournamentDashboardPage() {
   // match reuses - roster, colour and badge copied from their match.
   const [opponents, setOpponents] = useState<OpponentDto[]>([]);
   const [reuse, setReuse] = useState<OpponentDto | null>(null);
+  // Clubs set up ahead of time (the Clubs page), the one picked, and the
+  // colour chosen for this match - one of the club's, or any.
+  const [clubs, setClubs] = useState<ClubDto[]>([]);
+  const [club, setClub] = useState<ClubDto | null>(null);
+  const [clubColor, setClubColor] = useState<string | null>(null);
 
   /** Next available match number for a given date, based on already-loaded matches. */
   const nextIndexFor = useCallback(
@@ -114,7 +120,10 @@ export function TournamentDashboardPage() {
     setNewMatch({ opponent: "", date: "", match_index: "", start_time: "" });
     setMatchIndexTouched(false);
     setReuse(null);
+    setClub(null);
+    setClubColor(null);
     setCreating(true);
+    api.listClubs().then(setClubs).catch(() => setClubs([]));
     // Fetched per opening rather than once: a match created a minute
     // ago in another tournament is an opponent to offer now.
     api.listOpponents(team).then(setOpponents).catch(() => setOpponents([]));
@@ -137,6 +146,16 @@ export function TournamentDashboardPage() {
     const picked = opponents.find((o) => opponentKey(o) === key) ?? null;
     setReuse(picked);
     if (picked) setNewMatch({ ...newMatch, opponent: picked.name });
+  }
+
+  /** A club fills in the name - unless one was typed that isn't the
+   *  previous club's - and its main colour. */
+  function pickClub(id: string) {
+    const picked = clubs.find((c) => c.id === id) ?? null;
+    const typed = newMatch.opponent.trim();
+    if (picked && (!typed || (club && sameName(typed, club.name)))) typeOpponent(picked.name);
+    setClub(picked);
+    setClubColor(picked?.colors[0] ?? null);
   }
 
   async function setStartTime(m: MatchSummary, value: string) {
@@ -165,9 +184,12 @@ export function TournamentDashboardPage() {
           ? { tournament: reuse.tournament, date: reuse.date, match: reuse.match }
           : null,
         start_time: newMatch.start_time || null,
+        club: club?.id ?? null,
+        opponent_color: club ? clubColor : null,
       });
       setNewMatch({ opponent: "", date: "", match_index: "", start_time: "" });
       setReuse(null);
+      setClub(null);
       setMatchIndexTouched(false);
       setCreating(false);
       await load();
@@ -329,6 +351,54 @@ export function TournamentDashboardPage() {
         onClose={() => setCreating(false)}
         width="min(520px, 92vw)"
       >
+        <div className="field-row">
+          <label style={{ flex: 1 }}>
+            Club
+            <select value={club?.id ?? ""} onChange={(e) => pickClub(e.target.value)}>
+              <option value="">{clubs.length ? "None" : "None set up yet"}</option>
+              {clubs.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {club && (
+          <div
+            className="muted"
+            style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, margin: "2px 0 10px", flexWrap: "wrap" }}
+          >
+            {club.has_logo && (
+              <img src={api.clubLogoUrl(club.id)} alt="" style={{ width: 24, height: 24, objectFit: "contain" }} />
+            )}
+            <span>Colour:</span>
+            {club.colors.map((c) => (
+              <button
+                key={c}
+                type="button"
+                title={c}
+                onClick={() => setClubColor(c)}
+                style={{
+                  width: 22,
+                  height: 22,
+                  padding: 0,
+                  borderRadius: 4,
+                  background: c,
+                  border: clubColor === c ? "2px solid var(--accent)" : "1px solid var(--border)",
+                  outline: clubColor === c ? "1px solid var(--accent)" : "none",
+                  cursor: "pointer",
+                }}
+              />
+            ))}
+            <ColorPicker
+              value={clubColor ?? "#2d8a4e"}
+              onChange={setClubColor}
+              title="Another colour"
+            />
+            <span>The name can be changed below, e.g. "{club.name} Grey".</span>
+          </div>
+        )}
         {opponents.length > 0 && (
           <div className="field-row">
             <label style={{ flex: 1 }}>

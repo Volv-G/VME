@@ -246,6 +246,45 @@ export interface OpponentDto {
   match: string;
 }
 
+/** A club or school the opponents come from, set up ahead of time:
+ *  picking it on a new match fills in the name, colour and badge. */
+export interface ClubDto {
+  id: string;
+  name: string;
+  /** The first is the club's main colour. */
+  colors: string[];
+  has_logo: boolean;
+  /** Narrows the online search for the badge: a city, a state, the website. */
+  hint: string;
+}
+
+/** A badge found online (POST /club-lookup), to be fetched by id. */
+export interface LookupCandidate {
+  id: string;
+  /** Where the image is, to show; VME fetches it by `id` only. */
+  url: string | null;
+  source: string;
+  title: string;
+  /** The page it was found on (an article, the club's site), if any. */
+  page: string | null;
+}
+
+export interface LookupResult {
+  query: string;
+  candidates: LookupCandidate[];
+  colors: { hex: string; source: string }[];
+  notes: string[];
+}
+
+/** How a found badge is cleaned up; it always comes out as RGBA PNG. */
+export interface LogoCleanup {
+  remove_bg: boolean;
+  tolerance: number;
+  holes: boolean;
+  trim: boolean;
+  square: boolean;
+}
+
 export interface ClipDto {
   id: string;
   filename: string;

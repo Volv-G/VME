@@ -15,6 +15,8 @@ from .config import DATA_DIR, LOG_ROOT, MEDIA_ROOT, STATIC_ROOT
 from .api import (
     auth as auth_api,
     clips,
+    clubs as clubs_api,
+    club_lookup as club_lookup_api,
     events,
     logos,
     matches,
@@ -104,6 +106,8 @@ def _shutdown_jobs() -> None:
 
 api = FastAPI()
 api.include_router(auth_api.router)
+api.include_router(clubs_api.router)
+api.include_router(club_lookup_api.router)
 api.include_router(teams.router)
 api.include_router(tournaments.router)
 api.include_router(matches.list_router)

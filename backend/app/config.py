@@ -45,6 +45,9 @@ DATA_DIR: Path | None = Path(_data_dir_env).resolve() if _data_dir_env else None
 MEDIA_ROOT = _resolve("VME_MEDIA_ROOT", "media", PROJECT_ROOT / "media")
 LOG_ROOT = _resolve("VME_LOG_ROOT", "logs", PROJECT_ROOT / "logs")
 CERT_DIR = _resolve("VME_CERT_DIR", "certs", PROJECT_ROOT / "certs")
+# Opponent clubs (library/clubs.py): beside the media tree, not in it -
+# every folder under MEDIA_ROOT is taken for a team.
+CLUBS_ROOT = _resolve("VME_CLUBS_ROOT", "clubs", PROJECT_ROOT / "clubs")
 
 # Static frontend bundle is build output, not user data - keep it project-local.
 STATIC_ROOT = Path(

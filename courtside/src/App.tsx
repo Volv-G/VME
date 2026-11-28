@@ -213,7 +213,7 @@ function TeamPage() {
         ].filter((id) => !spoilers.revealed(id));
         return (
           <>
-            <TeamTheme color={t.color} logo={t.watermark ?? t.logo} />
+            <TeamTheme color={t.color} logo={t.watermark ?? t.logo} icon={t.logo} />
             <header className="team-head">
               {manyTeams && <Link to="/" className="muted back">← Teams</Link>}
               <div className="team-title">
@@ -326,7 +326,7 @@ function PlayerPage() {
         reels.reverse();
         return (
           <>
-            <TeamTheme color={t.color} logo={t.watermark ?? t.logo} />
+            <TeamTheme color={t.color} logo={t.watermark ?? t.logo} icon={t.logo} />
             <header className="team-head">
               <Link to={teamPath(t.slug)} className="muted back">← {t.name}</Link>
               <div className="team-title">
@@ -401,7 +401,7 @@ function MatchPage() {
         const reels = m.videos.filter((v) => v.kind === "reel");
         return (
           <>
-            <TeamTheme color={m.team_color} logo={m.team_watermark ?? m.team_logo} />
+            <TeamTheme color={m.team_color} logo={m.team_watermark ?? m.team_logo} icon={m.team_logo} />
             <header className="team-head">
               <Link to={teamPath(m.team)} className="muted back">← {m.team_name}</Link>
               <h1>

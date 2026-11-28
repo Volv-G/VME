@@ -187,7 +187,10 @@ foreach ($key in @("VME_USERNAME", "VME_PASSWORD_HASH", "VME_AUTH_REQUIRED",
                    # None -> clips silently get 30 fps / 0 frames and
                    # the timeline appears empty after a rescan. See
                    # app/library/ffmpeg_tools.py for the resolver.
-                   "VME_FFPROBE", "VME_FFMPEG")) {
+                   "VME_FFPROBE", "VME_FFMPEG",
+                   # Finding clubs' badges online (app/library/club_lookup.py):
+                   # an image-search key, and who to contact for Wikimedia.
+                   "VME_BRAVE_API_KEY", "VME_LOOKUP_CONTACT")) {
     if ($secrets.ContainsKey($key) -and $secrets[$key]) {
         $envPairs += "$key=$($secrets[$key])"
     }

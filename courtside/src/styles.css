@@ -229,3 +229,9 @@ button.small-action { margin-left: auto; font-size: 13px; padding: 4px 10px; fon
 button.danger { color: var(--loss); border-color: color-mix(in srgb, var(--loss) 50%, transparent); }
 
 .stat-icon { width: 20px; height: 20px; vertical-align: -5px; object-fit: contain; }
+.form select.select { font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-weight: 400; }
+.club-colors { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: -4px; }
+.club-colors .swatch { width: 26px; height: 26px; padding: 0; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; }
+.club-colors .swatch.picked { outline: 2px solid var(--accent); outline-offset: 2px; }
+.club-colors input[type=color] { width: 34px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: none; }
+.admin-chip { margin-left: 8px; font-size: 11px; }

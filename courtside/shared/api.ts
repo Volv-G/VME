@@ -25,6 +25,8 @@ export interface MembershipOut extends Membership {
 export interface Me {
   email: string;
   admin: boolean;
+  /** In ADMIN_EMAILS: can't be removed as an admin on the site. */
+  owner?: boolean;
   memberships: MembershipOut[];
   /** Admins only: requests waiting for a decision. */
   pending: number;
@@ -44,7 +46,18 @@ export interface Invite {
   code: string;
 }
 
+/** Someone made an admin on /admin (owners are in ADMIN_EMAILS instead). */
+export interface AddedAdmin {
+  email: string;
+  added_at: number;
+  added_by: string;
+}
+
 export interface AdminState {
+  /** ADMIN_EMAILS: admins nobody can remove here. */
+  owners: string[];
+  /** Made admins on the site, from the people already approved. */
+  admins: AddedAdmin[];
   invites: Invite[];
   requests: MembershipOut[];
   members: MembershipOut[];

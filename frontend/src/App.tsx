@@ -3,6 +3,7 @@ import { TeamSelectPage } from "./routes/TeamSelectPage";
 import { TeamDashboardPage } from "./routes/TeamDashboardPage";
 import { TeamSettingsPage } from "./routes/TeamSettingsPage";
 import { ServerSettingsPage } from "./routes/ServerSettingsPage";
+import { ClubsPage } from "./routes/ClubsPage";
 import { TournamentDashboardPage } from "./routes/TournamentDashboardPage";
 import { MatchEditorPage } from "./routes/MatchEditorPage";
 import { displayName } from "./util/names";
@@ -29,6 +30,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<TeamSelectPage />} />
           <Route path="/settings" element={<ServerSettingsPage />} />
+          <Route path="/clubs" element={<ClubsPage />} />
           <Route path="/settings/:section" element={<ServerSettingsPage />} />
           <Route path="/teams/:team" element={<TeamDashboardPage />} />
           <Route path="/teams/:team/settings" element={<TeamSettingsPage />} />

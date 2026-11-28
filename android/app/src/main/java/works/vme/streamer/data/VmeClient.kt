@@ -112,6 +112,29 @@ object VmeClient {
         return runCatching { getBytes(url, creds) }.getOrNull()
     }
 
+    /** A club or school the opponents come from, as VME keeps it
+     *  (backend/app/library/clubs.py): the first colour is the main one. */
+    data class ClubSummary(val id: String, val name: String, val colors: List<String>, val hasLogo: Boolean)
+
+    /** GET `/api/clubs`, by name. */
+    fun listClubs(baseUrl: String, creds: Credentials? = null): List<ClubSummary> {
+        val arr = JSONArray(get("${normalize(baseUrl)}/api/clubs", creds))
+        return (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            val colors = o.optJSONArray("colors")
+            ClubSummary(
+                id = o.getString("id"),
+                name = o.optString("name"),
+                colors = (0 until (colors?.length() ?: 0)).map { colors!!.getString(it) },
+                hasLogo = o.optBoolean("has_logo"),
+            )
+        }
+    }
+
+    /** A club's badge, or null: a missing one must not lose the club. */
+    fun fetchClubLogo(baseUrl: String, id: String, creds: Credentials? = null): ByteArray? =
+        runCatching { getBytes("${normalize(baseUrl)}/api/clubs/${enc(id)}/logo", creds) }.getOrNull()
+
     /** One match as the fixture list shows it. */
     data class MatchSummary(
         val date: String,

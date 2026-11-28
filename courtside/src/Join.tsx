@@ -74,7 +74,7 @@ function TeamClaim({ code, team }: { code: string; team: JoinTeam }) {
 
   return (
     <>
-      <TeamTheme color={team.color} logo={team.logo} />
+      <TeamTheme color={team.color} logo={team.logo} icon={team.logo} />
       <header className="team-head">
         <div className="team-title">
           <Crest src={team.logo} color={team.color} label={team.name} size={64} />

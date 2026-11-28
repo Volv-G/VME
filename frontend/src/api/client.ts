@@ -2,6 +2,9 @@ import type {
   AuthStatusDto,
   AutoCutsResultDto,
   ClipDto,
+  ClubDto,
+  LogoCleanup,
+  LookupResult,
   EventDto,
   FullRenderDto,
   MatchDto,
@@ -432,6 +435,63 @@ export const api = {
     );
   },
 
+  // ---- Clubs ------------------------------------------------------------
+  async listClubs(): Promise<ClubDto[]> {
+    return fetchJson<ClubDto[]>("/clubs");
+  },
+  async createClub(body: { name: string; colors: string[]; hint?: string }): Promise<ClubDto> {
+    return fetchJson<ClubDto>("/clubs", { method: "POST", body: JSON.stringify(body) });
+  },
+  async updateClub(id: string, body: { name?: string; colors?: string[]; hint?: string }): Promise<ClubDto> {
+    return fetchJson<ClubDto>(`/clubs/${enc(id)}`, { method: "PUT", body: JSON.stringify(body) });
+  },
+  async deleteClub(id: string): Promise<{ deleted: boolean }> {
+    return fetchJson(`/clubs/${enc(id)}`, { method: "DELETE" });
+  },
+  clubLogoUrl(id: string, cacheBust?: number | string): string {
+    const q = cacheBust ? `?v=${encodeURIComponent(String(cacheBust))}` : "";
+    return `${BASE}/clubs/${enc(id)}/logo${q}`;
+  },
+  async uploadClubLogo(id: string, file: File): Promise<ClubDto> {
+    const form = new FormData();
+    form.append("file", file);
+    return fetchJson<ClubDto>(`/clubs/${enc(id)}/logo`, { method: "PUT", body: form });
+  },
+  async deleteClubLogo(id: string): Promise<ClubDto> {
+    return fetchJson<ClubDto>(`/clubs/${enc(id)}/logo`, { method: "DELETE" });
+  },
+  async lookupClub(name: string, hint: string): Promise<LookupResult> {
+    return fetchJson<LookupResult>("/club-lookup", { method: "POST", body: JSON.stringify({ name, hint }) });
+  },
+  /** A found badge as found, small - for the list to choose from. */
+  lookupThumbUrl(candidate: string): string {
+    return `${BASE}/club-lookup/${enc(candidate)}/image?raw=1`;
+  },
+  /** Hand an uploaded or pasted image to the logo editor; it is then
+   *  cleaned up through lookupImage like a found one. */
+  async uploadLogoSource(file: File): Promise<{ id: string }> {
+    const form = new FormData();
+    form.append("file", file);
+    return fetchJson<{ id: string }>("/club-lookup/upload", { method: "POST", body: form });
+  },
+  /** A found badge cleaned up, and its main colours. */
+  async lookupImage(candidate: string, opts: LogoCleanup, signal?: AbortSignal): Promise<{ blob: Blob; colors: string[]; size: string }> {
+    const q = new URLSearchParams({
+      remove_bg: opts.remove_bg ? "1" : "0",
+      tolerance: String(opts.tolerance),
+      holes: opts.holes ? "1" : "0",
+      trim: opts.trim ? "1" : "0",
+      square: opts.square ? "1" : "0",
+    });
+    const res = await fetch(`${BASE}/club-lookup/${enc(candidate)}/image?${q}`, { signal });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.detail || `${res.status} ${res.statusText}`);
+    }
+    const colors = (res.headers.get("X-Colors") || "").split(",").filter(Boolean);
+    return { blob: await res.blob(), colors, size: res.headers.get("X-Size") || "" };
+  },
+
   // ---- Matches ----------------------------------------------------------
   async listMatches(team: string, tournament: string): Promise<MatchSummary[]> {
     return fetchJson<MatchSummary[]>(
@@ -456,6 +516,10 @@ export const api = {
       opponent_from?: { tournament: string; date: string; match: string } | null;
       /** Scheduled start, "HH:MM" local. */
       start_time?: string | null;
+      /** A club to take the opponent's colour and badge from. */
+      club?: string | null;
+      /** The opponent's colour: one of the club's, or any. */
+      opponent_color?: string | null;
     }
   ): Promise<MatchDto> {
     return fetchJson<MatchDto>(

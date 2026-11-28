@@ -20,6 +20,8 @@ import type { LiveStream, ScheduleChange } from "../shared/docs";
 import { HttpError } from "./http";
 
 const STALE_MS = 20 * 60 * 1000;
+const CLUB = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const COLOR = /^#[0-9a-fA-F]{6}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME = /^([01]?\d|2[0-3]):[0-5]\d$/;
 const KEY = /^[^/\x00-\x1f]{1,120}\/\d{4}-\d{2}-\d{2}\/[^/\x00-\x1f]{1,120}$/;
@@ -31,6 +33,10 @@ export interface ScheduleEditIn {
   date?: string | null;
   time?: string | null;
   opponent?: string | null;
+  /** A club's id in VME: the opponent takes its colour and badge. */
+  club?: string | null;
+  /** #rrggbb: the opponent's colour, one of the club's or any. */
+  color?: string | null;
 }
 
 function text(v: unknown, max: number): string | null {
@@ -49,17 +55,34 @@ export async function queueScheduleEdit(env: Env, team: string, e: ScheduleEditI
   const date = text(e.date, 10);
   const time = text(e.time, 5);
   const opponent = text(e.opponent, 120);
+  const club = text(e.club, 64);
+  const color = text(e.color, 7);
   if (action !== "add" && (!key || !KEY.test(key))) throw new HttpError(400, "Which match?");
-  if (action === "add" && (!tournament || !opponent || !date)) {
+  // With a club the opponent's name can be left to VME (the club's).
+  if (action === "add" && (!tournament || !(opponent || club) || !date)) {
     throw new HttpError(400, "A new match needs a tournament, a date and an opponent.");
   }
   if (date && !DATE.test(date)) throw new HttpError(400, "Date must be YYYY-MM-DD.");
   if (time && !TIME.test(time)) throw new HttpError(400, "Time must be HH:MM.");
+  if (club && !CLUB.test(club)) throw new HttpError(400, "Unknown club.");
+  if (color && !COLOR.test(color)) throw new HttpError(400, "Colour must be #rrggbb.");
+  const now = Date.now();
+  if (club || color) {
+    const row = await env.DB.prepare(
+      `INSERT INTO schedule_edits (team, action, key, tournament, date, time, opponent, club, color, submitted_by, submitted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
+    )
+      .bind(team, action, key, tournament, date, time, opponent, club, color?.toLowerCase() ?? null, by, now)
+      .first<{ id: number }>();
+    return row!.id;
+  }
+  // Without them, the columns a database not yet migrated lacks
+  // (migrations/2026-11-clubs.sql) aren't named.
   const row = await env.DB.prepare(
     `INSERT INTO schedule_edits (team, action, key, tournament, date, time, opponent, submitted_by, submitted_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
   )
-    .bind(team, action, key, tournament, date, time, opponent, by, Date.now())
+    .bind(team, action, key, tournament, date, time, opponent, by, now)
     .first<{ id: number }>();
   return row!.id;
 }

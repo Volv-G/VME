@@ -34,6 +34,9 @@ media/*/*/source*.mov
 media/*/*/source*.mkv
 media/*/*/renders/
 
+# Opponent clubs (backend/app/library/clubs.py) when VME_DATA_DIR is unset
+/clubs/
+
 # Claude Code's local settings: machine-specific permission paths,
 # meaningless on another checkout.
 .claude/

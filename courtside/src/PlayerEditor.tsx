@@ -91,7 +91,7 @@ export function PlayerEditor({ team, number }: { team: string; number: number })
             <input value={shortName} onChange={(e) => setShortName(e.target.value)} maxLength={40} />
           </label>
           <label>
-            Photo <span className="muted small">(a clear face shot works best)</span>
+            <span>Photo <span className="muted small">(a clear face shot works best)</span></span>
             <input key={fileKey} type="file" accept="image/*" onChange={(e) => pick(e.target.files?.[0])} />
           </label>
           {file && cropping && (

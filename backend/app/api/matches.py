@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..domain.player import Player
 from ..domain.roster import Roster
-from ..library import paths, scanner, schedule
+from ..library import clubs, paths, scanner, schedule
 from ..publish import site
 from .locks import match_lock_dep
 from .helpers import load_match_or_404, save_match, serialize_match
@@ -72,6 +72,13 @@ def create_match(team: str, tournament: str, body: CreateMatchIn) -> MatchOut:
         raise HTTPException(400, "Date is required")
     if not paths.tournament_dir(team, tournament).exists():
         raise HTTPException(404, "Tournament not found")
+    # Checked before anything is made: a bad club or colour must not
+    # leave an empty match folder behind.
+    try:
+        club = clubs.get(body.club) if body.club else None
+        color = clubs.normalize_color(body.opponent_color)
+    except (LookupError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
     try:
         match_name, m = scanner.create_match(
             team,
@@ -93,8 +100,14 @@ def create_match(team: str, tournament: str, body: CreateMatchIn) -> MatchOut:
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    if body.start_time:
-        m.start_time = _start_time(body.start_time)
+    if body.start_time or club or color:
+        if body.start_time:
+            m.start_time = _start_time(body.start_time)
+        if club is not None:
+            clubs.dress(paths.match_dir(team, tournament, body.date.strip(), match_name), m, club, color)
+        elif color:
+            m.opponent_roster.team_name = m.opponent_roster.team_name or m.opponent
+            m.opponent_roster.team_color = color
         save_match(team, tournament, body.date.strip(), match_name, m)
     site.publish_soon()
     return serialize_match(team, tournament, body.date.strip(), match_name, m)

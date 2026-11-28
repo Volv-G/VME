@@ -113,6 +113,9 @@ No database. JSON sidecars in a filesystem tree:
                                   <render outputs>.mp4.youtube.json
   logs/service.log
   jobs.json                       render queue persistence
+  clubs/<id>/club.json            an opponent club: name, colours, search hints (library/clubs.py;
+                                  badge and colours found online by library/club_lookup.py)
+  clubs/<id>/logo.<ext>           its badge, copied into each match picked with it
   youtube_client_secret.json
   youtube_token.json
 ```

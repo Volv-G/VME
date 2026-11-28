@@ -50,6 +50,10 @@ import java.util.Locale
  * creates a near-duplicate match beside the real one instead of landing
  * in it. Metadata only - the events are what this phone is about to
  * produce, not something to copy in.
+ *
+ * Or a club set up in VME can be picked (ClubPicker): the opponent's
+ * name, which can then be made particular ("NW Jrs. Grey"), the colour
+ * of theirs this team wears, and the badge.
  */
 class MatchSetupActivity : ComponentActivity() {
 
@@ -87,6 +91,11 @@ class MatchSetupActivity : ComponentActivity() {
      *  name field, see [opponentChanged]. */
     private var reuse: Roster? = null
     private lateinit var reuseLabel: TextView
+    /** The club picked, and the colour chosen of its; they win over an
+     *  import or a reuse, being picked for this match on purpose. */
+    private var club: works.vme.streamer.data.ClubStore.Club? = null
+    private var clubColor: String? = null
+    private lateinit var clubLabel: TextView
 
     private val knownTournaments: List<String> by lazy {
         MatchStore(this).list()
@@ -175,7 +184,23 @@ class MatchSetupActivity : ComponentActivity() {
                 setOnClickListener { pickOpponent() }
             })
         }
+        opponentRow.addView(Button(this).apply {
+            text = "Club"
+            setOnClickListener { ClubPicker.pick(this@MatchSetupActivity, ::clubPicked) }
+        })
         root.addView(opponentRow)
+        clubLabel = TextView(this).apply {
+            setTextColor(Color.GRAY)
+            textSize = 11f
+            visibility = View.GONE
+            setOnClickListener {
+                // Tapping the line drops the club again.
+                club = null
+                clubColor = null
+                visibility = View.GONE
+            }
+        }
+        root.addView(clubLabel)
         reuseLabel = TextView(this).apply {
             setTextColor(Color.GRAY)
             textSize = 11f
@@ -288,10 +313,13 @@ class MatchSetupActivity : ComponentActivity() {
         val imported = importedName?.let {
             MatchStore.opponentKey(it) == MatchStore.opponentKey(opponent)
         } == true
-        val color = (if (imported) importedColor else null) ?: reuse?.teamColor
+        val picked = club
+        val color = (if (picked != null) clubColor ?: picked.color else null)
+            ?: (if (imported) importedColor else null) ?: reuse?.teamColor
         // Copied rather than pointed at: each match owns its badge, and
         // deleting the earlier match must not blank this one.
-        val logo = (if (imported) importedLogo else null)
+        val logo = picked?.logo?.let { runCatching { it.readBytes() }.getOrNull() }
+            ?: (if (imported) importedLogo else null)
             ?: reuse?.localLogoPath?.let { runCatching { File(it).readBytes() }.getOrNull() }
         val players = reuse?.players.orEmpty()
         if (color != null || logo != null || players.isNotEmpty()) {
@@ -472,6 +500,24 @@ class MatchSetupActivity : ComponentActivity() {
             reuseLabel.text = "Played before" +
                 (if (parts.isEmpty()) "" else " - reusing " + parts.joinToString(", "))
         }
+    }
+
+    /** A club: its name unless another was typed, and its colour and badge. */
+    private fun clubPicked(picked: works.vme.streamer.data.ClubStore.Club, color: String?) {
+        val typed = opponentInput.text.toString().trim()
+        val replaceable = typed.isBlank() ||
+            listOfNotNull(club?.name, importedName).any { MatchStore.opponentKey(it) == MatchStore.opponentKey(typed) }
+        club = picked
+        clubColor = color
+        if (replaceable) {
+            opponentInput.setText(picked.name)
+            opponentInput.setSelection(opponentInput.text.length)
+        }
+        clubLabel.text = "Club: ${picked.name}" +
+            (color?.let { " · colour $it" } ?: "") +
+            (if (picked.logo != null) " · badge" else "") +
+            " - the name can be changed, e.g. \"${picked.name} Grey\". Tap to drop the club."
+        clubLabel.visibility = View.VISIBLE
     }
 
     /** Choose from the opponents already played on this phone. */

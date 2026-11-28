@@ -5,6 +5,7 @@
  *   team/<team>                               TeamDoc
  *   match/<team>/<tournament>/<date>/<match>  MatchDoc
  *   private/<team>                            full names; only for the edit form (never via /api/doc)
+ *   clubs                                     ClubsDoc (coaches and admins)
  *
  * Written by `backend/app/publish/` in VME; keep the two in step.
  * Image fields hold a key for `/api/image/<key>`.
@@ -89,6 +90,16 @@ export interface UpcomingMatch {
   time: string | null;
   index: number | null;
   opponent: string;
+  opponent_logo?: string | null;
+  opponent_color?: string | null;
+}
+
+/** The opponents' clubs and schools set up in VME, to pick from when
+ *  adding a match: the name, colours (the first is the main one) and
+ *  badge they give it. Key `clubs`; badges are `club/<id>` images. */
+export interface ClubsDoc {
+  clubs: { id: string; name: string; colors: string[]; logo: string | null }[];
+  published_at: number;
 }
 
 /** A change to the schedule left here, waiting for VME to apply it. */
@@ -100,6 +111,8 @@ export interface ScheduleChange {
   date: string | null;
   time: string | null;
   opponent: string | null;
+  club?: string | null;
+  color?: string | null;
   submitted_by: string;
   submitted_at: number;
 }

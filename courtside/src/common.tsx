@@ -51,7 +51,7 @@ export function Crest({ src, color, label, size = 40 }: { src: string | null; co
  * (links, buttons, headings' marks) and its crest sits large and faint
  * behind everything. Undone when the page changes to one without a team.
  */
-export function TeamTheme({ color, logo }: { color?: string | null; logo?: string | null }) {
+export function TeamTheme({ color, logo, icon }: { color?: string | null; logo?: string | null; icon?: string | null }) {
   useEffect(() => {
     const root = document.documentElement;
     if (color) root.style.setProperty("--team", color);
@@ -59,6 +59,19 @@ export function TeamTheme({ color, logo }: { color?: string | null; logo?: strin
       root.style.removeProperty("--team");
     };
   }, [color]);
+  // The team's badge as the tab's icon while on its pages; the site's
+  // own comes back on leaving them.
+  useEffect(() => {
+    const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!icon || !link) return;
+    const before = { href: link.getAttribute("href"), type: link.getAttribute("type") };
+    link.removeAttribute("type"); // the badge may be any image type
+    link.href = imageUrl(icon);
+    return () => {
+      if (before.href) link.setAttribute("href", before.href);
+      if (before.type) link.setAttribute("type", before.type);
+    };
+  }, [icon]);
   return (
     <div className="backdrop" aria-hidden="true">
       {logo && <img src={imageUrl(logo)} alt="" />}

@@ -182,6 +182,8 @@ each key has a single purpose:
 | `VME_CERT_FILE`, `VME_KEY_FILE`, `VME_PUBLIC_HOST` | TLS settings for standalone mode. Set by `set-cert.ps1`. |
 | `VME_HTTP_PORT`, `VME_HTTPS_PORT`, `VME_BIND_HOST` | Standalone bind overrides (default 80/443/all). |
 | `VME_FFMPEG`, `VME_FFPROBE` | Explicit paths to the binaries (default: autodetect on PATH + common install roots). |
+| `VME_BRAVE_API_KEY` | Optional. A [Brave Search API](https://brave.com/search/api/) key: finding a club's badge online also web-searches for the club's own site (and reads its logo) and searches images across the web - two searches per lookup. Without it, Wikipedia, Wikidata, Commons and a website typed into the hints are searched. |
+| `VME_LOOKUP_CONTACT` | Optional. An email or web address sent to Wikimedia with badge searches; it is less quick to turn away clients that give one. |
 
 ### IIS config
 

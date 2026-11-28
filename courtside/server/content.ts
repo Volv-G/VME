@@ -1,6 +1,6 @@
 /** Reading what VME published, trimmed to what the viewer may see. */
 import type { Env } from "../shared/env";
-import type { MatchDoc, MatchSummary, Stats, TeamDoc, TeamsDoc, Video } from "../shared/docs";
+import type { ClubsDoc, MatchDoc, MatchSummary, Stats, TeamDoc, TeamsDoc, Video } from "../shared/docs";
 import type { Membership, MembershipOut } from "../shared/api";
 import { canManageTeam, canSeeTeam, reelFilter, type Viewer } from "./access";
 import { HttpError } from "./http";
@@ -34,6 +34,13 @@ export async function readDoc(env: Env, v: Viewer, key: string): Promise<unknown
     const doc = await getDoc<TeamsDoc>(env, "teams");
     if (!doc) throw new HttpError(404, "Nothing has been published yet.");
     return { ...doc, teams: doc.teams.filter((t) => canSeeTeam(v, t.slug)) };
+  }
+  if (key === "clubs") {
+    // For adding a match, which coaches and admins do.
+    if (!v.admin && !v.memberships.some((m) => m.status === "approved" && m.role === "coach")) {
+      throw new HttpError(403, "Coaches and admins only.");
+    }
+    return (await getDoc<ClubsDoc>(env, "clubs")) ?? { clubs: [], published_at: 0 };
   }
   const [kind, team] = key.split("/");
   if ((kind !== "team" && kind !== "match") || !team) throw new HttpError(404, "Not found");
@@ -73,9 +80,11 @@ export async function readDoc(env: Env, v: Viewer, key: string): Promise<unknown
   } satisfies MatchDoc;
 }
 
-/** Team logos are public to anyone signed in (the join page shows them);
+/** Team logos are public to anyone signed in (the join page shows them),
+ *  and so are the clubs' badges (they're other teams' public crests);
  *  everything else about a team only to its members. */
 export function canSeeImage(v: Viewer, key: string): boolean {
+  if (/^club\/[a-z0-9-]+$/.test(key)) return true;
   const [kind, team, what] = key.split("/");
   if (kind !== "img" || !team) return false;
   return what === "logo" || canSeeTeam(v, team);

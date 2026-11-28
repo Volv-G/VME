@@ -1,7 +1,9 @@
 /**
  * Who may see and change what.
  *
- *   admin   (ADMIN_EMAILS)  everything, every team; approves requests
+ *   admin   (ADMIN_EMAILS,  everything, every team; approves requests,
+ *            or added on       makes others admins. ADMIN_EMAILS are the
+ *            /admin)           owners, the ones nobody can remove
  *   coach   (of a team)     the team's videos, all stats, every reel, the schedule
  *   player  (of a team)     the team's videos, the stats and reels of the
  *                           claimed player only, and editing that player
@@ -10,11 +12,13 @@
  * without an approved membership they see no team at all.
  */
 import type { Env } from "../shared/env";
-import type { Membership } from "../shared/api";
+import type { AddedAdmin, Membership } from "../shared/api";
 
 export interface Viewer {
   email: string;
   admin: boolean;
+  /** In ADMIN_EMAILS: an admin who can't be removed on the site. */
+  owner: boolean;
   memberships: Membership[];
 }
 
@@ -26,11 +30,32 @@ export function adminEmails(env: Env): string[] {
     .filter(Boolean);
 }
 
+/** Admins added on the site (the `admins` table), owners not included. */
+export async function addedAdmins(env: Env): Promise<AddedAdmin[]> {
+  try {
+    return (await env.DB.prepare("SELECT email, added_at, added_by FROM admins ORDER BY email").all<AddedAdmin>()).results;
+  } catch {
+    return []; // no `admins` table yet (see loadViewer)
+  }
+}
+
+/** Everyone with the admin role: the owners, then those added. */
+export async function allAdmins(env: Env): Promise<string[]> {
+  const owners = adminEmails(env);
+  return [...owners, ...(await addedAdmins(env)).map((a) => a.email).filter((e) => !owners.includes(e))];
+}
+
 export async function loadViewer(env: Env, email: string): Promise<Viewer> {
   const { results } = await env.DB.prepare("SELECT * FROM members WHERE email = ? ORDER BY id")
     .bind(email)
     .all<Membership>();
-  return { email, admin: adminEmails(env).includes(email), memberships: results };
+  const owner = adminEmails(env).includes(email);
+  // A database the newer schema.sql hasn't reached yet has no `admins`
+  // table: only the owners are admins then, rather than nothing working.
+  const added = !owner && email
+    ? !!(await env.DB.prepare("SELECT 1 AS x FROM admins WHERE email = ?").bind(email).first().catch(() => null))
+    : false;
+  return { email, admin: owner || added, owner, memberships: results };
 }
 
 function approved(v: Viewer, team: string): Membership[] {

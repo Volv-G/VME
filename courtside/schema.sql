@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS schedule_edits (
   date TEXT,                        -- YYYY-MM-DD
   time TEXT,                        -- HH:MM local, or null
   opponent TEXT,
+  club TEXT,                        -- a club's id in VME (library/clubs.py): colour and badge
+  color TEXT,                       -- #rrggbb, the opponent's colour picked
   submitted_by TEXT NOT NULL,       -- an email, or "phone"
   submitted_at INTEGER NOT NULL
 );
@@ -122,4 +124,13 @@ CREATE TABLE IF NOT EXISTS notices (
   kind TEXT NOT NULL,               -- request | approved
   member_id INTEGER NOT NULL,       -- members.id
   created_at INTEGER NOT NULL
+);
+
+-- Admins added on /admin from the people already approved - a coach or a
+-- parent trusted to run the site. The owners are ADMIN_EMAILS (a secret),
+-- who can't be removed here; these rows can.
+CREATE TABLE IF NOT EXISTS admins (
+  email TEXT PRIMARY KEY,           -- lowercase
+  added_at INTEGER NOT NULL,
+  added_by TEXT NOT NULL
 );
